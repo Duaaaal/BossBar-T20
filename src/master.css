@@ -1,0 +1,507 @@
+:root {
+  color: #f4f1f8;
+  background: #111117;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 420px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(127, 65, 175, 0.17), transparent 31rem),
+    #111117;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.master-shell {
+  width: min(100%, 560px);
+  margin: 0 auto;
+  padding: 28px 24px 44px;
+}
+
+.master-header h1 {
+  margin: 4px 0 6px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 2rem;
+  font-weight: 500;
+}
+
+.master-header > p:last-child {
+  margin: 0 0 22px;
+  color: #96909d;
+  font-size: 0.88rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #c991ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.status-card,
+.panel,
+.session-actions {
+  border: 1px solid #312d38;
+  border-radius: 16px;
+  background: rgba(28, 26, 33, 0.92);
+  box-shadow: 0 14px 35px rgba(0, 0, 0, 0.19);
+}
+
+.session-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+
+.presentation-button {
+  background: linear-gradient(135deg, #58406d, #7f4e98);
+}
+
+.reset-button {
+  border: 1px solid #60343e;
+  background: #281a20;
+  color: #e8a5ad;
+}
+
+.start-battle-button {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, #8a6130, #b1823d);
+  color: #fff8e8;
+}
+
+.start-battle-button:disabled {
+  border: 1px solid #464044;
+  background: #29252a;
+  color: #827b84;
+  cursor: default;
+}
+
+.status-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px 18px;
+  margin-bottom: 14px;
+  padding: 18px;
+}
+
+.status-card span {
+  display: block;
+  margin-bottom: 4px;
+  color: #918a98;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-card strong {
+  font-size: 1rem;
+}
+
+.health-numbers {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.health-numbers strong {
+  color: #ffb5aa;
+  font-size: 1.45rem;
+}
+
+.health-numbers span {
+  text-transform: none;
+}
+
+.health-track {
+  grid-column: 1 / -1;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #0e0d11;
+}
+
+.health-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #b42f50, #ff7b64);
+  transition: width 320ms ease;
+}
+
+.boss-summary-stats {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid #302b34;
+}
+
+.summary-stat {
+  min-width: 0;
+  border-radius: 8px;
+  padding: 7px 4px;
+  background: #151318;
+  text-align: center;
+}
+
+.summary-stat span {
+  overflow: hidden;
+  margin-bottom: 3px;
+  font-size: 0.58rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary-stat strong {
+  color: #ded6e2;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  margin-top: 14px;
+  padding: 18px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.panel-title h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.18rem;
+  font-weight: 500;
+}
+
+.step {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #64427d;
+  border-radius: 50%;
+  color: #ce9ff3;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+label {
+  display: block;
+  margin-top: 12px;
+  color: #b6afbc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.compact-field {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.compact-field input {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+input,
+textarea {
+  width: 100%;
+  margin-top: 7px;
+  border: 1px solid #3a3540;
+  border-radius: 10px;
+  outline: none;
+  background: #111015;
+  color: #f5f2f7;
+}
+
+input {
+  height: 42px;
+  padding: 0 12px;
+}
+
+textarea {
+  resize: vertical;
+  padding: 11px 12px;
+  line-height: 1.45;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #9a5fc4;
+  box-shadow: 0 0 0 3px rgba(154, 95, 196, 0.14);
+}
+
+button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 14px;
+  color: white;
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 140ms ease, filter 140ms ease;
+}
+
+button:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+button:disabled:hover {
+  filter: none;
+  transform: none;
+}
+
+.secondary-button {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.secondary-button {
+  background: #3e3447;
+}
+
+.health-action-row {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.85fr) repeat(3, minmax(72px, 1fr));
+  align-items: end;
+  gap: 8px;
+}
+
+.health-action-row button {
+  min-width: 0;
+  padding: 8px 6px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.amount-field input {
+  padding-inline: 9px;
+}
+
+.damage-button {
+  background: linear-gradient(135deg, #a52649, #d54c3d);
+}
+
+.heal-button {
+  background: linear-gradient(135deg, #176b58, #259c6d);
+}
+
+.ghost-button {
+  border: 1px solid #3c3742;
+  background: transparent;
+  color: #a9a2af;
+}
+
+.publish-button {
+  background: linear-gradient(135deg, #70419d, #a14ab1);
+}
+
+.publish-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.publish-action-grid button {
+  min-width: 0;
+  padding-inline: 8px;
+  font-size: 0.78rem;
+}
+
+.publish-danger-button {
+  background: linear-gradient(135deg, #8b263c, #c34043);
+  box-shadow: inset 0 0 0 1px rgba(255, 190, 165, 0.14);
+}
+
+.background-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid #36313a;
+  border-radius: 10px;
+  padding: 10px;
+  background: #151318;
+}
+
+.background-copy {
+  min-width: 0;
+}
+
+.background-copy strong,
+.background-copy span {
+  display: block;
+}
+
+.background-copy strong {
+  color: #c6bdc9;
+  font-size: 0.73rem;
+}
+
+.background-copy span {
+  overflow: hidden;
+  margin-top: 3px;
+  color: #817a87;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.background-actions button {
+  min-height: 34px;
+  padding: 6px 9px;
+  font-size: 0.68rem;
+}
+
+.background-button {
+  background: #4a3857;
+}
+
+.background-remove-button {
+  border: 1px solid #54333b;
+  background: transparent;
+  color: #d38f99;
+}
+
+.background-note,
+.upload-error {
+  margin: 6px 2px 0;
+  font-size: 0.66rem;
+}
+
+.background-note {
+  color: #746d79;
+}
+
+.upload-error {
+  color: #e88892;
+}
+
+.field-note {
+  margin: 0;
+  color: #817a88;
+  font-size: 0.72rem;
+}
+
+.field-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 7px;
+}
+
+.field-meta > span {
+  flex: 0 0 auto;
+  color: #9b91a2;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.master-loading {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  color: #aaa3b2;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 4, 8, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.confirmation-modal {
+  width: min(100%, 410px);
+  border: 1px solid #493843;
+  border-radius: 16px;
+  padding: 22px;
+  background: #1b171d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58);
+}
+
+.modal-eyebrow {
+  margin: 0 0 7px;
+  color: #d17b8b;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.confirmation-modal h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.45rem;
+  font-weight: 500;
+}
+
+.confirmation-modal > p:not(.modal-eyebrow) {
+  margin: 10px 0 20px;
+  color: #a9a0aa;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 10px;
+}
+
+.modal-cancel-button {
+  border: 1px solid #454047;
+  background: transparent;
+  color: #c2bbc4;
+}
+
+.modal-confirm-button {
+  background: linear-gradient(135deg, #842c43, #b13b4a);
+}
+
+.modal-cancel-button:focus-visible,
+.modal-confirm-button:focus-visible {
+  outline: 2px solid #d8a1e8;
+  outline-offset: 2px;
+}
