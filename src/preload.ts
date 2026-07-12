@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('bossAPI', {
     latestBattleState = state;
     return state;
   },
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
   dispatch: (command: BattleCommand) => {
     ipcRenderer.send('battle:dispatch', command);
   },

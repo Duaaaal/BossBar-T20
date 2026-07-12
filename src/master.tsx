@@ -36,6 +36,7 @@ const CompactNumberField = ({
 
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
+  const [appVersion, setAppVersion] = useState('1.0.0');
   const [bossName, setBossName] = useState('');
   const [maxHealth, setMaxHealth] = useState('');
   const [attack, setAttack] = useState('10');
@@ -76,6 +77,10 @@ const MasterApp = () => {
       active = false;
       unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    window.bossAPI.getAppVersion().then(setAppVersion);
   }, []);
 
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
@@ -298,6 +303,10 @@ const MasterApp = () => {
           <button className="publish-danger-button" type="button" onClick={() => publishAction('grave')}>Publicar ação grave</button>
         </div>
       </section>
+
+      <footer className="master-footer">
+        @Criado por: Brian Nascimento - Versão {appVersion}
+      </footer>
 
       {resetConfirmationOpen && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setResetConfirmationOpen(false); }}>

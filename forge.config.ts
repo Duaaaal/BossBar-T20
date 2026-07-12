@@ -8,12 +8,22 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
 const config: ForgeConfig = {
+  ...(process.env.BOSS_BUILD_OUT
+    ? { outDir: process.env.BOSS_BUILD_OUT }
+    : {}),
   packagerConfig: {
     asar: true,
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
+    new MakerSquirrel({
+      name: 'boss_battle',
+      title: 'Painel de Batalha RPG',
+      description:
+        'Painel local de mestre e apresentacao de chefes para sessoes de RPG.',
+      copyright: 'Copyright 2026 Brian',
+      setupExe: 'Painel-de-Batalha-RPG-Setup.exe',
+    }),
     new MakerZIP({}, ['darwin']),
     new MakerRpm({}),
     new MakerDeb({}),

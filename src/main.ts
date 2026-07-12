@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } from 'electron';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -158,7 +158,69 @@ const createMusicWindow = () => {
   return window;
 };
 
-const createPlayerWindow = () => {
+type WindowBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+const getInitialWindowLayout = (): {
+  player: WindowBounds;
+  master: WindowBounds;
+} => {
+  const { workArea } = screen.getPrimaryDisplay();
+  const edge = 12;
+  const gap = 12;
+  const masterWidth = 460;
+  const masterHeight = Math.max(680, Math.min(820, workArea.height - edge * 2));
+  const maximumCenteredPlayerWidth =
+    workArea.width - (masterWidth + gap + edge) * 2;
+  let playerWidth = Math.max(
+    800,
+    Math.min(1280, maximumCenteredPlayerWidth),
+  );
+  let playerHeight = Math.round(playerWidth * (9 / 16));
+  const maximumPlayerHeight = Math.max(450, workArea.height - edge * 2);
+
+  if (playerHeight > maximumPlayerHeight) {
+    playerHeight = maximumPlayerHeight;
+    playerWidth = Math.max(800, Math.round(playerHeight * (16 / 9)));
+  }
+
+  let playerX =
+    workArea.x + Math.round((workArea.width - playerWidth) / 2);
+  let masterX = playerX + playerWidth + gap;
+  const rightEdge = workArea.x + workArea.width - edge;
+  const combinedWidth = playerWidth + gap + masterWidth;
+
+  if (masterX + masterWidth > rightEdge) {
+    if (combinedWidth <= workArea.width - edge * 2) {
+      const overflow = masterX + masterWidth - rightEdge;
+      playerX -= overflow;
+      masterX -= overflow;
+    } else {
+      masterX = rightEdge - masterWidth;
+    }
+  }
+
+  return {
+    player: {
+      x: playerX,
+      y: workArea.y + Math.round((workArea.height - playerHeight) / 2),
+      width: playerWidth,
+      height: playerHeight,
+    },
+    master: {
+      x: masterX,
+      y: workArea.y + Math.round((workArea.height - masterHeight) / 2),
+      width: masterWidth,
+      height: masterHeight,
+    },
+  };
+};
+
+const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     if (playerWindowReady) {
       if (playerWindow.isMinimized()) {
@@ -171,9 +233,8 @@ const createPlayerWindow = () => {
   }
 
   const window = new BrowserWindow({
+    ...bounds,
     show: false,
-    width: 1280,
-    height: 720,
     minWidth: 800,
     minHeight: 450,
     title: 'Apresentação do Chefão',
@@ -240,9 +301,9 @@ const createPlayerWindow = () => {
 };
 
 const createWindows = () => {
+  const layout = getInitialWindowLayout();
   masterWindow = new BrowserWindow({
-    width: 520,
-    height: 820,
+    ...layout.master,
     minWidth: 460,
     minHeight: 680,
     title: 'Controle do Mestre',
@@ -257,7 +318,7 @@ const createWindows = () => {
   });
 
   loadRenderer(masterWindow, 'master');
-  createPlayerWindow();
+  createPlayerWindow(layout.player);
 
   masterWindow.on('closed', () => {
     masterWindow = null;
@@ -291,6 +352,7 @@ const isMusicSender = (senderId: number) =>
   Boolean(musicWindow && senderId === musicWindow.webContents.id);
 
 ipcMain.handle('battle:get-state', () => battleState);
+ipcMain.handle('app:get-version', () => app.getVersion());
 
 ipcMain.handle(
   'background:get',

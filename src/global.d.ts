@@ -15,6 +15,7 @@ declare global {
   interface Window {
     bossAPI: {
       getState: () => Promise<BattleState>;
+      getAppVersion: () => Promise<string>;
       dispatch: (command: BattleCommand) => void;
       applyHealthSequence: (
         request: HealthSequenceRequest,

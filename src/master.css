@@ -568,6 +568,16 @@ button:disabled:hover {
   color: #aaa3b2;
 }
 
+.master-footer {
+  margin-top: 30px;
+  border-top: 1px solid rgba(106, 91, 115, 0.22);
+  padding-top: 14px;
+  color: #6f6874;
+  font-size: 0.64rem;
+  letter-spacing: 0.035em;
+  text-align: center;
+}
+
 .modal-backdrop {
   position: fixed;
   z-index: 100;
