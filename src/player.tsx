@@ -1,5 +1,7 @@
 import {
   type CSSProperties,
+  memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -18,6 +20,7 @@ const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
 
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
+const noHealthEffects: HealthEffect[] = [];
 
 type AnimatedHealthBarProps = {
   current: number;
@@ -224,15 +227,19 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     (track) => track.id === music.currentTrackId,
   );
 
-  const stopFade = () => {
+  const stopFade = useCallback(() => {
     if (fadeTimer.current) clearInterval(fadeTimer.current);
     fadeTimer.current = null;
     fading.current = false;
-  };
+  }, []);
 
-  const fadeOut = (duration: number) => {
+  const fadeOut = useCallback((duration: number) => {
     const audio = audioRef.current;
-    if (!audio || audio.paused || fading.current) return;
+    if (!audio || fading.current) return;
+    if (audio.paused) {
+      window.bossAPI.musicFadeoutComplete();
+      return;
+    }
     stopFade();
     fading.current = true;
     const startVolume = audio.volume;
@@ -246,7 +253,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
         window.bossAPI.musicFadeoutComplete();
       }
     }, 30);
-  };
+  }, [stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -258,11 +265,12 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
       return;
     }
 
+    stopFade();
     audio.src = currentTrack.url;
     audio.volume = music?.volume ?? 0.8;
     audio.load();
     if (music?.isPlaying) void audio.play().catch((): void => {});
-  }, [currentTrack?.id, music?.playbackVersion]);
+  }, [currentTrack?.id, music?.playbackVersion, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -273,7 +281,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
       void audio.play().catch((): void => {});
     }
     else audio.pause();
-  }, [music?.isPlaying, currentTrack?.id]);
+  }, [music?.isPlaying, currentTrack?.id, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -282,7 +290,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
   useEffect(
     () => window.bossAPI.subscribeMusicFadeOut(fadeOut),
-    [],
+    [fadeOut],
   );
 
   const allDefeated = battle.bosses.every((boss) => boss.currentHealth === 0);
@@ -290,9 +298,24 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     if (!battle.battleStarted || !allDefeated || !music?.isPlaying) return;
     const timer = setTimeout(() => fadeOut(1800), 5600);
     return () => clearTimeout(timer);
-  }, [allDefeated, battle.battleStarted, music?.isPlaying]);
+  }, [allDefeated, battle.battleStarted, fadeOut, music?.isPlaying]);
 
-  useEffect(() => () => stopFade(), []);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (
+      !audio ||
+      !battle.battleStarted ||
+      allDefeated ||
+      !music?.isPlaying ||
+      !fading.current
+    ) return;
+
+    stopFade();
+    audio.volume = music.volume;
+    void audio.play().catch((): void => {});
+  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.volume, stopFade]);
+
+  useEffect(() => () => stopFade(), [stopFade]);
 
   return (
     <audio
@@ -300,11 +323,14 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
       ref={audioRef}
       loop={music?.loop ?? false}
       onEnded={() => window.bossAPI.musicTrackEnded()}
+      onError={() => {
+        if (music?.isPlaying) window.bossAPI.musicFadeoutComplete();
+      }}
     />
   );
 };
 
-const BossHud = ({
+const BossHud = memo(function BossHud({
   boss,
   bossCount,
   effects,
@@ -312,8 +338,8 @@ const BossHud = ({
   boss: BossState;
   bossCount: number;
   effects: HealthEffect[];
-}) => {
-  const hudScale = 1 - (bossCount - 1) * 0.25;
+}) {
+  const hudScale = 1 - (bossCount - 1) * 0.15;
   return (
     <article
       className={`boss-hud-entry ${boss.currentHealth === 0 ? 'is-defeated' : ''}`}
@@ -322,7 +348,7 @@ const BossHud = ({
       <h1 className="boss-name">{boss.bossName}</h1>
       <AnimatedHealthBar
         current={boss.currentHealth}
-        effects={effects.filter((effect) => effect.bossId === boss.id)}
+        effects={effects}
         maximum={boss.maxHealth}
       />
       <div className="action-slot">
@@ -330,7 +356,7 @@ const BossHud = ({
       </div>
     </article>
   );
-};
+});
 
 type AnimatedActionProps = {
   text: string;
@@ -380,7 +406,9 @@ const PlayerApp = () => {
     name: null,
   });
   const [backgroundReady, setBackgroundReady] = useState(false);
-  const [healthEffects, setHealthEffects] = useState<HealthEffect[]>([]);
+  const [healthEffects, setHealthEffects] = useState<
+    Record<string, HealthEffect[]>
+  >({});
   const readySent = useRef(false);
 
   useEffect(() => {
@@ -399,11 +427,24 @@ const PlayerApp = () => {
   useEffect(() => {
     const removalTimers = new Set<ReturnType<typeof setTimeout>>();
     const unsubscribe = window.bossAPI.subscribeHealthEffect((effect) => {
-      setHealthEffects((currentEffects) => [...currentEffects, effect].slice(-16));
+      setHealthEffects((currentEffects) => ({
+        ...currentEffects,
+        [effect.bossId]: [
+          ...(currentEffects[effect.bossId] ?? noHealthEffects),
+          effect,
+        ].slice(-16),
+      }));
       const timer = setTimeout(() => {
-        setHealthEffects((currentEffects) =>
-          currentEffects.filter((item) => item.id !== effect.id),
-        );
+        setHealthEffects((currentEffects) => {
+          const nextBossEffects = (currentEffects[effect.bossId] ?? noHealthEffects)
+            .filter((item) => item.id !== effect.id);
+          if (nextBossEffects.length === 0) {
+            const remainingEffects = { ...currentEffects };
+            delete remainingEffects[effect.bossId];
+            return remainingEffects;
+          }
+          return { ...currentEffects, [effect.bossId]: nextBossEffects };
+        });
         removalTimers.delete(timer);
       }, effect.intensity === 'full' ? 1600 : 1250);
       removalTimers.add(timer);
@@ -478,36 +519,33 @@ const PlayerApp = () => {
   return (
     <>
       <MusicPlayer battle={state} />
-      <main
-      className="player-stage"
-      style={backgroundStyle}
-    >
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
+      <main className="player-stage" style={backgroundStyle}>
+        <div className="ambient ambient-one" />
+        <div className="ambient ambient-two" />
 
-      <section
-        className={`waiting-screen ${state.battleStarted ? 'is-hidden' : ''}`}
-        aria-hidden={state.battleStarted}
-      >
-        <span className="waiting-mark" aria-hidden="true" />
-        <p>Aguardando todos os jogadores estarem prontos</p>
-        <small>O Mestre iniciará a batalha em breve</small>
-      </section>
+        <section
+          className={`waiting-screen ${state.battleStarted ? 'is-hidden' : ''}`}
+          aria-hidden={state.battleStarted}
+        >
+          <span className="waiting-mark" aria-hidden="true" />
+          <p>Aguardando todos os jogadores estarem prontos</p>
+          <small>O Mestre iniciará a batalha em breve</small>
+        </section>
 
-      <section
-        className={`boss-hud ${
-          state.battleStarted && state.hudVisible ? 'is-active' : ''
-        }`}
-      >
-        {state.bosses.map((boss) => (
-          <BossHud
-            boss={boss}
-            bossCount={state.bosses.length}
-            effects={healthEffects}
-            key={boss.id}
-          />
-        ))}
-      </section>
+        <section
+          className={`boss-hud ${
+            state.battleStarted && state.hudVisible ? 'is-active' : ''
+          }`}
+        >
+          {state.bosses.map((boss) => (
+            <BossHud
+              boss={boss}
+              bossCount={state.bosses.length}
+              effects={healthEffects[boss.id] ?? noHealthEffects}
+              key={boss.id}
+            />
+          ))}
+        </section>
       </main>
     </>
   );

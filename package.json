@@ -1,18 +1,19 @@
 {
   "name": "boss-battle",
-  "productName": "boss-battle",
+  "productName": "Painel de Batalha RPG",
   "version": "1.0.0",
-  "description": "My Electron application description",
+  "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
     "start": "electron-forge start",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx,.mts ."
   },
-  "keywords": [],
+  "keywords": ["electron", "rpg", "boss-battle", "discord"],
   "author": {
     "name": "Brian",
     "email": "Briannascimento111@gmail.com"

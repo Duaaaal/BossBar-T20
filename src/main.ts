@@ -60,6 +60,8 @@ let musicState: Omit<MusicState, 'tracks'> = {
 };
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
 let allowPlayerWindowClose = false;
+let playerWindowClosePending = false;
+let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -188,6 +190,7 @@ const createPlayerWindow = () => {
   playerWindow = window;
   playerWindowReady = false;
   allowPlayerWindowClose = false;
+  playerWindowClosePending = false;
 
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
@@ -202,15 +205,20 @@ const createPlayerWindow = () => {
   window.on('close', (event) => {
     if (!allowPlayerWindowClose && musicState.isPlaying) {
       event.preventDefault();
+      if (playerWindowClosePending) return;
+      playerWindowClosePending = true;
       window.webContents.send('music:fade-out', 1400);
-      setTimeout(() => {
+      playerWindowCloseTimer = setTimeout(() => {
+        playerWindowCloseTimer = null;
         if (playerWindow !== window || window.isDestroyed()) return;
-        musicState = {
-          ...musicState,
-          isPlaying: false,
-          revision: musicState.revision + 1,
-        };
-        broadcastMusicState();
+        if (musicState.isPlaying) {
+          musicState = {
+            ...musicState,
+            isPlaying: false,
+            revision: musicState.revision + 1,
+          };
+          broadcastMusicState();
+        }
         allowPlayerWindowClose = true;
         window.close();
       }, 1500);
@@ -222,6 +230,9 @@ const createPlayerWindow = () => {
       playerWindow = null;
       playerWindowReady = false;
       allowPlayerWindowClose = false;
+      playerWindowClosePending = false;
+      if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
+      playerWindowCloseTimer = null;
     }
   });
 
@@ -503,6 +514,7 @@ ipcMain.on('music:track-ended', (event) => {
 
 ipcMain.on('music:fadeout-complete', (event) => {
   if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
+  if (!musicState.isPlaying) return;
   musicState = {
     ...musicState,
     isPlaying: false,
@@ -744,6 +756,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  pendingHealthTimers.forEach(clearTimeout);
+  pendingHealthTimers.clear();
+  if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
+  if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
 });
 
 app.on('activate', () => {

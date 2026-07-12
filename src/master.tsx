@@ -222,6 +222,22 @@ const MasterApp = () => {
         </button>
       </section>
 
+      <section className="global-background-control" aria-label="Fundo universal da apresentação">
+        <div className="background-control">
+          <div className="background-copy">
+            <strong>Imagem ou GIF de fundo</strong>
+            <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
+          </div>
+          <div className="background-actions">
+            <button className="background-button" type="button" onClick={() => void chooseBackground()}>Upload</button>
+            {(state.backgroundName || pendingBackgroundName) && !pendingBackgroundRemoval && <button className="background-remove-button" type="button" onClick={() => void clearBackground()}>Remover</button>}
+            <button className="background-apply-button" type="button" disabled={!backgroundPending} onClick={applyBackground}>Aplicar</button>
+          </div>
+        </div>
+        {backgroundError && <p className="upload-error">{backgroundError}</p>}
+        <p className="background-note">Fundo universal · recomendado: 1920 × 1080 px (16:9) · até 25 MB.</p>
+      </section>
+
       <nav className="boss-tabs" aria-label="Chefões da batalha">
         {state.bosses.map((boss, index) => (
           <div className={`boss-tab ${boss.id === activeBoss.id ? 'is-active' : ''}`} key={boss.id}>
@@ -257,19 +273,6 @@ const MasterApp = () => {
           ].map(([label, value]) => <div className="summary-stat" key={label}><span>{label}</span><strong>{value}</strong></div>)}
         </div>
 
-        <div className="background-control status-background-control">
-          <div className="background-copy">
-            <strong>Imagem ou GIF de fundo</strong>
-            <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
-          </div>
-          <div className="background-actions">
-            <button className="background-button" type="button" onClick={() => void chooseBackground()}>Upload</button>
-            {(state.backgroundName || pendingBackgroundName) && !pendingBackgroundRemoval && <button className="background-remove-button" type="button" onClick={() => void clearBackground()}>Remover</button>}
-            <button className="background-apply-button" type="button" disabled={!backgroundPending} onClick={applyBackground}>Aplicar</button>
-          </div>
-        </div>
-        {backgroundError && <p className="upload-error">{backgroundError}</p>}
-        <p className="background-note">Recomendado: 1920 × 1080 px (16:9). Até 25 MB.</p>
       </section>
 
       <form className="panel" onSubmit={saveBoss}>
