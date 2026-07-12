@@ -32,11 +32,34 @@ textarea {
 }
 
 .master-header h1 {
-  margin: 4px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 6px;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 2rem;
+  font-size: 1.45rem;
   font-weight: 500;
 }
+
+.master-title > span,
+.master-title > strong {
+  color: #c991ff;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.master-title > i {
+  width: 6px;
+  height: 6px;
+  border: 1px solid #7c568e;
+  transform: rotate(45deg);
+}
+
+
+.master-title > strong { color: #d7b1f1; }
 
 .master-header > p:last-child {
   margin: 0 0 22px;
@@ -64,10 +87,16 @@ textarea {
 
 .session-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
   padding: 12px;
+}
+
+.session-actions button {
+  min-width: 0;
+  padding-inline: 7px;
+  font-size: 0.72rem;
 }
 
 .presentation-button {
@@ -78,6 +107,18 @@ textarea {
   border: 1px solid #60343e;
   background: #281a20;
   color: #e8a5ad;
+}
+
+.hud-toggle-button {
+  border: 1px solid #36505d;
+  background: #1a2930;
+  color: #9fc8d6;
+}
+
+.music-window-button {
+  border: 1px solid #594066;
+  background: #2d2034;
+  color: #d9afea;
 }
 
 .start-battle-button {
@@ -91,6 +132,76 @@ textarea {
   background: #29252a;
   color: #827b84;
   cursor: default;
+}
+
+.start-battle-button.is-ending {
+  border: 1px solid #713d45;
+  background: linear-gradient(135deg, #572a34, #843b45);
+  color: #ffdce0;
+}
+
+.boss-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+
+.boss-tab {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 0;
+  border: 1px solid #332d38;
+  border-radius: 10px;
+  background: #17151b;
+}
+
+.boss-tab.is-active {
+  border-color: #704b85;
+  background: linear-gradient(135deg, #2c2134, #201923);
+  box-shadow: inset 0 -2px 0 #a36bc1;
+}
+
+.boss-tab > button:first-child {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border-radius: 9px;
+  padding: 6px 8px;
+  background: transparent;
+  color: #c3bac7;
+  font-size: .68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.boss-tab > button:first-child span {
+  color: #a86dca;
+  font-size: .58rem;
+  letter-spacing: .08em;
+}
+
+.remove-boss-button {
+  min-height: 0;
+  border-left: 1px solid #352f39;
+  border-radius: 0 9px 9px 0;
+  padding: 4px 8px;
+  background: transparent;
+  color: #a66f79;
+}
+
+.add-boss-button {
+  min-height: 38px;
+  flex: 0 0 auto;
+  border: 1px dashed #514159;
+  background: transparent;
+  color: #b88dca;
+  font-size: .67rem;
 }
 
 .status-card {
@@ -296,6 +407,18 @@ button:disabled:hover {
   gap: 8px;
 }
 
+.status-health-actions {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+.health-error {
+  grid-column: 1 / -1;
+  margin: -3px 2px 0;
+  color: #e88892;
+  font-size: 0.67rem;
+}
+
 .health-action-row button {
   min-width: 0;
   padding: 8px 6px;
@@ -315,10 +438,11 @@ button:disabled:hover {
   background: linear-gradient(135deg, #176b58, #259c6d);
 }
 
-.ghost-button {
-  border: 1px solid #3c3742;
-  background: transparent;
-  color: #a9a2af;
+.full-heal-button {
+  border: 1px solid #308a82;
+  background: linear-gradient(135deg, #16756d, #279b8e);
+  color: #effffd;
+  box-shadow: inset 0 0 0 1px rgba(150, 255, 240, 0.08);
 }
 
 .publish-button {
@@ -383,6 +507,11 @@ button:disabled:hover {
   gap: 6px;
 }
 
+.status-background-control {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+}
+
 .background-actions button {
   min-height: 34px;
   padding: 6px 9px;
@@ -399,8 +528,20 @@ button:disabled:hover {
   color: #d38f99;
 }
 
+.background-apply-button {
+  background: linear-gradient(135deg, #614078, #87519a);
+}
+
+.background-apply-button:disabled {
+  border: 1px solid #3b3640;
+  background: #27232b;
+  color: #716b75;
+  cursor: default;
+}
+
 .background-note,
 .upload-error {
+  grid-column: 1 / -1;
   margin: 6px 2px 0;
   font-size: 0.66rem;
 }

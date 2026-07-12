@@ -22,6 +22,8 @@ body {
   min-height: 100vh;
 }
 
+.music-player { display: none; }
+
 .player-loading {
   display: grid;
   place-items: center;
@@ -41,14 +43,6 @@ body {
     );
   background-position: center;
   background-size: 100% 100%;
-}
-
-.player-stage::before {
-  position: absolute;
-  inset: 18px;
-  border: 1px solid rgba(199, 166, 120, 0.1);
-  content: "";
-  pointer-events: none;
 }
 
 .ambient {
@@ -78,14 +72,23 @@ body {
   left: clamp(44px, 5.5vw, 88px);
   bottom: clamp(18px, 3.5vh, 34px);
   width: min(72vw, 980px);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: clamp(5px, 1vh, 10px);
   opacity: 0;
   text-align: left;
   filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.7));
   pointer-events: none;
   transform: translateY(18px);
   transition:
-    opacity 1200ms ease 720ms,
-    transform 1500ms cubic-bezier(0.22, 1, 0.36, 1) 620ms;
+    opacity 800ms ease,
+    transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.boss-hud-entry {
+  --hud-scale: 1;
+  width: 100%;
+  min-width: 0;
 }
 
 .boss-hud.is-active {
@@ -94,20 +97,26 @@ body {
 }
 
 .boss-name {
-  margin: 0 0 9px 2px;
+  margin: 0 0 calc(9px * var(--hud-scale)) 2px;
   color: #e9e1d8;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(1.05rem, 1.75vw, 1.55rem);
+  font-size: calc(clamp(1.05rem, 1.75vw, 1.55rem) * var(--hud-scale));
   font-weight: 400;
   letter-spacing: 0.015em;
   line-height: 1.1;
   text-shadow: 0 3px 12px rgba(0, 0, 0, 0.9);
 }
 
+.health-bar-shell {
+  position: relative;
+  width: 100%;
+  height: calc(clamp(12px, 1.7vh, 17px) * var(--hud-scale));
+}
+
 .health-bar {
   position: relative;
   width: 100%;
-  height: clamp(12px, 1.7vh, 17px);
+  height: 100%;
   overflow: hidden;
   border: 1px solid rgba(184, 153, 105, 0.52);
   border-radius: 1px;
@@ -121,7 +130,7 @@ body {
 .health-bar::before,
 .health-bar::after {
   position: absolute;
-  z-index: 5;
+  z-index: 7;
   top: 50%;
   width: 5px;
   height: calc(100% + 6px);
@@ -167,14 +176,21 @@ body {
 
 .health-healing-preview {
   z-index: 2;
+  opacity: 0;
   background: linear-gradient(180deg, #70d88c, #27894e);
   box-shadow: 0 0 14px rgba(74, 201, 113, 0.5);
-  transition: width 300ms ease;
+  transition:
+    width 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease;
+}
+
+.health-healing-preview.is-active {
+  opacity: 1;
 }
 
 .health-bar-highlight {
   position: absolute;
-  z-index: 4;
+  z-index: 5;
   inset: 2px 6px auto;
   height: 1px;
   background: rgba(255, 226, 197, 0.16);
@@ -182,7 +198,7 @@ body {
 
 .health-ruler {
   position: absolute;
-  z-index: 4;
+  z-index: 5;
   inset: 0;
   pointer-events: none;
 }
@@ -211,7 +227,7 @@ body {
 
 .health-impact {
   position: absolute;
-  z-index: 6;
+  z-index: 8;
   inset: -4px;
   border-radius: 2px;
   pointer-events: none;
@@ -230,23 +246,32 @@ body {
 }
 
 .action-slot {
-  height: clamp(58px, 8vh, 72px);
-  padding-top: 13px;
+  height: calc(clamp(58px, 8vh, 72px) * var(--hud-scale));
+  padding-top: calc(13px * var(--hud-scale));
 }
 
 .action-warning {
-  --action-font-size: clamp(0.84rem, 1.22vw, 1.04rem);
+  --action-font-size: calc(clamp(0.84rem, 1.22vw, 1.04rem) * var(--hud-scale));
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: calc(12px * var(--hud-scale));
   max-width: 100%;
   padding-left: 2px;
-  text-shadow: 0 2px 9px rgba(0, 0, 0, 0.95);
+  text-shadow:
+    -1px -1px 1px rgba(0, 0, 0, 0.82),
+    1px -1px 1px rgba(0, 0, 0, 0.82),
+    -1px 1px 1px rgba(0, 0, 0, 0.82),
+    1px 1px 1px rgba(0, 0, 0, 0.82),
+    0 2px 9px rgba(0, 0, 0, 0.95);
+}
+
+.telegraph-label,
+.action-description {
+  -webkit-text-stroke: 0.3px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
 }
 
 .action-description {
-  position: relative;
-  top: 2px;
   transition:
     opacity 240ms ease,
     transform 260ms ease,
@@ -310,17 +335,27 @@ body {
 }
 
 .action-warning.is-grave p {
-  animation: grave-pulse 1.35s ease-in-out infinite;
+  animation: grave-pulse 980ms ease-in-out infinite;
 }
 
-.is-defeated .boss-name,
-.is-defeated .action-warning {
-  color: #aaa29d;
-  filter: grayscale(0.7);
+.is-defeated .boss-name {
+  animation: hud-element-exit 700ms ease 0s forwards;
 }
 
-.is-defeated .health-bar-fill {
-  opacity: 0;
+.is-defeated .telegraph-label {
+  animation: hud-element-exit 700ms ease 1s forwards;
+}
+
+.is-defeated .action-divider {
+  animation: hud-element-exit 700ms ease 2s forwards;
+}
+
+.is-defeated .action-description {
+  animation: hud-element-exit 700ms ease 3s forwards !important;
+}
+
+.is-defeated .health-bar {
+  animation: health-bar-vanish 1500ms cubic-bezier(0.65, 0, 0.35, 1) 4s forwards;
 }
 
 .waiting-screen {
@@ -459,9 +494,42 @@ body {
   50% {
     opacity: 1;
     text-shadow:
-      0 0 10px rgba(220, 64, 64, 0.78),
+      0 0 14px rgba(255, 56, 56, 0.98),
+      0 0 28px rgba(179, 20, 30, 0.78),
       0 2px 9px rgba(0, 0, 0, 0.95);
-    transform: scale(1.018);
+    transform: scale(1.04);
+  }
+}
+
+@keyframes hud-element-exit {
+  0% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(7px);
+    transform: translateY(9px);
+  }
+}
+
+@keyframes health-bar-vanish {
+  0% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    filter: brightness(1);
+  }
+  35% {
+    filter: brightness(1.22) contrast(1.12);
+    box-shadow:
+      inset -10px 0 9px rgba(232, 210, 175, 0.38),
+      0 0 14px rgba(214, 191, 157, 0.25);
+  }
+  100% {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+    filter: brightness(0.65) contrast(1.15);
   }
 }
 

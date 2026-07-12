@@ -5,12 +5,19 @@ import type {
   BattleCommand,
   BattleState,
   HealthEffect,
+  HealthSequenceRequest,
+  HealthSequenceResult,
+  MusicCommand,
+  MusicSelectionResult,
+  MusicState,
 } from './shared/battle';
 
 let latestBattleState: BattleState | null = null;
 const stateSubscribers = new Set<(state: BattleState) => void>();
 let latestBackground: BackgroundState | null = null;
 const backgroundSubscribers = new Set<(state: BackgroundState) => void>();
+let latestMusicState: MusicState | null = null;
+const musicSubscribers = new Set<(state: MusicState) => void>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -26,6 +33,11 @@ ipcRenderer.on('background:changed', (_event, background: BackgroundState) => {
   }
 });
 
+ipcRenderer.on('music:state-changed', (_event, state: MusicState) => {
+  latestMusicState = state;
+  for (const subscriber of musicSubscribers) subscriber(state);
+});
+
 contextBridge.exposeInMainWorld('bossAPI', {
   getState: async (): Promise<BattleState> => {
     const state = (await ipcRenderer.invoke('battle:get-state')) as BattleState;
@@ -35,8 +47,29 @@ contextBridge.exposeInMainWorld('bossAPI', {
   dispatch: (command: BattleCommand) => {
     ipcRenderer.send('battle:dispatch', command);
   },
+  applyHealthSequence: (
+    request: HealthSequenceRequest,
+  ): Promise<HealthSequenceResult> => ipcRenderer.invoke('health:sequence', request),
   openPresentation: (): Promise<boolean> =>
     ipcRenderer.invoke('presentation:open'),
+  openMusicWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('music:open-window'),
+  addMusicTracks: (): Promise<MusicSelectionResult> =>
+    ipcRenderer.invoke('music:add-tracks'),
+  getMusicState: async (): Promise<MusicState> => {
+    const state = (await ipcRenderer.invoke('music:get-state')) as MusicState;
+    latestMusicState = state;
+    return state;
+  },
+  dispatchMusic: (command: MusicCommand) => {
+    ipcRenderer.send('music:dispatch', command);
+  },
+  musicTrackEnded: () => {
+    ipcRenderer.send('music:track-ended');
+  },
+  musicFadeoutComplete: () => {
+    ipcRenderer.send('music:fadeout-complete');
+  },
   chooseBackground: (): Promise<BackgroundSelectionResult> =>
     ipcRenderer.invoke('background:choose'),
   clearBackground: (): Promise<boolean> =>
@@ -85,5 +118,17 @@ contextBridge.exposeInMainWorld('bossAPI', {
     };
     ipcRenderer.on('health:effect', listener);
     return () => ipcRenderer.removeListener('health:effect', listener);
+  },
+  subscribeMusic: (callback: (state: MusicState) => void) => {
+    musicSubscribers.add(callback);
+    if (latestMusicState) callback(latestMusicState);
+    return () => musicSubscribers.delete(callback);
+  },
+  subscribeMusicFadeOut: (callback: (duration: number) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, duration: number) => {
+      callback(duration);
+    };
+    ipcRenderer.on('music:fade-out', listener);
+    return () => ipcRenderer.removeListener('music:fade-out', listener);
   },
 });

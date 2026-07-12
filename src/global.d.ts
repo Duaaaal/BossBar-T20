@@ -4,6 +4,11 @@ import type {
   BattleCommand,
   BattleState,
   HealthEffect,
+  HealthSequenceRequest,
+  HealthSequenceResult,
+  MusicCommand,
+  MusicSelectionResult,
+  MusicState,
 } from './shared/battle';
 
 declare global {
@@ -11,7 +16,16 @@ declare global {
     bossAPI: {
       getState: () => Promise<BattleState>;
       dispatch: (command: BattleCommand) => void;
+      applyHealthSequence: (
+        request: HealthSequenceRequest,
+      ) => Promise<HealthSequenceResult>;
       openPresentation: () => Promise<boolean>;
+      openMusicWindow: () => Promise<boolean>;
+      addMusicTracks: () => Promise<MusicSelectionResult>;
+      getMusicState: () => Promise<MusicState>;
+      dispatchMusic: (command: MusicCommand) => void;
+      musicTrackEnded: () => void;
+      musicFadeoutComplete: () => void;
       chooseBackground: () => Promise<BackgroundSelectionResult>;
       clearBackground: () => Promise<boolean>;
       getBackground: () => Promise<BackgroundState>;
@@ -26,6 +40,10 @@ declare global {
       ) => () => void;
       subscribeHealthEffect: (
         callback: (effect: HealthEffect) => void,
+      ) => () => void;
+      subscribeMusic: (callback: (state: MusicState) => void) => () => void;
+      subscribeMusicFadeOut: (
+        callback: (duration: number) => void,
       ) => () => void;
     };
   }

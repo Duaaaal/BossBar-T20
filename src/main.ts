@@ -11,6 +11,12 @@ import {
   type BackgroundState,
   type BattleState,
   type HealthEffect,
+  type HealthSequenceRequest,
+  type HealthSequenceResult,
+  type MusicCommand,
+  type MusicSelectionResult,
+  type MusicState,
+  isMusicCommand,
 } from './shared/battle';
 
 protocol.registerSchemesAsPrivileged([
@@ -21,6 +27,7 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       corsEnabled: true,
       supportFetchAPI: true,
+      stream: true,
     },
   },
 ]);
@@ -29,13 +36,30 @@ if (started) {
   app.quit();
 }
 
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let masterWindow: BrowserWindow | null = null;
 let playerWindow: BrowserWindow | null = null;
+let musicWindow: BrowserWindow | null = null;
 let playerWindowReady = false;
 let battleState: BattleState = initialBattleState;
 let activeBackgroundFilePath: string | null = null;
 let backgroundRevision = 0;
 let healthEffectSequence = 0;
+const pendingHealthTimers = new Set<ReturnType<typeof setTimeout>>();
+type InternalMusicTrack = { id: string; name: string; filePath: string };
+const musicTracks: InternalMusicTrack[] = [];
+let musicTrackSequence = 0;
+let musicState: Omit<MusicState, 'tracks'> = {
+  currentTrackId: null,
+  isPlaying: false,
+  loop: false,
+  volume: 0.8,
+  playbackVersion: 0,
+  revision: 0,
+};
+let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
+let allowPlayerWindowClose = false;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -59,7 +83,7 @@ const getBackgroundState = (): BackgroundState => ({
   name: battleState.backgroundName,
 });
 
-const rendererFile = (page: 'master' | 'player') =>
+const rendererFile = (page: 'master' | 'player' | 'music') =>
   path.join(
     __dirname,
     `../renderer/${MAIN_WINDOW_VITE_NAME}/${page}.html`,
@@ -67,7 +91,7 @@ const rendererFile = (page: 'master' | 'player') =>
 
 const loadRenderer = (
   window: BrowserWindow,
-  page: 'master' | 'player',
+  page: 'master' | 'player' | 'music',
 ) => {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     void window.loadURL(`${MAIN_WINDOW_VITE_DEV_SERVER_URL}/${page}.html`);
@@ -75,6 +99,61 @@ const loadRenderer = (
   }
 
   void window.loadFile(rendererFile(page));
+};
+
+const getMusicState = (): MusicState => ({
+  ...musicState,
+  tracks: musicTracks.map(({ id, name }) => ({
+    id,
+    name,
+    url: `boss-media://audio/${id}`,
+  })),
+});
+
+const broadcastMusicState = () => {
+  const nextState = getMusicState();
+  for (const window of [musicWindow, playerWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('music:state-changed', nextState);
+    }
+  }
+};
+
+const createMusicWindow = () => {
+  if (musicWindow && !musicWindow.isDestroyed()) {
+    if (musicWindow.isMinimized()) musicWindow.restore();
+    musicWindow.show();
+    musicWindow.focus();
+    return musicWindow;
+  }
+
+  const window = new BrowserWindow({
+    width: 560,
+    height: 700,
+    minWidth: 470,
+    minHeight: 560,
+    title: 'Trilha Sonora',
+    backgroundColor: '#111117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  musicWindow = window;
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('music:state-changed', getMusicState());
+    }
+  });
+  loadRenderer(window, 'music');
+  window.on('closed', () => {
+    if (musicWindow === window) musicWindow = null;
+  });
+  return window;
 };
 
 const createPlayerWindow = () => {
@@ -108,20 +187,41 @@ const createPlayerWindow = () => {
 
   playerWindow = window;
   playerWindowReady = false;
+  allowPlayerWindowClose = false;
 
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
       window.webContents.send('battle:state-changed', battleState);
       window.webContents.send('background:changed', getBackgroundState());
+      window.webContents.send('music:state-changed', getMusicState());
     }
   });
 
   loadRenderer(window, 'player');
 
+  window.on('close', (event) => {
+    if (!allowPlayerWindowClose && musicState.isPlaying) {
+      event.preventDefault();
+      window.webContents.send('music:fade-out', 1400);
+      setTimeout(() => {
+        if (playerWindow !== window || window.isDestroyed()) return;
+        musicState = {
+          ...musicState,
+          isPlaying: false,
+          revision: musicState.revision + 1,
+        };
+        broadcastMusicState();
+        allowPlayerWindowClose = true;
+        window.close();
+      }, 1500);
+    }
+  });
+
   window.on('closed', () => {
     if (playerWindow === window) {
       playerWindow = null;
       playerWindowReady = false;
+      allowPlayerWindowClose = false;
     }
   });
 
@@ -150,6 +250,7 @@ const createWindows = () => {
 
   masterWindow.on('closed', () => {
     masterWindow = null;
+    musicWindow?.close();
     playerWindow?.close();
   });
 };
@@ -174,6 +275,9 @@ const broadcastBackground = () => {
 
 const isMasterSender = (senderId: number) =>
   Boolean(masterWindow && senderId === masterWindow.webContents.id);
+
+const isMusicSender = (senderId: number) =>
+  Boolean(musicWindow && senderId === musicWindow.webContents.id);
 
 ipcMain.handle('battle:get-state', () => battleState);
 
@@ -248,6 +352,165 @@ ipcMain.handle('presentation:open', (event) => {
   return true;
 });
 
+ipcMain.handle('music:open-window', (event) => {
+  if (!isMasterSender(event.sender.id)) return false;
+  createMusicWindow();
+  return true;
+});
+
+ipcMain.handle('music:get-state', (): MusicState => getMusicState());
+
+ipcMain.handle(
+  'music:add-tracks',
+  async (event): Promise<MusicSelectionResult> => {
+    if (!musicWindow || !isMusicSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+
+    const selection = await dialog.showOpenDialog(musicWindow, {
+      title: 'Adicionar faixas à playlist',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Arquivos MP3', extensions: ['mp3'] }],
+    });
+
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+
+    let added = 0;
+    for (const filePath of selection.filePaths) {
+      if (path.extname(filePath).toLowerCase() !== '.mp3') continue;
+      if (musicTracks.some((track) => track.filePath === filePath)) continue;
+
+      try {
+        const fileInfo = await stat(filePath);
+        if (!fileInfo.isFile()) continue;
+      } catch {
+        continue;
+      }
+
+      musicTrackSequence += 1;
+      musicTracks.push({
+        id: String(musicTrackSequence),
+        name: path.basename(filePath, path.extname(filePath)),
+        filePath,
+      });
+      added += 1;
+    }
+
+    if (added === 0) {
+      return {
+        ok: false,
+        error: 'Nenhuma faixa MP3 nova e válida foi encontrada.',
+      };
+    }
+
+    if (!musicState.currentTrackId) {
+      musicState = { ...musicState, currentTrackId: musicTracks[0].id };
+    }
+    musicState = { ...musicState, revision: musicState.revision + 1 };
+    broadcastMusicState();
+    return { ok: true, added };
+  },
+);
+
+const moveMusicTrack = (direction: -1 | 1) => {
+  if (musicTracks.length === 0) return;
+  const currentIndex = Math.max(
+    0,
+    musicTracks.findIndex((track) => track.id === musicState.currentTrackId),
+  );
+  const nextIndex =
+    (currentIndex + direction + musicTracks.length) % musicTracks.length;
+  musicState = {
+    ...musicState,
+    currentTrackId: musicTracks[nextIndex].id,
+    isPlaying: battleState.battleStarted,
+    playbackVersion: musicState.playbackVersion + 1,
+    revision: musicState.revision + 1,
+  };
+};
+
+const applyMusicCommand = (command: MusicCommand) => {
+  if (
+    command.type !== 'toggle-loop' &&
+    command.type !== 'set-volume' &&
+    musicTracks.length === 0
+  ) return;
+
+  switch (command.type) {
+    case 'toggle-play':
+      if (!battleState.battleStarted) break;
+      musicState = {
+        ...musicState,
+        isPlaying: !musicState.isPlaying,
+        revision: musicState.revision + 1,
+      };
+      break;
+    case 'restart':
+      musicState = {
+        ...musicState,
+        playbackVersion: musicState.playbackVersion + 1,
+        revision: musicState.revision + 1,
+      };
+      break;
+    case 'previous':
+      moveMusicTrack(-1);
+      break;
+    case 'next':
+      moveMusicTrack(1);
+      break;
+    case 'toggle-loop':
+      musicState = {
+        ...musicState,
+        loop: !musicState.loop,
+        revision: musicState.revision + 1,
+      };
+      break;
+    case 'set-volume':
+      musicState = {
+        ...musicState,
+        volume: Math.max(0, Math.min(1, command.volume)),
+        revision: musicState.revision + 1,
+      };
+      break;
+    case 'play-track':
+      if (!musicTracks.some((track) => track.id === command.trackId)) return;
+      musicState = {
+        ...musicState,
+        currentTrackId: command.trackId,
+        isPlaying: battleState.battleStarted,
+        playbackVersion: musicState.playbackVersion + 1,
+        revision: musicState.revision + 1,
+      };
+      break;
+  }
+
+  broadcastMusicState();
+};
+
+ipcMain.on('music:dispatch', (event, command: unknown) => {
+  if (!isMusicSender(event.sender.id) || !isMusicCommand(command)) return;
+  applyMusicCommand(command);
+});
+
+ipcMain.on('music:track-ended', (event) => {
+  if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
+  if (musicState.loop) return;
+  moveMusicTrack(1);
+  broadcastMusicState();
+});
+
+ipcMain.on('music:fadeout-complete', (event) => {
+  if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
+  musicState = {
+    ...musicState,
+    isPlaying: false,
+    revision: musicState.revision + 1,
+  };
+  broadcastMusicState();
+});
+
 ipcMain.on('presentation:ready', (event) => {
   if (!playerWindow || event.sender.id !== playerWindow.webContents.id) {
     return;
@@ -271,6 +534,93 @@ ipcMain.on('background:load-error', (event, message: unknown) => {
   masterWindow.webContents.send('background:error', message.slice(0, 240));
 });
 
+const applyHealthMutation = (
+  type: 'damage' | 'heal' | 'reset-health',
+  bossId: string,
+  amount = 0,
+) => {
+  const previousBoss = battleState.bosses.find((boss) => boss.id === bossId);
+  if (!previousBoss) return;
+  const command =
+    type === 'reset-health'
+      ? ({ type: 'reset-health', bossId } as const)
+      : ({ type, bossId, amount } as const);
+
+  battleState = applyBattleCommand(battleState, command);
+  const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
+  if (!nextBoss) return;
+  broadcastBattleState();
+
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    healthEffectSequence += 1;
+    const effect: HealthEffect = {
+      id: healthEffectSequence,
+      bossId,
+      type: type === 'damage' ? 'damage' : 'heal',
+      intensity: type === 'reset-health' ? 'full' : 'normal',
+      from: previousBoss.currentHealth,
+      to: nextBoss.currentHealth,
+      maximum: nextBoss.maxHealth,
+    };
+    playerWindow.webContents.send('health:effect', effect);
+  }
+};
+
+ipcMain.handle(
+  'health:sequence',
+  (event, request: HealthSequenceRequest): HealthSequenceResult => {
+    if (!isMasterSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+
+    if (
+      !request ||
+      typeof request.bossId !== 'string' ||
+      (request.type !== 'damage' && request.type !== 'heal') ||
+      !Number.isFinite(request.total) ||
+      request.total <= 0 ||
+      !Number.isInteger(request.hits) ||
+      request.hits < 1 ||
+      request.hits > 1000
+    ) {
+      return { ok: false, error: 'Valor ou quantidade de parcelas inválida.' };
+    }
+
+    const boss = battleState.bosses.find((item) => item.id === request.bossId);
+    if (!boss) return { ok: false, error: 'Chefão não encontrado.' };
+
+    const total = Math.min(1_000_000, Math.ceil(request.total));
+    const amountPerHit = Math.ceil(total / request.hits);
+    const reductionPerHit =
+      request.type === 'damage'
+        ? Math.ceil(boss.damageReduction / request.hits)
+        : 0;
+    const effectiveAmount =
+      request.type === 'damage'
+        ? Math.max(1, amountPerHit - reductionPerHit)
+        : amountPerHit;
+
+    for (let index = 0; index < request.hits; index += 1) {
+      if (index === 0) {
+        applyHealthMutation(request.type, request.bossId, effectiveAmount);
+        continue;
+      }
+
+      const timer = setTimeout(() => {
+        pendingHealthTimers.delete(timer);
+        applyHealthMutation(request.type, request.bossId, effectiveAmount);
+      }, index * 150);
+      pendingHealthTimers.add(timer);
+    }
+
+    return {
+      ok: true,
+      hits: request.hits,
+      amountPerHit: effectiveAmount,
+    };
+  },
+);
+
 ipcMain.on('battle:dispatch', (event, command: unknown) => {
   if (!isMasterSender(event.sender.id)) {
     return;
@@ -280,11 +630,23 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     return;
   }
 
-  const previousBattleState = battleState;
+  if (
+    command.type === 'damage' ||
+    command.type === 'heal' ||
+    command.type === 'reset-health'
+  ) {
+    applyHealthMutation(
+      command.type,
+      command.bossId,
+      command.type === 'reset-health' ? 0 : command.amount,
+    );
+    return;
+  }
+
   battleState = applyBattleCommand(battleState, command);
   let backgroundChanged = false;
 
-  if (command.type === 'configure' && pendingBackgroundChange) {
+  if (command.type === 'commit-background' && pendingBackgroundChange) {
     if (pendingBackgroundChange.type === 'set') {
       activeBackgroundFilePath = pendingBackgroundChange.filePath;
       battleState = {
@@ -302,46 +664,76 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'reset-all') {
+    pendingHealthTimers.forEach(clearTimeout);
+    pendingHealthTimers.clear();
     activeBackgroundFilePath = null;
     pendingBackgroundChange = null;
     backgroundRevision += 1;
     backgroundChanged = true;
   }
 
+  if (command.type === 'start-battle') {
+    if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
+    battleMusicStartTimer = setTimeout(() => {
+      battleMusicStartTimer = null;
+      if (!battleState.battleStarted || !musicState.currentTrackId) return;
+      musicState = {
+        ...musicState,
+        isPlaying: true,
+        playbackVersion: musicState.playbackVersion + 1,
+        revision: musicState.revision + 1,
+      };
+      broadcastMusicState();
+    }, 1000);
+  }
+
+  if (command.type === 'end-battle' || command.type === 'reset-all') {
+    if (battleMusicStartTimer) {
+      clearTimeout(battleMusicStartTimer);
+      battleMusicStartTimer = null;
+    }
+    if (musicState.isPlaying && playerWindow && !playerWindow.isDestroyed()) {
+      playerWindow.webContents.send('music:fade-out', 1600);
+    } else if (musicState.isPlaying) {
+      musicState = {
+        ...musicState,
+        isPlaying: false,
+        revision: musicState.revision + 1,
+      };
+      broadcastMusicState();
+    }
+  }
+
   broadcastBattleState();
   if (backgroundChanged) broadcastBackground();
-
-  if (
-    (command.type === 'damage' ||
-      command.type === 'heal' ||
-      command.type === 'reset-health') &&
-    playerWindow &&
-    !playerWindow.isDestroyed()
-  ) {
-    healthEffectSequence += 1;
-    const effect: HealthEffect = {
-      id: healthEffectSequence,
-      type: command.type === 'damage' ? 'damage' : 'heal',
-      intensity: command.type === 'reset-health' ? 'full' : 'normal',
-      from: previousBattleState.currentHealth,
-      to: battleState.currentHealth,
-      maximum: battleState.maxHealth,
-    };
-    playerWindow.webContents.send('health:effect', effect);
-  }
 });
 
 app.whenReady().then(async () => {
   await protocol.handle('boss-media', async (request) => {
     const requestUrl = new URL(request.url);
-    if (requestUrl.hostname !== 'background' || !activeBackgroundFilePath) {
-      return new Response('Imagem não encontrada.', { status: 404 });
+    let mediaPath: string | null = null;
+    let errorLabel = 'mídia';
+
+    if (requestUrl.hostname === 'background') {
+      mediaPath = activeBackgroundFilePath;
+      errorLabel = 'imagem';
+    } else if (requestUrl.hostname === 'audio') {
+      const trackId = decodeURIComponent(requestUrl.pathname.slice(1));
+      mediaPath =
+        musicTracks.find((track) => track.id === trackId)?.filePath ?? null;
+      errorLabel = 'faixa';
+    }
+
+    if (!mediaPath) {
+      return new Response(`${errorLabel} não encontrada.`, { status: 404 });
     }
 
     try {
-      return await net.fetch(pathToFileURL(activeBackgroundFilePath).toString());
+      return await net.fetch(pathToFileURL(mediaPath).toString());
     } catch {
-      return new Response('Não foi possível carregar a imagem.', { status: 500 });
+      return new Response(`Não foi possível carregar a ${errorLabel}.`, {
+        status: 500,
+      });
     }
   });
 

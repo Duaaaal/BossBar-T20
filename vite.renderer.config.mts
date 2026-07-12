@@ -14,6 +14,7 @@ export default defineConfig({
       input: {
         master: path.resolve(projectRoot, 'master.html'),
         player: path.resolve(projectRoot, 'player.html'),
+        music: path.resolve(projectRoot, 'music.html'),
       },
     },
   },

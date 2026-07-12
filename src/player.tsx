@@ -8,7 +8,9 @@ import { createRoot } from 'react-dom/client';
 import type {
   BackgroundState,
   BattleState,
+  BossState,
   HealthEffect,
+  MusicState,
 } from './shared/battle';
 import './player.css';
 
@@ -35,6 +37,7 @@ const AnimatedHealthBar = ({
   const [displayPercent, setDisplayPercent] = useState(initialPercent);
   const [damageTrailPercent, setDamageTrailPercent] = useState(initialPercent);
   const [healingPreviewPercent, setHealingPreviewPercent] = useState(0);
+  const [healingPreviewActive, setHealingPreviewActive] = useState(false);
 
   useEffect(() => {
     const timers: Array<ReturnType<typeof setTimeout>> = [];
@@ -49,8 +52,10 @@ const AnimatedHealthBar = ({
       setDisplayPercent(nextPercent);
       setDamageTrailPercent(nextPercent);
       setHealingPreviewPercent(0);
+      setHealingPreviewActive(false);
     } else if (current < previousValue.current) {
       setHealingPreviewPercent(0);
+      setHealingPreviewActive(false);
       setDamageTrailPercent(Math.max(oldPercent, nextPercent));
       setDisplayPercent(nextPercent);
       timers.push(
@@ -59,10 +64,13 @@ const AnimatedHealthBar = ({
     } else if (current > previousValue.current) {
       setDamageTrailPercent(oldPercent);
       setDisplayPercent(oldPercent);
-      setHealingPreviewPercent(nextPercent);
+      setHealingPreviewPercent(oldPercent);
+      setHealingPreviewActive(true);
       timers.push(
-        setTimeout(() => setDisplayPercent(nextPercent), 430),
-        setTimeout(() => setHealingPreviewPercent(0), 1050),
+        setTimeout(() => setHealingPreviewPercent(nextPercent), 20),
+        setTimeout(() => setDisplayPercent(nextPercent), 560),
+        setTimeout(() => setHealingPreviewActive(false), 1180),
+        setTimeout(() => setHealingPreviewPercent(0), 1380),
       );
     }
 
@@ -141,52 +149,186 @@ const AnimatedHealthBar = ({
   }, [effects]);
 
   return (
-    <div
-      className="health-bar"
-      ref={healthBarRef}
-      role="progressbar"
-      aria-label="Vida do chefão"
-      aria-valuemin={0}
-      aria-valuemax={maximum}
-      aria-valuenow={current}
-    >
+    <div className="health-bar-shell">
       <div
-        className="health-damage-trail"
-        style={{ width: `${damageTrailPercent}%` }}
-      />
-      <div
-        className="health-healing-preview"
-        style={{ width: `${healingPreviewPercent}%` }}
-      />
-      <div
-        className="health-bar-fill"
-        style={{ width: `${displayPercent}%` }}
-      />
-      <div className="health-bar-highlight" />
-      <div className="health-ruler" aria-hidden="true">
-        {healthMarkers.map((marker) => (
-          <span
-            className={
-              marker % 10 === 0
-                ? 'is-major'
-                : marker % 5 === 0
-                  ? 'is-medium'
-                  : ''
-            }
-            key={marker}
-            style={{ left: `${marker}%` }}
+        className="health-bar"
+        ref={healthBarRef}
+        role="progressbar"
+        aria-label="Vida do chefão"
+        aria-valuemin={0}
+        aria-valuemax={maximum}
+        aria-valuenow={current}
+      >
+        <div
+          className="health-damage-trail"
+          style={{ width: `${damageTrailPercent}%` }}
+        />
+        <div
+          className={`health-healing-preview ${
+            healingPreviewActive ? 'is-active' : ''
+          }`}
+          style={{ width: `${healingPreviewPercent}%` }}
+        />
+        <div
+          className="health-bar-fill"
+          style={{ width: `${displayPercent}%` }}
+        />
+        <div className="health-bar-highlight" />
+        <div className="health-ruler" aria-hidden="true">
+          {healthMarkers.map((marker) => (
+            <span
+              className={
+                marker % 10 === 0
+                  ? 'is-major'
+                  : marker % 5 === 0
+                    ? 'is-medium'
+                    : ''
+              }
+              key={marker}
+              style={{ left: `${marker}%` }}
+            />
+          ))}
+        </div>
+        {effects.map((effect) => (
+          <div
+            className={`health-impact is-${effect.type} ${
+              effect.intensity === 'full' ? 'is-full' : ''
+            }`}
+            key={effect.id}
           />
         ))}
       </div>
-      {effects.map((effect) => (
-        <div
-          className={`health-impact is-${effect.type} ${
-            effect.intensity === 'full' ? 'is-full' : ''
-          }`}
-          key={effect.id}
-        />
-      ))}
     </div>
+  );
+};
+
+const MusicPlayer = ({ battle }: { battle: BattleState }) => {
+  const [music, setMusic] = useState<MusicState | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const fadeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fading = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getMusicState().then((state) => {
+      if (active) setMusic(state);
+    });
+    const unsubscribe = window.bossAPI.subscribeMusic(setMusic);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const currentTrack = music?.tracks.find(
+    (track) => track.id === music.currentTrackId,
+  );
+
+  const stopFade = () => {
+    if (fadeTimer.current) clearInterval(fadeTimer.current);
+    fadeTimer.current = null;
+    fading.current = false;
+  };
+
+  const fadeOut = (duration: number) => {
+    const audio = audioRef.current;
+    if (!audio || audio.paused || fading.current) return;
+    stopFade();
+    fading.current = true;
+    const startVolume = audio.volume;
+    const startedAt = Date.now();
+    fadeTimer.current = setInterval(() => {
+      const progress = Math.min(1, (Date.now() - startedAt) / duration);
+      audio.volume = startVolume * (1 - progress);
+      if (progress === 1) {
+        stopFade();
+        audio.pause();
+        window.bossAPI.musicFadeoutComplete();
+      }
+    }, 30);
+  };
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (!currentTrack) {
+      audio.removeAttribute('src');
+      audio.load();
+      return;
+    }
+
+    audio.src = currentTrack.url;
+    audio.volume = music?.volume ?? 0.8;
+    audio.load();
+    if (music?.isPlaying) void audio.play().catch((): void => {});
+  }, [currentTrack?.id, music?.playbackVersion]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) return;
+    if (music?.isPlaying) {
+      stopFade();
+      audio.volume = music.volume;
+      void audio.play().catch((): void => {});
+    }
+    else audio.pause();
+  }, [music?.isPlaying, currentTrack?.id]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio && !fading.current) audio.volume = music?.volume ?? 0.8;
+  }, [music?.volume]);
+
+  useEffect(
+    () => window.bossAPI.subscribeMusicFadeOut(fadeOut),
+    [],
+  );
+
+  const allDefeated = battle.bosses.every((boss) => boss.currentHealth === 0);
+  useEffect(() => {
+    if (!battle.battleStarted || !allDefeated || !music?.isPlaying) return;
+    const timer = setTimeout(() => fadeOut(1800), 5600);
+    return () => clearTimeout(timer);
+  }, [allDefeated, battle.battleStarted, music?.isPlaying]);
+
+  useEffect(() => () => stopFade(), []);
+
+  return (
+    <audio
+      className="music-player"
+      ref={audioRef}
+      loop={music?.loop ?? false}
+      onEnded={() => window.bossAPI.musicTrackEnded()}
+    />
+  );
+};
+
+const BossHud = ({
+  boss,
+  bossCount,
+  effects,
+}: {
+  boss: BossState;
+  bossCount: number;
+  effects: HealthEffect[];
+}) => {
+  const hudScale = 1 - (bossCount - 1) * 0.25;
+  return (
+    <article
+      className={`boss-hud-entry ${boss.currentHealth === 0 ? 'is-defeated' : ''}`}
+      style={{ '--hud-scale': hudScale } as CSSProperties}
+    >
+      <h1 className="boss-name">{boss.bossName}</h1>
+      <AnimatedHealthBar
+        current={boss.currentHealth}
+        effects={effects.filter((effect) => effect.bossId === boss.id)}
+        maximum={boss.maxHealth}
+      />
+      <div className="action-slot">
+        <AnimatedAction text={boss.nextAction} severity={boss.actionSeverity} />
+      </div>
+    </article>
   );
 };
 
@@ -327,16 +469,17 @@ const PlayerApp = () => {
     return <main className="player-loading">Preparando o encontro...</main>;
   }
 
-  const defeated = state.currentHealth === 0;
-  const backgroundStyle = background.url
+  const backgroundStyle = state.battleStarted && background.url
     ? ({
         '--battle-background': `url("${background.url}")`,
       } as CSSProperties)
     : undefined;
 
   return (
-    <main
-      className={`player-stage ${defeated ? 'is-defeated' : ''}`}
+    <>
+      <MusicPlayer battle={state} />
+      <main
+      className="player-stage"
       style={backgroundStyle}
     >
       <div className="ambient ambient-one" />
@@ -351,21 +494,22 @@ const PlayerApp = () => {
         <small>O Mestre iniciará a batalha em breve</small>
       </section>
 
-      <section className={`boss-hud ${state.battleStarted ? 'is-active' : ''}`}>
-        <h1 className="boss-name">{state.bossName}</h1>
-        <AnimatedHealthBar
-          current={state.currentHealth}
-          effects={healthEffects}
-          maximum={state.maxHealth}
-        />
-        <div className="action-slot">
-          <AnimatedAction
-            text={state.nextAction}
-            severity={state.actionSeverity}
+      <section
+        className={`boss-hud ${
+          state.battleStarted && state.hudVisible ? 'is-active' : ''
+        }`}
+      >
+        {state.bosses.map((boss) => (
+          <BossHud
+            boss={boss}
+            bossCount={state.bosses.length}
+            effects={healthEffects}
+            key={boss.id}
           />
-        </div>
+        ))}
       </section>
-    </main>
+      </main>
+    </>
   );
 };
 
