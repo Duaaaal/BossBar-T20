@@ -1,7 +1,7 @@
 {
   "name": "boss-battle",
   "productName": "Painel de Batalha RPG",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,

@@ -53,7 +53,7 @@ const CompactNumberField = ({
 
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
-  const [appVersion, setAppVersion] = useState('1.0.0');
+  const [appVersion, setAppVersion] = useState('...');
   const [bossName, setBossName] = useState('');
   const [maxHealth, setMaxHealth] = useState('');
   const [attack, setAttack] = useState('10');
