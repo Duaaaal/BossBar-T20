@@ -103,6 +103,7 @@ export type MusicState = {
   isPlaying: boolean;
   loop: boolean;
   volume: number;
+  muted: boolean;
   playbackVersion: number;
   revision: number;
 };
@@ -115,7 +116,13 @@ export type MusicPlaybackState = {
 
 export const volumeToGain = (volume: number) => {
   const normalizedVolume = Math.max(0, Math.min(1, volume));
-  return normalizedVolume ** 2.2;
+  if (normalizedVolume <= 0.8) {
+    return (normalizedVolume / 0.8) ** 2.2;
+  }
+
+  const boostProgress = (normalizedVolume - 0.8) / 0.2;
+  const boostDecibels = boostProgress * 6;
+  return 10 ** (boostDecibels / 20);
 };
 
 export type MusicSelectionResult = {
@@ -125,12 +132,72 @@ export type MusicSelectionResult = {
   canceled?: boolean;
 };
 
+export type SoundboardSlot = {
+  index: number;
+  name: string | null;
+  assigned: boolean;
+};
+
+export type SoundboardState = {
+  slots: SoundboardSlot[];
+  volume: number;
+  muted: boolean;
+  revision: number;
+};
+
+export type SoundboardAssignmentResult = {
+  ok: boolean;
+  error?: string;
+  canceled?: boolean;
+};
+
+export type SoundEffect = {
+  id: number;
+  index: number;
+  url: string;
+};
+
+export type SoundboardStop = {
+  index?: number;
+};
+
+export type SoundboardCommand =
+  | { type: 'play'; index: number }
+  | { type: 'remove'; index: number }
+  | { type: 'clear' }
+  | { type: 'stop-all' }
+  | { type: 'toggle-mute' }
+  | { type: 'set-volume'; volume: number };
+
+export const isSoundboardCommand = (
+  value: unknown,
+): value is SoundboardCommand => {
+  if (!value || typeof value !== 'object' || !('type' in value)) return false;
+  const command = value as Record<string, unknown>;
+  if (
+    command.type === 'clear' ||
+    command.type === 'stop-all' ||
+    command.type === 'toggle-mute'
+  ) return true;
+  if (command.type === 'set-volume') {
+    return typeof command.volume === 'number' && Number.isFinite(command.volume);
+  }
+  return (
+    (command.type === 'play' || command.type === 'remove') &&
+    typeof command.index === 'number' &&
+    Number.isInteger(command.index) &&
+    command.index >= 1 &&
+    command.index <= 20
+  );
+};
+
 export type MusicCommand =
   | { type: 'toggle-play' }
   | { type: 'restart' }
   | { type: 'previous' }
   | { type: 'next' }
   | { type: 'toggle-loop' }
+  | { type: 'toggle-mute' }
   | { type: 'set-volume'; volume: number }
   | { type: 'seek'; time: number }
   | { type: 'remove-track'; trackId: string }
@@ -157,6 +224,7 @@ export const isMusicCommand = (value: unknown): value is MusicCommand => {
     'previous',
     'next',
     'toggle-loop',
+    'toggle-mute',
     'clear-tracks',
   ].includes(String(command.type));
 };

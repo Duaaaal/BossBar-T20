@@ -11,6 +11,11 @@ import type {
   MusicPlaybackState,
   MusicSelectionResult,
   MusicState,
+  SoundboardAssignmentResult,
+  SoundboardCommand,
+  SoundboardState,
+  SoundboardStop,
+  SoundEffect,
 } from './shared/battle';
 
 let latestBattleState: BattleState | null = null;
@@ -23,6 +28,8 @@ let latestMusicPlayback: MusicPlaybackState | null = null;
 const musicPlaybackSubscribers = new Set<
   (state: MusicPlaybackState) => void
 >();
+let latestSoundboardState: SoundboardState | null = null;
+const soundboardSubscribers = new Set<(state: SoundboardState) => void>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -50,6 +57,11 @@ ipcRenderer.on(
     for (const subscriber of musicPlaybackSubscribers) subscriber(state);
   },
 );
+
+ipcRenderer.on('soundboard:state-changed', (_event, state: SoundboardState) => {
+  latestSoundboardState = state;
+  for (const subscriber of soundboardSubscribers) subscriber(state);
+});
 
 contextBridge.exposeInMainWorld('bossAPI', {
   getState: async (): Promise<BattleState> => {
@@ -85,6 +97,30 @@ contextBridge.exposeInMainWorld('bossAPI', {
   },
   dispatchMusic: (command: MusicCommand) => {
     ipcRenderer.send('music:dispatch', command);
+  },
+  getSoundboardState: async (): Promise<SoundboardState> => {
+    const state = (await ipcRenderer.invoke(
+      'soundboard:get-state',
+    )) as SoundboardState;
+    latestSoundboardState = state;
+    return state;
+  },
+  assignSoundboardSlot: (
+    index: number,
+    name: string,
+    keepExistingFile: boolean,
+  ): Promise<SoundboardAssignmentResult> =>
+    ipcRenderer.invoke('soundboard:assign', index, name, keepExistingFile),
+  dispatchSoundboard: (command: SoundboardCommand) => {
+    ipcRenderer.send('soundboard:dispatch', command);
+  },
+  setSoundboardOpen: (open: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('music:set-soundboard-open', open),
+  soundEffectFinished: (effectId: number) => {
+    ipcRenderer.send('soundboard:playback-finished', effectId);
+  },
+  reportSoundEffectError: (effectId: number, index: number) => {
+    ipcRenderer.send('soundboard:playback-error', effectId, index);
   },
   musicTrackEnded: () => {
     ipcRenderer.send('music:track-ended');
@@ -174,5 +210,31 @@ contextBridge.exposeInMainWorld('bossAPI', {
     };
     ipcRenderer.on('music:fade-out', listener);
     return () => ipcRenderer.removeListener('music:fade-out', listener);
+  },
+  subscribeSoundboard: (callback: (state: SoundboardState) => void) => {
+    soundboardSubscribers.add(callback);
+    if (latestSoundboardState) callback(latestSoundboardState);
+    return () => soundboardSubscribers.delete(callback);
+  },
+  subscribeSoundEffect: (callback: (effect: SoundEffect) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, effect: SoundEffect) => {
+      callback(effect);
+    };
+    ipcRenderer.on('soundboard:play', listener);
+    return () => ipcRenderer.removeListener('soundboard:play', listener);
+  },
+  subscribeSoundboardStop: (callback: (stop: SoundboardStop) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, stop: SoundboardStop) => {
+      callback(stop);
+    };
+    ipcRenderer.on('soundboard:stop', listener);
+    return () => ipcRenderer.removeListener('soundboard:stop', listener);
+  },
+  subscribeSoundboardError: (callback: (message: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, message: string) => {
+      callback(message);
+    };
+    ipcRenderer.on('soundboard:error', listener);
+    return () => ipcRenderer.removeListener('soundboard:error', listener);
   },
 });

@@ -10,6 +10,11 @@ import type {
   MusicPlaybackState,
   MusicSelectionResult,
   MusicState,
+  SoundboardAssignmentResult,
+  SoundboardCommand,
+  SoundboardState,
+  SoundboardStop,
+  SoundEffect,
 } from './shared/battle';
 
 declare global {
@@ -28,6 +33,16 @@ declare global {
       getMusicState: () => Promise<MusicState>;
       getMusicPlayback: () => Promise<MusicPlaybackState>;
       dispatchMusic: (command: MusicCommand) => void;
+      getSoundboardState: () => Promise<SoundboardState>;
+      assignSoundboardSlot: (
+        index: number,
+        name: string,
+        keepExistingFile: boolean,
+      ) => Promise<SoundboardAssignmentResult>;
+      dispatchSoundboard: (command: SoundboardCommand) => void;
+      setSoundboardOpen: (open: boolean) => Promise<boolean>;
+      soundEffectFinished: (effectId: number) => void;
+      reportSoundEffectError: (effectId: number, index: number) => void;
       musicTrackEnded: () => void;
       musicFadeoutComplete: () => void;
       reportMusicProgress: (state: MusicPlaybackState) => void;
@@ -54,6 +69,18 @@ declare global {
       subscribeMusicSeek: (callback: (time: number) => void) => () => void;
       subscribeMusicFadeOut: (
         callback: (duration: number) => void,
+      ) => () => void;
+      subscribeSoundboard: (
+        callback: (state: SoundboardState) => void,
+      ) => () => void;
+      subscribeSoundEffect: (
+        callback: (effect: SoundEffect) => void,
+      ) => () => void;
+      subscribeSoundboardStop: (
+        callback: (stop: SoundboardStop) => void,
+      ) => () => void;
+      subscribeSoundboardError: (
+        callback: (message: string) => void,
       ) => () => void;
     };
   }

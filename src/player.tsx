@@ -13,6 +13,7 @@ import {
   type BossState,
   type HealthEffect,
   type MusicState,
+  type SoundboardState,
   volumeToGain,
 } from './shared/battle';
 import './player.css';
@@ -251,6 +252,9 @@ const AnimatedHealthBar = ({
 const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const [music, setMusic] = useState<MusicState | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const fadeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fading = useRef(false);
 
@@ -269,6 +273,35 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const currentTrack = music?.tracks.find(
     (track) => track.id === music.currentTrackId,
   );
+
+  const ensureAudioGraph = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return null;
+
+    if (!audioContextRef.current) {
+      const context = new AudioContext();
+      const source = context.createMediaElementSource(audio);
+      const gain = context.createGain();
+      source.connect(gain);
+      gain.connect(context.destination);
+      audio.volume = 1;
+      audioContextRef.current = context;
+      sourceNodeRef.current = source;
+      gainNodeRef.current = gain;
+    }
+
+    if (audioContextRef.current.state === 'suspended') {
+      void audioContextRef.current.resume();
+    }
+    return gainNodeRef.current;
+  }, []);
+
+  const setOutputGain = useCallback((volume: number) => {
+    const gain = ensureAudioGraph();
+    const context = audioContextRef.current;
+    if (!gain || !context) return;
+    gain.gain.setValueAtTime(volumeToGain(volume), context.currentTime);
+  }, [ensureAudioGraph]);
 
   const reportProgress = useCallback(() => {
     const audio = audioRef.current;
@@ -297,18 +330,23 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     }
     stopFade();
     fading.current = true;
-    const startVolume = audio.volume;
+    const gain = ensureAudioGraph();
+    if (!gain) {
+      fading.current = false;
+      return;
+    }
+    const startGain = gain.gain.value;
     const startedAt = Date.now();
     fadeTimer.current = setInterval(() => {
       const progress = Math.min(1, (Date.now() - startedAt) / duration);
-      audio.volume = startVolume * (1 - progress);
+      gain.gain.value = startGain * (1 - progress);
       if (progress === 1) {
         stopFade();
         audio.pause();
         window.bossAPI.musicFadeoutComplete();
       }
     }, 30);
-  }, [stopFade]);
+  }, [ensureAudioGraph, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -322,28 +360,28 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
     stopFade();
     audio.src = currentTrack.url;
-    audio.volume = volumeToGain(music?.volume ?? 0.8);
+    setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
     audio.load();
     if (music?.isPlaying) void audio.play().catch((): void => {});
-  }, [currentTrack?.id, music?.playbackVersion, stopFade]);
+  }, [currentTrack?.id, music?.playbackVersion, setOutputGain, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
     if (music?.isPlaying) {
       stopFade();
-      audio.volume = volumeToGain(music.volume);
+      setOutputGain(music.muted ? 0 : music.volume);
       void audio.play().catch((): void => {});
     }
     else audio.pause();
-  }, [music?.isPlaying, currentTrack?.id, stopFade]);
+  }, [music?.isPlaying, music?.muted, currentTrack?.id, setOutputGain, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (audio && !fading.current) {
-      audio.volume = volumeToGain(music?.volume ?? 0.8);
+      setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
     }
-  }, [music?.volume]);
+  }, [music?.muted, music?.volume, setOutputGain]);
 
   useEffect(
     () => window.bossAPI.subscribeMusicFadeOut(fadeOut),
@@ -372,11 +410,14 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const allDefeated =
     preparedBosses.length > 0 &&
     preparedBosses.every((boss) => boss.currentHealth === 0);
+  const defeatSequenceDuration = preparedBosses.some(
+    (boss) => boss.currentHealth === 0 && Boolean(boss.nextAction),
+  ) ? 5600 : 1800;
   useEffect(() => {
     if (!battle.battleStarted || !allDefeated || !music?.isPlaying) return;
-    const timer = setTimeout(() => fadeOut(1800), 5600);
+    const timer = setTimeout(() => fadeOut(1800), defeatSequenceDuration);
     return () => clearTimeout(timer);
-  }, [allDefeated, battle.battleStarted, fadeOut, music?.isPlaying]);
+  }, [allDefeated, battle.battleStarted, defeatSequenceDuration, fadeOut, music?.isPlaying]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -389,15 +430,22 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     ) return;
 
     stopFade();
-    audio.volume = volumeToGain(music.volume);
+    setOutputGain(music.muted ? 0 : music.volume);
     void audio.play().catch((): void => {});
-  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.volume, stopFade]);
+  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.muted, music?.volume, setOutputGain, stopFade]);
 
-  useEffect(() => () => stopFade(), [stopFade]);
+  useEffect(() => () => {
+    stopFade();
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+    gainNodeRef.current = null;
+    sourceNodeRef.current = null;
+  }, [stopFade]);
 
   return (
     <audio
       className="music-player"
+      crossOrigin="anonymous"
       ref={audioRef}
       loop={music?.loop ?? false}
       onEnded={() => window.bossAPI.musicTrackEnded()}
@@ -412,6 +460,122 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   );
 };
 
+const SoundboardPlayer = () => {
+  const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const activeSounds = useRef(new Map<
+    number,
+    {
+      index: number;
+      audio: HTMLAudioElement;
+      source: MediaElementAudioSourceNode;
+      release: (playbackError?: boolean) => void;
+    }
+  >());
+
+  const ensureAudioGraph = useCallback(() => {
+    if (!audioContextRef.current) {
+      const context = new AudioContext();
+      const gain = context.createGain();
+      gain.connect(context.destination);
+      audioContextRef.current = context;
+      masterGainRef.current = gain;
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      void audioContextRef.current.resume();
+    }
+    return {
+      context: audioContextRef.current,
+      gain: masterGainRef.current,
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getSoundboardState().then((state) => {
+      if (active) setSoundboard(state);
+    });
+    const unsubscribe = window.bossAPI.subscribeSoundboard(setSoundboard);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const graph = ensureAudioGraph();
+    if (!graph.gain || !soundboard) return;
+    graph.gain.gain.setValueAtTime(
+      soundboard.muted ? 0 : volumeToGain(soundboard.volume),
+      graph.context.currentTime,
+    );
+  }, [ensureAudioGraph, soundboard?.muted, soundboard?.volume]);
+
+  useEffect(() => {
+    const unsubscribe = window.bossAPI.subscribeSoundEffect((effect) => {
+      const graph = ensureAudioGraph();
+      if (!graph.gain) return;
+      const audio = new Audio();
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+      audio.src = effect.url;
+      const source = graph.context.createMediaElementSource(audio);
+      source.connect(graph.gain);
+
+      const release = (playbackError = false) => {
+        if (!activeSounds.current.has(effect.id)) return;
+        activeSounds.current.delete(effect.id);
+        audio.removeEventListener('ended', handleEnded);
+        audio.removeEventListener('error', handleError);
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+        source.disconnect();
+        if (playbackError) {
+          window.bossAPI.reportSoundEffectError(effect.id, effect.index);
+        } else {
+          window.bossAPI.soundEffectFinished(effect.id);
+        }
+      };
+      const handleEnded = () => release(false);
+      const handleError = () => release(true);
+      activeSounds.current.set(effect.id, {
+        index: effect.index,
+        audio,
+        source,
+        release,
+      });
+      audio.addEventListener('ended', handleEnded);
+      audio.addEventListener('error', handleError);
+      audio.load();
+      void audio.play().catch(() => release(true));
+    });
+
+    const unsubscribeStop = window.bossAPI.subscribeSoundboardStop((stop) => {
+      for (const activeSound of [...activeSounds.current.values()]) {
+        if (stop.index === undefined || activeSound.index === stop.index) {
+          activeSound.release(false);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeStop();
+      for (const activeSound of [...activeSounds.current.values()]) {
+        activeSound.release(false);
+      }
+      activeSounds.current.clear();
+      void audioContextRef.current?.close();
+      audioContextRef.current = null;
+      masterGainRef.current = null;
+    };
+  }, [ensureAudioGraph]);
+
+  return null;
+};
+
 const BossHud = memo(function BossHud({
   boss,
   bossCount,
@@ -424,7 +588,7 @@ const BossHud = memo(function BossHud({
   const hudScale = 1 - (bossCount - 1) * 0.15;
   return (
     <article
-      className={`boss-hud-entry ${boss.currentHealth === 0 ? 'is-defeated' : ''}`}
+      className={`boss-hud-entry ${boss.currentHealth === 0 ? 'is-defeated' : ''} ${!boss.nextAction ? 'is-actionless' : ''}`}
       style={{ '--hud-scale': hudScale } as CSSProperties}
     >
       <h1 className="boss-name">{boss.bossName}</h1>
@@ -583,7 +747,7 @@ const PlayerApp = () => {
       const timer = setTimeout(() => {
         defeatedRemovalTimers.current.delete(boss.id);
         setHiddenDefeatedBosses((hidden) => new Set(hidden).add(boss.id));
-      }, 5600);
+      }, boss.nextAction ? 5600 : 1800);
       defeatedRemovalTimers.current.set(boss.id, timer);
     }
   }, [hiddenDefeatedBosses, state]);
@@ -692,6 +856,7 @@ const PlayerApp = () => {
   return (
     <>
       <MusicPlayer battle={state} />
+      <SoundboardPlayer />
       <main className="player-stage" style={backgroundStyle}>
         <div className="ambient ambient-one" />
         <div className="ambient ambient-two" />

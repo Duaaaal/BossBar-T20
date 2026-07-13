@@ -6,6 +6,7 @@ import {
   createInitialBoss,
   initialBattleState,
   isMusicCommand,
+  isSoundboardCommand,
   volumeToGain,
 } from '../src/shared/battle.ts';
 
@@ -163,8 +164,24 @@ test('só prepara chefões novos ao salvar e libera o inicial ao começar', () =
 
 test('converte o controle de volume para ganho perceptual', () => {
   assert.equal(volumeToGain(0), 0);
-  assert.equal(volumeToGain(1), 1);
-  assert.ok(volumeToGain(0.5) > 0.21 && volumeToGain(0.5) < 0.22);
-  assert.ok(volumeToGain(0.8) < 0.8);
-  assert.equal(volumeToGain(2), 1);
+  assert.equal(volumeToGain(0.8), 1);
+  assert.ok(volumeToGain(0.4) > 0.21 && volumeToGain(0.4) < 0.22);
+  assert.ok(volumeToGain(0.79) < 1);
+  assert.ok(volumeToGain(0.9) > 1.41 && volumeToGain(0.9) < 1.42);
+  assert.ok(volumeToGain(1) > 1.99 && volumeToGain(1) < 2);
+  assert.equal(volumeToGain(2), volumeToGain(1));
+});
+
+test('valida comandos limitados aos 20 botões do soundboard', () => {
+  assert.equal(isSoundboardCommand({ type: 'play', index: 1 }), true);
+  assert.equal(isSoundboardCommand({ type: 'remove', index: 20 }), true);
+  assert.equal(isSoundboardCommand({ type: 'clear' }), true);
+  assert.equal(isSoundboardCommand({ type: 'play', index: 0 }), false);
+  assert.equal(isSoundboardCommand({ type: 'play', index: 21 }), false);
+  assert.equal(isSoundboardCommand({ type: 'remove', index: 1.5 }), false);
+  assert.equal(isSoundboardCommand({ type: 'stop-all' }), true);
+  assert.equal(isSoundboardCommand({ type: 'toggle-mute' }), true);
+  assert.equal(isSoundboardCommand({ type: 'set-volume', volume: 0.75 }), true);
+  assert.equal(isSoundboardCommand({ type: 'set-volume', volume: Number.NaN }), false);
+  assert.equal(isMusicCommand({ type: 'toggle-mute' }), true);
 });

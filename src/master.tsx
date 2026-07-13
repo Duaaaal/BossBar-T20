@@ -255,8 +255,8 @@ const MasterApp = () => {
   const displayedDamage = applyDamageReduction ? reducedDamage : rawAmount;
   const setupPending = activeBoss.setupStatus !== 'ready';
   const identitySetupNotice = activeBoss.setupStatus === 'initial'
-    ? 'Revise os dados antes da luta; o aviso some ao salvar ou iniciar.'
-    : 'O novo chefão só entra na luta depois de salvar estes dados.';
+    ? 'Revise os dados do chefão antes de iniciar a luta.'
+    : 'Salve os dados antes de revelar este novo chefão na luta.';
 
   return (
     <main className="master-shell">

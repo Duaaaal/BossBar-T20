@@ -499,7 +499,7 @@ button:disabled:hover {
 .setup-notice {
   overflow: hidden;
   margin: 10px 0 -3px;
-  color: #cda86d;
+  color: #e87884;
   font-size: .65rem;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -508,7 +508,7 @@ button:disabled:hover {
 
 .action-setup-notice {
   margin-bottom: 0;
-  color: #b997c9;
+  color: #e87884;
 }
 
 .full-heal-button {

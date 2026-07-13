@@ -23,7 +23,10 @@ import {
   type MusicPlaybackState,
   type MusicSelectionResult,
   type MusicState,
+  type SoundboardAssignmentResult,
+  type SoundboardState,
   isMusicCommand,
+  isSoundboardCommand,
 } from './shared/battle';
 
 protocol.registerSchemesAsPrivileged([
@@ -61,12 +64,28 @@ type InternalMusicTrack = {
   duration: number;
 };
 const musicTracks: InternalMusicTrack[] = [];
+type InternalSoundboardSlot = {
+  index: number;
+  name: string;
+  filePath: string;
+};
+const soundboardSlots: Array<InternalSoundboardSlot | null> = Array.from(
+  { length: 20 },
+  () => null,
+);
+const soundEffectSources = new Map<
+  number,
+  { filePath: string; index: number }
+>();
 let musicTrackSequence = 0;
+let soundEffectSequence = 0;
+let soundboardRevision = 0;
 let musicState: Omit<MusicState, 'tracks'> = {
   currentTrackId: null,
   isPlaying: false,
   loop: false,
   volume: 0.8,
+  muted: false,
   playbackVersion: 0,
   revision: 0,
 };
@@ -75,6 +94,11 @@ let musicPlaybackState: MusicPlaybackState = {
   currentTime: 0,
   duration: 0,
 };
+let soundboardAudioState = {
+  volume: 0.8,
+  muted: false,
+};
+let masterFocusTimer: ReturnType<typeof setTimeout> | null = null;
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
 let allowAppClose = false;
 let allowPlayerWindowClose = false;
@@ -131,6 +155,16 @@ const getMusicState = (): MusicState => ({
   })),
 });
 
+const getSoundboardState = (): SoundboardState => ({
+  slots: soundboardSlots.map((slot, arrayIndex) => ({
+    index: arrayIndex + 1,
+    name: slot?.name ?? null,
+    assigned: Boolean(slot),
+  })),
+  ...soundboardAudioState,
+  revision: soundboardRevision,
+});
+
 const broadcastMusicState = () => {
   const nextState = getMusicState();
   for (const window of [musicWindow, playerWindow]) {
@@ -144,6 +178,34 @@ const broadcastMusicPlayback = () => {
   if (musicWindow && !musicWindow.isDestroyed()) {
     musicWindow.webContents.send('music:playback-changed', musicPlaybackState);
   }
+};
+
+const broadcastSoundboardState = () => {
+  const state = getSoundboardState();
+  for (const window of [musicWindow, playerWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('soundboard:state-changed', state);
+    }
+  }
+};
+
+const stopSoundboardPlayback = (index?: number) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('soundboard:stop', { index });
+  }
+};
+
+const resizeMusicWindow = (soundboardOpen: boolean) => {
+  if (!musicWindow || musicWindow.isDestroyed()) return;
+  const { workArea } = screen.getDisplayMatching(musicWindow.getBounds());
+  const width = Math.min(soundboardOpen ? 1080 : 590, workArea.width);
+  const height = Math.min(777, workArea.height);
+  musicWindow.setBounds({
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    width,
+    height,
+  });
 };
 
 const resetMusicPlayback = (trackId = musicState.currentTrackId) => {
@@ -163,14 +225,16 @@ const createMusicWindow = () => {
 
   const { workArea } = screen.getPrimaryDisplay();
   const width = Math.min(590, workArea.width);
-  const height = Math.min(860, workArea.height);
+  const height = Math.min(777, workArea.height);
+  const minimumHeight = Math.min(560, height);
   const window = new BrowserWindow({
     height,
     x: workArea.x + Math.round((workArea.width - width) / 2),
     y: workArea.y + Math.round((workArea.height - height) / 2),
     width,
     minWidth: 470,
-    minHeight: 560,
+    minHeight: minimumHeight,
+    maxHeight: height,
     title: 'Trilha Sonora',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
@@ -187,6 +251,7 @@ const createMusicWindow = () => {
     if (!window.isDestroyed()) {
       window.webContents.send('music:state-changed', getMusicState());
       window.webContents.send('music:playback-changed', musicPlaybackState);
+      window.webContents.send('soundboard:state-changed', getSoundboardState());
     }
   });
   loadRenderer(window, 'music');
@@ -313,6 +378,7 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
       playerWindowReady = false;
       allowPlayerWindowClose = false;
       playerWindowClosePending = false;
+      soundEffectSources.clear();
       if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
       playerWindowCloseTimer = null;
     }
@@ -345,10 +411,29 @@ const createWindows = () => {
   masterWindow.on('close', (event) => {
     if (allowAppClose) return;
     event.preventDefault();
-    masterWindow?.webContents.send('app:close-requested');
+    const window = masterWindow;
+    if (!window || window.isDestroyed()) return;
+
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.setAlwaysOnTop(true, 'pop-up-menu');
+    window.moveTop();
+    window.focus();
+    window.webContents.focus();
+    window.webContents.send('app:close-requested');
+
+    if (masterFocusTimer) clearTimeout(masterFocusTimer);
+    masterFocusTimer = setTimeout(() => {
+      masterFocusTimer = null;
+      if (masterWindow === window && !window.isDestroyed()) {
+        window.setAlwaysOnTop(false);
+      }
+    }, 800);
   });
 
   masterWindow.on('closed', () => {
+    if (masterFocusTimer) clearTimeout(masterFocusTimer);
+    masterFocusTimer = null;
     masterWindow = null;
     musicWindow?.close();
     playerWindow?.close();
@@ -470,6 +555,185 @@ ipcMain.handle(
   'music:get-playback',
   (): MusicPlaybackState => musicPlaybackState,
 );
+ipcMain.handle('soundboard:get-state', (): SoundboardState => getSoundboardState());
+ipcMain.handle('music:set-soundboard-open', (event, open: unknown) => {
+  if (!isMusicSender(event.sender.id) || typeof open !== 'boolean') return false;
+  resizeMusicWindow(open);
+  return true;
+});
+
+ipcMain.handle(
+  'soundboard:assign',
+  async (
+    event,
+    index: unknown,
+    name: unknown,
+    keepExistingFile: unknown,
+  ): Promise<SoundboardAssignmentResult> => {
+    if (
+      !musicWindow ||
+      !isMusicSender(event.sender.id) ||
+      typeof index !== 'number' ||
+      !Number.isInteger(index) ||
+      index < 1 ||
+      index > 20 ||
+      typeof name !== 'string' ||
+      typeof keepExistingFile !== 'boolean'
+    ) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+
+    const trimmedName = name.trim() || `Atalho ${index}`;
+    if (trimmedName.length > 40) {
+      return { ok: false, error: 'Digite um nome de até 40 caracteres.' };
+    }
+
+    const existingSlot = soundboardSlots[index - 1];
+    if (keepExistingFile && existingSlot) {
+      soundboardSlots[index - 1] = { ...existingSlot, name: trimmedName };
+      soundboardRevision += 1;
+      broadcastSoundboardState();
+      return { ok: true };
+    }
+
+    const selection = await dialog.showOpenDialog(musicWindow, {
+      title: `Atribuir som ao botão ${index}`,
+      properties: ['openFile'],
+      filters: [{ name: 'Arquivos MP3', extensions: ['mp3'] }],
+    });
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+
+    const filePath = selection.filePaths[0];
+    if (path.extname(filePath).toLowerCase() !== '.mp3') {
+      return { ok: false, error: 'Selecione um arquivo MP3 válido.' };
+    }
+    try {
+      const fileInfo = await stat(filePath);
+      if (!fileInfo.isFile()) throw new Error('not-file');
+    } catch {
+      return { ok: false, error: 'Não foi possível ler o arquivo selecionado.' };
+    }
+
+    try {
+      const metadata = await parseFile(filePath, { duration: true });
+      const container = metadata.format.container?.toLowerCase() ?? '';
+      const codec = metadata.format.codec?.toLowerCase() ?? '';
+      if (
+        !container.includes('mpeg') &&
+        !codec.includes('layer 3') &&
+        !codec.includes('mp3')
+      ) {
+        return {
+          ok: false,
+          error: 'O arquivo tem extensão MP3, mas usa um formato de áudio incompatível.',
+        };
+      }
+    } catch {
+      return {
+        ok: false,
+        error: 'O MP3 não pôde ser decodificado. Converta-o novamente para MP3 (MPEG Layer III).',
+      };
+    }
+
+    stopSoundboardPlayback(index);
+    soundboardSlots[index - 1] = {
+      index,
+      name: trimmedName,
+      filePath,
+    };
+    soundboardRevision += 1;
+    broadcastSoundboardState();
+    return { ok: true };
+  },
+);
+
+ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
+  if (!isMusicSender(event.sender.id) || !isSoundboardCommand(command)) return;
+
+  if (command.type === 'play') {
+    const slot = soundboardSlots[command.index - 1];
+    if (!slot || !playerWindow || playerWindow.isDestroyed()) return;
+    soundEffectSequence += 1;
+    soundEffectSources.set(soundEffectSequence, {
+      filePath: slot.filePath,
+      index: command.index,
+    });
+    playerWindow.webContents.send('soundboard:play', {
+      id: soundEffectSequence,
+      index: command.index,
+      url: `boss-media://sfx/${soundEffectSequence}`,
+    });
+    return;
+  }
+
+  if (command.type === 'stop-all') {
+    stopSoundboardPlayback();
+    return;
+  }
+
+  if (command.type === 'set-volume') {
+    soundboardAudioState = {
+      ...soundboardAudioState,
+      volume: Math.max(0, Math.min(1, command.volume)),
+    };
+    soundboardRevision += 1;
+    broadcastSoundboardState();
+    return;
+  }
+
+  if (command.type === 'toggle-mute') {
+    soundboardAudioState = {
+      ...soundboardAudioState,
+      muted: !soundboardAudioState.muted,
+    };
+    soundboardRevision += 1;
+    broadcastSoundboardState();
+    return;
+  }
+
+  if (command.type === 'remove') {
+    stopSoundboardPlayback(command.index);
+    soundboardSlots[command.index - 1] = null;
+  } else {
+    stopSoundboardPlayback();
+    soundboardSlots.fill(null);
+  }
+  soundboardRevision += 1;
+  broadcastSoundboardState();
+});
+
+ipcMain.on('soundboard:playback-finished', (event, effectId: unknown) => {
+  if (
+    !playerWindow ||
+    event.sender.id !== playerWindow.webContents.id ||
+    typeof effectId !== 'number' ||
+    !Number.isInteger(effectId)
+  ) return;
+  soundEffectSources.delete(effectId);
+});
+
+ipcMain.on(
+  'soundboard:playback-error',
+  (event, effectId: unknown, index: unknown) => {
+    if (
+      !playerWindow ||
+      event.sender.id !== playerWindow.webContents.id ||
+      typeof effectId !== 'number' ||
+      !Number.isInteger(effectId) ||
+      typeof index !== 'number' ||
+      !Number.isInteger(index)
+    ) return;
+    soundEffectSources.delete(effectId);
+    if (musicWindow && !musicWindow.isDestroyed()) {
+      musicWindow.webContents.send(
+        'soundboard:error',
+        `O Atalho ${index} não pôde ser reproduzido. Verifique se o arquivo usa MP3 (MPEG Layer III).`,
+      );
+    }
+  },
+);
 
 ipcMain.handle(
   'music:add-tracks',
@@ -589,6 +853,13 @@ const applyMusicCommand = (command: MusicCommand) => {
       musicState = {
         ...musicState,
         loop: !musicState.loop,
+        revision: musicState.revision + 1,
+      };
+      break;
+    case 'toggle-mute':
+      musicState = {
+        ...musicState,
+        muted: !musicState.muted,
         revision: musicState.revision + 1,
       };
       break;
@@ -918,6 +1189,7 @@ const createAudioResponse = async (request: Request, filePath: string) => {
   const rangeHeader = request.headers.get('range');
   const baseHeaders = new Headers({
     'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store',
     'Content-Type': 'audio/mpeg',
   });
@@ -990,6 +1262,12 @@ app.whenReady().then(async () => {
       mediaPath =
         musicTracks.find((track) => track.id === trackId)?.filePath ?? null;
       errorLabel = 'faixa';
+    } else if (requestUrl.hostname === 'sfx') {
+      const effectId = Number(decodeURIComponent(requestUrl.pathname.slice(1)));
+      mediaPath = Number.isInteger(effectId)
+        ? soundEffectSources.get(effectId)?.filePath ?? null
+        : null;
+      errorLabel = 'efeito sonoro';
     }
 
     if (!mediaPath) {
@@ -997,7 +1275,7 @@ app.whenReady().then(async () => {
     }
 
     try {
-      if (requestUrl.hostname === 'audio') {
+      if (requestUrl.hostname === 'audio' || requestUrl.hostname === 'sfx') {
         return await createAudioResponse(request, mediaPath);
       }
       return await net.fetch(pathToFileURL(mediaPath).toString(), {
@@ -1026,6 +1304,7 @@ app.on('before-quit', () => {
   pendingHealthTimers.clear();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
   if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
+  if (masterFocusTimer) clearTimeout(masterFocusTimer);
 });
 
 app.on('activate', () => {
