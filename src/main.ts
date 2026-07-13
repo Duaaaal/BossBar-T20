@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net,
+  protocol,
+  screen,
+  session,
+} from 'electron';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +37,7 @@ import {
   isMusicCommand,
   isSoundboardCommand,
 } from './shared/battle';
+import { resolveByteRange } from './shared/media';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -133,16 +143,37 @@ const rendererFile = (page: 'master' | 'player' | 'music') =>
     `../renderer/${MAIN_WINDOW_VITE_NAME}/${page}.html`,
   );
 
+const applicationIcon = () => app.isPackaged
+  ? path.join(process.resourcesPath, 'bossbar-icon.ico')
+  : path.join(app.getAppPath(), 'assets', 'bossbar-icon.ico');
+
+const rendererUrl = (page: 'master' | 'player' | 'music') => {
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+    const baseUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL.endsWith('/')
+      ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+      : `${MAIN_WINDOW_VITE_DEV_SERVER_URL}/`;
+    return new URL(`${page}.html`, baseUrl).toString();
+  }
+
+  return pathToFileURL(rendererFile(page)).toString();
+};
+
 const loadRenderer = (
   window: BrowserWindow,
   page: 'master' | 'player' | 'music',
 ) => {
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void window.loadURL(`${MAIN_WINDOW_VITE_DEV_SERVER_URL}/${page}.html`);
-    return;
-  }
+  const allowedUrl = rendererUrl(page);
+  const blockUnexpectedNavigation = (
+    event: Electron.Event,
+    navigationUrl: string,
+  ) => {
+    if (navigationUrl !== allowedUrl) event.preventDefault();
+  };
 
-  void window.loadFile(rendererFile(page));
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', blockUnexpectedNavigation);
+  window.webContents.on('will-redirect', blockUnexpectedNavigation);
+  void window.loadURL(allowedUrl);
 };
 
 const getMusicState = (): MusicState => ({
@@ -228,6 +259,7 @@ const createMusicWindow = () => {
   const height = Math.min(777, workArea.height);
   const minimumHeight = Math.min(560, height);
   const window = new BrowserWindow({
+    icon: applicationIcon(),
     height,
     x: workArea.x + Math.round((workArea.width - width) / 2),
     y: workArea.y + Math.round((workArea.height - height) / 2),
@@ -235,7 +267,7 @@ const createMusicWindow = () => {
     minWidth: 470,
     minHeight: minimumHeight,
     maxHeight: height,
-    title: 'Trilha Sonora',
+    title: 'Trilha Sonora - BossBar T20',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
     webPreferences: {
@@ -275,7 +307,7 @@ const getInitialWindowLayout = (): {
   const { workArea } = screen.getPrimaryDisplay();
   const gap = 12;
   const masterWidth = 500;
-  const masterHeight = Math.min(1320, workArea.height);
+  const masterHeight = Math.min(1380, workArea.height);
   const playerAreaWidth = Math.max(800, workArea.width - masterWidth - gap);
   let playerWidth = Math.min(1280, playerAreaWidth);
   let playerHeight = Math.round(playerWidth * (9 / 16));
@@ -319,11 +351,12 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   }
 
   const window = new BrowserWindow({
+    icon: applicationIcon(),
     ...bounds,
     show: false,
     minWidth: 800,
     minHeight: 450,
-    title: 'Apresentação do Chefão',
+    title: 'Apresentação do Chefão - BossBar T20',
     backgroundColor: '#050408',
     autoHideMenuBar: true,
     webPreferences: {
@@ -391,10 +424,11 @@ const createWindows = () => {
   const layout = getInitialWindowLayout();
   masterWindow = new BrowserWindow({
     ...layout.master,
+    icon: applicationIcon(),
     minWidth: 450,
     minHeight: Math.min(680, layout.master.height),
-    maxHeight: Math.min(1320, screen.getPrimaryDisplay().workArea.height),
-    title: 'Controle do Mestre',
+    maxHeight: Math.min(1380, screen.getPrimaryDisplay().workArea.height),
+    title: 'Controle do Mestre - BossBar T20',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
     webPreferences: {
@@ -753,9 +787,12 @@ ipcMain.handle(
     }
 
     let added = 0;
+    const knownTrackPaths = new Set(
+      musicTracks.map((track) => track.filePath),
+    );
     for (const filePath of selection.filePaths) {
       if (path.extname(filePath).toLowerCase() !== '.mp3') continue;
-      if (musicTracks.some((track) => track.filePath === filePath)) continue;
+      if (knownTrackPaths.has(filePath)) continue;
 
       try {
         const fileInfo = await stat(filePath);
@@ -781,6 +818,7 @@ ipcMain.handle(
         filePath,
         duration,
       });
+      knownTrackPaths.add(filePath);
       added += 1;
     }
 
@@ -1075,17 +1113,27 @@ ipcMain.handle(
       ignoreDamageReduction: request.ignoreDamageReduction,
     });
 
-    for (let index = 0; index < request.hits; index += 1) {
-      if (index === 0) {
-        applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
-        continue;
-      }
+    applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
 
-      const timer = setTimeout(() => {
-        pendingHealthTimers.delete(timer);
-        applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
-      }, index * 150);
-      pendingHealthTimers.add(timer);
+    if (request.hits > 1) {
+      const startedAt = Date.now();
+      let nextHit = 1;
+      const scheduleNextHit = () => {
+        const targetDelay = nextHit * 150;
+        const remainingDelay = Math.max(0, targetDelay - (Date.now() - startedAt));
+        const timer = setTimeout(() => {
+          pendingHealthTimers.delete(timer);
+          applyHealthMutation(
+            request.type,
+            request.bossId,
+            effectiveAmountPerHit,
+          );
+          nextHit += 1;
+          if (nextHit < request.hits) scheduleNextHit();
+        }, remainingDelay);
+        pendingHealthTimers.add(timer);
+      };
+      scheduleNextHit();
     }
 
     return {
@@ -1184,6 +1232,13 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
 });
 
 const createAudioResponse = async (request: Request, filePath: string) => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response(null, {
+      status: 405,
+      headers: { Allow: 'GET, HEAD' },
+    });
+  }
+
   const fileInfo = await stat(filePath);
   const fileSize = fileInfo.size;
   const rangeHeader = request.headers.get('range');
@@ -1194,39 +1249,13 @@ const createAudioResponse = async (request: Request, filePath: string) => {
     'Content-Type': 'audio/mpeg',
   });
 
-  let start = 0;
-  let end = Math.max(0, fileSize - 1);
-  let partial = false;
-
-  if (rangeHeader) {
-    const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
-    if (!match || (!match[1] && !match[2])) {
-      baseHeaders.set('Content-Range', `bytes */${fileSize}`);
-      return new Response(null, { status: 416, headers: baseHeaders });
-    }
-
-    partial = true;
-    if (!match[1]) {
-      const suffixLength = Number(match[2]);
-      start = Math.max(0, fileSize - suffixLength);
-    } else {
-      start = Number(match[1]);
-    }
-    end = match[2] ? Number(match[2]) : fileSize - 1;
-    end = Math.min(end, fileSize - 1);
-
-    if (
-      !Number.isSafeInteger(start) ||
-      !Number.isSafeInteger(end) ||
-      start < 0 ||
-      start >= fileSize ||
-      end < start
-    ) {
-      baseHeaders.set('Content-Range', `bytes */${fileSize}`);
-      return new Response(null, { status: 416, headers: baseHeaders });
-    }
+  const range = resolveByteRange(rangeHeader, fileSize);
+  if (!fileInfo.isFile() || !range) {
+    baseHeaders.set('Content-Range', `bytes */${fileSize}`);
+    return new Response(null, { status: 416, headers: baseHeaders });
   }
 
+  const { start, end, partial } = range;
   const contentLength = end - start + 1;
   baseHeaders.set('Content-Length', String(contentLength));
   if (partial) {
@@ -1249,32 +1278,39 @@ const createAudioResponse = async (request: Request, filePath: string) => {
 };
 
 app.whenReady().then(async () => {
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, _permission, callback) => callback(false),
+  );
+
   await protocol.handle('boss-media', async (request) => {
-    const requestUrl = new URL(request.url);
-    let mediaPath: string | null = null;
-    let errorLabel = 'mídia';
-
-    if (requestUrl.hostname === 'background') {
-      mediaPath = activeBackgroundFilePath;
-      errorLabel = 'imagem';
-    } else if (requestUrl.hostname === 'audio') {
-      const trackId = decodeURIComponent(requestUrl.pathname.slice(1));
-      mediaPath =
-        musicTracks.find((track) => track.id === trackId)?.filePath ?? null;
-      errorLabel = 'faixa';
-    } else if (requestUrl.hostname === 'sfx') {
-      const effectId = Number(decodeURIComponent(requestUrl.pathname.slice(1)));
-      mediaPath = Number.isInteger(effectId)
-        ? soundEffectSources.get(effectId)?.filePath ?? null
-        : null;
-      errorLabel = 'efeito sonoro';
-    }
-
-    if (!mediaPath) {
-      return new Response(`${errorLabel} não encontrada.`, { status: 404 });
-    }
-
     try {
+      const requestUrl = new URL(request.url);
+      let mediaPath: string | null = null;
+      let errorLabel = 'mídia';
+
+      if (requestUrl.hostname === 'background') {
+        mediaPath = activeBackgroundFilePath;
+        errorLabel = 'imagem';
+      } else if (requestUrl.hostname === 'audio') {
+        const trackId = decodeURIComponent(requestUrl.pathname.slice(1));
+        mediaPath =
+          musicTracks.find((track) => track.id === trackId)?.filePath ?? null;
+        errorLabel = 'faixa';
+      } else if (requestUrl.hostname === 'sfx') {
+        const effectId = Number(
+          decodeURIComponent(requestUrl.pathname.slice(1)),
+        );
+        mediaPath = Number.isInteger(effectId)
+          ? soundEffectSources.get(effectId)?.filePath ?? null
+          : null;
+        errorLabel = 'efeito sonoro';
+      }
+
+      if (!mediaPath) {
+        return new Response(`${errorLabel} não encontrada.`, { status: 404 });
+      }
+
       if (requestUrl.hostname === 'audio' || requestUrl.hostname === 'sfx') {
         return await createAudioResponse(request, mediaPath);
       }
@@ -1283,7 +1319,7 @@ app.whenReady().then(async () => {
         headers: request.headers,
       });
     } catch {
-      return new Response(`Não foi possível carregar a ${errorLabel}.`, {
+      return new Response('Não foi possível carregar a mídia.', {
         status: 500,
       });
     }

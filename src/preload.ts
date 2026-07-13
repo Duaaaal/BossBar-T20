@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { BossAPI } from './shared/api';
 import type {
   BackgroundSelectionResult,
   BackgroundState,
@@ -63,7 +64,7 @@ ipcRenderer.on('soundboard:state-changed', (_event, state: SoundboardState) => {
   for (const subscriber of soundboardSubscribers) subscriber(state);
 });
 
-contextBridge.exposeInMainWorld('bossAPI', {
+const bossAPI = {
   getState: async (): Promise<BattleState> => {
     const state = (await ipcRenderer.invoke('battle:get-state')) as BattleState;
     latestBattleState = state;
@@ -237,4 +238,6 @@ contextBridge.exposeInMainWorld('bossAPI', {
     ipcRenderer.on('soundboard:error', listener);
     return () => ipcRenderer.removeListener('soundboard:error', listener);
   },
-});
+} satisfies BossAPI;
+
+contextBridge.exposeInMainWorld('bossAPI', bossAPI);

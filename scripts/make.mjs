@@ -1,11 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdir, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const temporaryOutput = path.join(os.tmpdir(), 'boss-battle-forge-output');
 const projectOutput = path.join(projectRoot, 'out');
 const forgeCli = path.join(
   projectRoot,
@@ -16,13 +15,27 @@ const forgeCli = path.join(
   'electron-forge.js',
 );
 
-const readLastCommitSubject = () =>
+const versionSubjectPattern =
+  /^Version\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/i;
+
+const readLatestCommittedVersion = () =>
   new Promise((resolve) => {
     execFile(
       'git',
-      ['log', '-1', '--pretty=%s'],
+      ['log', '--pretty=%s'],
       { cwd: projectRoot, encoding: 'utf8' },
-      (error, stdout) => resolve(error ? null : stdout.trim()),
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+
+        const committedVersion = stdout
+          .split(/\r?\n/)
+          .map((subject) => subject.match(versionSubjectPattern)?.[1])
+          .find(Boolean);
+        resolve(committedVersion ?? null);
+      },
     );
   });
 
@@ -30,10 +43,7 @@ const assertVersionMatchesGit = async () => {
   const packageJson = JSON.parse(
     await readFile(path.join(projectRoot, 'package.json'), 'utf8'),
   );
-  const commitSubject = await readLastCommitSubject();
-  const committedVersion = commitSubject?.match(
-    /^Version\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/i,
-  )?.[1];
+  const committedVersion = await readLatestCommittedVersion();
 
   if (committedVersion && committedVersion !== packageJson.version) {
     throw new Error(
@@ -45,7 +55,7 @@ const assertVersionMatchesGit = async () => {
   console.log(`Gerando instalador da versão ${packageJson.version}.`);
 };
 
-const runForge = () =>
+const runForge = (temporaryOutput) =>
   new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [forgeCli, 'make'], {
       cwd: projectRoot,
@@ -60,15 +70,53 @@ const runForge = () =>
     });
   });
 
+const moveDirectory = async (source, destination) => {
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    if (error?.code !== 'EXDEV') throw error;
+    await cp(source, destination, { recursive: true });
+  }
+};
+
+const moveOutput = async (source, destination) => {
+  const stagedOutput = `${destination}.next`;
+  const previousOutput = `${destination}.previous`;
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rm(stagedOutput, { recursive: true, force: true });
+  await rm(previousOutput, { recursive: true, force: true });
+  await moveDirectory(source, stagedOutput);
+
+  let previousOutputExists = false;
+  try {
+    await rename(destination, previousOutput);
+    previousOutputExists = true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  try {
+    await rename(stagedOutput, destination);
+  } catch (error) {
+    if (previousOutputExists) await rename(previousOutput, destination);
+    throw error;
+  }
+
+  if (previousOutputExists) {
+    await rm(previousOutput, { recursive: true, force: true });
+  }
+};
+
 await assertVersionMatchesGit();
-await rm(temporaryOutput, { recursive: true, force: true });
+const temporaryRoot = await mkdtemp(
+  path.join(os.tmpdir(), 'boss-battle-forge-'),
+);
+const temporaryOutput = path.join(temporaryRoot, 'out');
 
 try {
-  await runForge();
-  await rm(projectOutput, { recursive: true, force: true });
-  await mkdir(path.dirname(projectOutput), { recursive: true });
-  await cp(temporaryOutput, projectOutput, { recursive: true });
-  console.log(`\nInstalador copiado para: ${path.join(projectOutput, 'make')}`);
+  await runForge(temporaryOutput);
+  await moveOutput(temporaryOutput, projectOutput);
+  console.log(`\nInstalador disponível em: ${path.join(projectOutput, 'make')}`);
 } finally {
-  await rm(temporaryOutput, { recursive: true, force: true });
+  await rm(temporaryRoot, { recursive: true, force: true });
 }

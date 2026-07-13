@@ -13,16 +13,19 @@ const config: ForgeConfig = {
     : {}),
   packagerConfig: {
     asar: true,
+    icon: 'assets/bossbar-icon.ico',
+    extraResource: ['assets/bossbar-icon.ico'],
   },
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
+      // Mantém o identificador interno para que instalações antigas possam ser atualizadas.
       name: 'boss_battle',
-      title: 'Painel de Batalha RPG',
-      description:
-        'Painel local de mestre e apresentacao de chefes para sessoes de RPG.',
+      title: 'BossBar - Tormenta20',
+      description: 'BossBar - Tormenta20',
       copyright: 'Copyright 2026 Brian',
-      setupExe: 'Painel-de-Batalha-RPG-Setup.exe',
+      setupExe: 'BossBar-Tormenta20-Setup.exe',
+      setupIcon: 'assets/bossbar-icon.ico',
     }),
     new MakerZIP({}, ['darwin']),
     new MakerRpm({}),

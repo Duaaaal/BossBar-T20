@@ -24,6 +24,26 @@ const healthPercent = (current: number, maximum: number) =>
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
 const noHealthEffects: HealthEffect[] = [];
 
+const HealthRuler = memo(function HealthRuler() {
+  return (
+    <div className="health-ruler" aria-hidden="true">
+      {healthMarkers.map((marker) => (
+        <span
+          className={
+            marker % 10 === 0
+              ? 'is-major'
+              : marker % 5 === 0
+                ? 'is-medium'
+                : ''
+          }
+          key={marker}
+          style={{ left: `${marker}%` }}
+        />
+      ))}
+    </div>
+  );
+});
+
 type AnimatedHealthBarProps = {
   current: number;
   maximum: number;
@@ -200,21 +220,7 @@ const AnimatedHealthBar = ({
           style={{ width: `${displayPercent}%` }}
         />
         <div className="health-bar-highlight" />
-        <div className="health-ruler" aria-hidden="true">
-          {healthMarkers.map((marker) => (
-            <span
-              className={
-                marker % 10 === 0
-                  ? 'is-major'
-                  : marker % 5 === 0
-                    ? 'is-medium'
-                    : ''
-              }
-              key={marker}
-              style={{ left: `${marker}%` }}
-            />
-          ))}
-        </div>
+        <HealthRuler />
         {effects.map((effect) => (
           <div
             className={`health-impact is-${effect.type} ${
@@ -313,7 +319,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
         currentTrack?.duration ||
         (Number.isFinite(audio.duration) ? audio.duration : 0),
     });
-  }, [currentTrack?.id]);
+  }, [currentTrack?.duration, currentTrack?.id]);
 
   const stopFade = useCallback(() => {
     if (fadeTimer.current) clearInterval(fadeTimer.current);
@@ -360,7 +366,9 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
     stopFade();
     audio.src = currentTrack.url;
-    setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
+    if (music?.isPlaying || gainNodeRef.current) {
+      setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
+    }
     audio.load();
     if (music?.isPlaying) void audio.play().catch((): void => {});
   }, [currentTrack?.id, music?.playbackVersion, setOutputGain, stopFade]);
@@ -378,7 +386,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (audio && !fading.current) {
+    if (audio && gainNodeRef.current && !fading.current) {
       setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
     }
   }, [music?.muted, music?.volume, setOutputGain]);
@@ -464,6 +472,7 @@ const SoundboardPlayer = () => {
   const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
+  const audioSettingsRef = useRef({ volume: 0.8, muted: false });
   const activeSounds = useRef(new Map<
     number,
     {
@@ -493,10 +502,15 @@ const SoundboardPlayer = () => {
 
   useEffect(() => {
     let active = true;
-    window.bossAPI.getSoundboardState().then((state) => {
+    const updateSoundboard = (state: SoundboardState) => {
+      audioSettingsRef.current = {
+        volume: state.volume,
+        muted: state.muted,
+      };
       if (active) setSoundboard(state);
-    });
-    const unsubscribe = window.bossAPI.subscribeSoundboard(setSoundboard);
+    };
+    window.bossAPI.getSoundboardState().then(updateSoundboard);
+    const unsubscribe = window.bossAPI.subscribeSoundboard(updateSoundboard);
     return () => {
       active = false;
       unsubscribe();
@@ -504,18 +518,29 @@ const SoundboardPlayer = () => {
   }, []);
 
   useEffect(() => {
-    const graph = ensureAudioGraph();
-    if (!graph.gain || !soundboard) return;
-    graph.gain.gain.setValueAtTime(
+    if (!soundboard) return;
+    audioSettingsRef.current = {
+      volume: soundboard.volume,
+      muted: soundboard.muted,
+    };
+    const context = audioContextRef.current;
+    const gain = masterGainRef.current;
+    if (!context || !gain) return;
+    gain.gain.setValueAtTime(
       soundboard.muted ? 0 : volumeToGain(soundboard.volume),
-      graph.context.currentTime,
+      context.currentTime,
     );
-  }, [ensureAudioGraph, soundboard?.muted, soundboard?.volume]);
+  }, [soundboard?.muted, soundboard?.volume]);
 
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeSoundEffect((effect) => {
       const graph = ensureAudioGraph();
       if (!graph.gain) return;
+      const audioSettings = audioSettingsRef.current;
+      graph.gain.gain.setValueAtTime(
+        audioSettings.muted ? 0 : volumeToGain(audioSettings.volume),
+        graph.context.currentTime,
+      );
       const audio = new Audio();
       audio.crossOrigin = 'anonymous';
       audio.preload = 'auto';
@@ -792,9 +817,19 @@ const PlayerApp = () => {
   useEffect(() => {
     let active = true;
     let requestId = 0;
+    let pendingImage: HTMLImageElement | null = null;
+
+    const cancelPendingImage = () => {
+      if (!pendingImage) return;
+      pendingImage.onload = null;
+      pendingImage.onerror = null;
+      pendingImage.removeAttribute('src');
+      pendingImage = null;
+    };
 
     const prepareBackground = (nextBackground: BackgroundState) => {
       const currentRequest = ++requestId;
+      cancelPendingImage();
 
       if (!nextBackground.url) {
         if (active) {
@@ -805,7 +840,11 @@ const PlayerApp = () => {
       }
 
       const image = new Image();
+      pendingImage = image;
       const finish = (loaded: boolean) => {
+        image.onload = null;
+        image.onerror = null;
+        if (pendingImage === image) pendingImage = null;
         if (active && currentRequest === requestId) {
           setBackground(
             loaded ? nextBackground : { ...nextBackground, url: null },
@@ -828,6 +867,7 @@ const PlayerApp = () => {
 
     return () => {
       active = false;
+      cancelPendingImage();
       unsubscribe();
     };
   }, []);

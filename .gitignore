@@ -90,3 +90,8 @@ typings/
 
 # Electron-Forge
 out/
+out.next/
+out.previous/
+
+# TypeScript output
+dist/

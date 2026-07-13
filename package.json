@@ -1,13 +1,15 @@
 {
   "name": "boss-battle",
-  "productName": "Painel de Batalha RPG",
-  "version": "1.1.0",
+  "productName": "BossBar - Tormenta20",
+  "version": "1.1.1",
   "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
     "start": "electron-forge start",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run typecheck && npm test",
     "package": "electron-forge package",
     "make": "node scripts/make.mjs",
     "publish": "electron-forge publish",

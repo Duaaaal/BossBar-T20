@@ -261,10 +261,10 @@ const MasterApp = () => {
   return (
     <main className="master-shell">
       <header className="master-header">
-        <h1 className="master-title">
-          <span>Painel Privado</span><i aria-hidden="true" /><strong>Controle do Mestre</strong>
-        </h1>
-        <p>Esta janela não deve ser compartilhada no Discord.</p>
+        <p className="master-brand">
+          <span>BossBar</span><small>para</small><strong>Tormenta 20</strong>
+        </p>
+        <h1 className="master-title">Controle do Mestre</h1>
       </header>
 
       <section className="session-actions" aria-label="Controles da sessão">

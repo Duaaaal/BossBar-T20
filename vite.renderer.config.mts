@@ -5,10 +5,26 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const developmentCsp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: boss-media:; media-src 'self' boss-media:; connect-src 'self' ws:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none';";
+const productionCsp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: boss-media:; media-src 'self' boss-media:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none';";
 
 // https://vitejs.dev/config
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'strict-production-csp',
+      transformIndexHtml(html, context) {
+        return context.server
+          ? html
+          : html.replace(developmentCsp, productionCsp);
+      },
+    },
+  ],
+  server: {
+    host: '127.0.0.1',
+    cors: false,
+  },
   build: {
     rollupOptions: {
       input: {
