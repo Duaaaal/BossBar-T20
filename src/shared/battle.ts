@@ -1,5 +1,6 @@
 export type BossState = {
   id: string;
+  setupStatus: 'initial' | 'pending' | 'ready';
   bossName: string;
   maxHealth: number;
   currentHealth: number;
@@ -48,6 +49,7 @@ export type HealthSequenceRequest = {
   type: 'damage' | 'heal';
   total: number;
   hits: number;
+  ignoreDamageReduction?: boolean;
 };
 
 export type HealthSequenceResult = {
@@ -57,10 +59,42 @@ export type HealthSequenceResult = {
   error?: string;
 };
 
+export const calculateHealthSequence = ({
+  type,
+  total,
+  hits,
+  damageReduction = 0,
+  ignoreDamageReduction = false,
+}: {
+  type: 'damage' | 'heal';
+  total: number;
+  hits: number;
+  damageReduction?: number;
+  ignoreDamageReduction?: boolean;
+}) => {
+  const amountPerHit = Math.ceil(total / hits);
+  const reductionPerHit =
+    type === 'damage' && !ignoreDamageReduction
+      ? Math.ceil(damageReduction / hits)
+      : 0;
+  const effectiveAmountPerHit =
+    type === 'damage'
+      ? Math.max(1, amountPerHit - reductionPerHit)
+      : amountPerHit;
+
+  return {
+    amountPerHit,
+    reductionPerHit,
+    effectiveAmountPerHit,
+    effectiveTotal: effectiveAmountPerHit * hits,
+  };
+};
+
 export type MusicTrack = {
   id: string;
   name: string;
   url: string;
+  duration: number;
 };
 
 export type MusicState = {
@@ -71,6 +105,17 @@ export type MusicState = {
   volume: number;
   playbackVersion: number;
   revision: number;
+};
+
+export type MusicPlaybackState = {
+  trackId: string | null;
+  currentTime: number;
+  duration: number;
+};
+
+export const volumeToGain = (volume: number) => {
+  const normalizedVolume = Math.max(0, Math.min(1, volume));
+  return normalizedVolume ** 2.2;
 };
 
 export type MusicSelectionResult = {
@@ -87,20 +132,33 @@ export type MusicCommand =
   | { type: 'next' }
   | { type: 'toggle-loop' }
   | { type: 'set-volume'; volume: number }
+  | { type: 'seek'; time: number }
+  | { type: 'remove-track'; trackId: string }
+  | { type: 'clear-tracks' }
   | { type: 'play-track'; trackId: string };
 
 export const isMusicCommand = (value: unknown): value is MusicCommand => {
   if (!value || typeof value !== 'object' || !('type' in value)) return false;
 
   const command = value as Record<string, unknown>;
-  if (command.type === 'play-track') return typeof command.trackId === 'string';
+  if (command.type === 'play-track' || command.type === 'remove-track') {
+    return typeof command.trackId === 'string';
+  }
   if (command.type === 'set-volume') {
     return typeof command.volume === 'number' && Number.isFinite(command.volume);
   }
+  if (command.type === 'seek') {
+    return typeof command.time === 'number' && Number.isFinite(command.time);
+  }
 
-  return ['toggle-play', 'restart', 'previous', 'next', 'toggle-loop'].includes(
-    String(command.type),
-  );
+  return [
+    'toggle-play',
+    'restart',
+    'previous',
+    'next',
+    'toggle-loop',
+    'clear-tracks',
+  ].includes(String(command.type));
 };
 
 export type BattleCommand =
@@ -135,6 +193,7 @@ export type BattleCommand =
 
 export const createInitialBoss = (id: string, index = 0): BossState => ({
   id,
+  setupStatus: index === 0 ? 'initial' : 'pending',
   bossName: index === 0 ? 'O Chefão Sem Nome' : `Chefão ${index + 1}`,
   maxHealth: 500,
   currentHealth: 500,
@@ -143,7 +202,7 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   defense: 10,
   skills: 10,
   damageReduction: 10,
-  nextAction: 'A criatura observa o campo de batalha...',
+  nextAction: '',
   actionSeverity: 'normal',
 });
 
@@ -229,6 +288,7 @@ export const applyBattleCommand = (
         const wasAtFullHealth = boss.currentHealth === boss.maxHealth;
         return {
           ...boss,
+          setupStatus: 'ready',
           bossName: command.bossName.trim().slice(0, 100) || 'Chefão Sem Nome',
           maxHealth,
           currentHealth: wasAtFullHealth
@@ -297,7 +357,16 @@ export const applyBattleCommand = (
       };
     }
     case 'start-battle':
-      return { ...state, battleStarted: true, revision: nextRevision };
+      return {
+        ...state,
+        bosses: state.bosses.map((boss) =>
+          boss.setupStatus === 'initial'
+            ? { ...boss, setupStatus: 'ready' }
+            : boss,
+        ),
+        battleStarted: true,
+        revision: nextRevision,
+      };
     case 'end-battle':
       return { ...state, battleStarted: false, revision: nextRevision };
     case 'set-hud-visible':

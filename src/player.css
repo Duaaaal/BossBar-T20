@@ -71,7 +71,7 @@ body {
   z-index: 1;
   left: clamp(44px, 5.5vw, 88px);
   bottom: clamp(18px, 3.5vh, 34px);
-  width: min(72vw, 980px);
+  width: 82vw;
   display: flex;
   flex-direction: column-reverse;
   gap: clamp(5px, 1vh, 10px);
@@ -89,6 +89,7 @@ body {
   --hud-scale: 1;
   width: 100%;
   min-width: 0;
+  animation: hud-entry-return 420ms ease-out both;
 }
 
 .boss-hud.is-active {
@@ -174,6 +175,11 @@ body {
   transition: width 520ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.health-damage-trail.is-primed,
+.health-healing-preview.is-primed {
+  transition: none;
+}
+
 .health-healing-preview {
   z-index: 2;
   opacity: 0;
@@ -186,6 +192,26 @@ body {
 
 .health-healing-preview.is-active {
   opacity: 1;
+}
+
+.damage-number {
+  position: absolute;
+  z-index: 12;
+  left: var(--damage-position);
+  bottom: calc(100% + 7px + var(--damage-stack));
+  color: #f4dfbd;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: calc(clamp(.78rem, 1.25vw, 1.05rem) * var(--hud-scale));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+  text-shadow:
+    0 1px 2px #000,
+    0 0 7px rgba(0, 0, 0, .95),
+    0 0 10px rgba(181, 55, 40, .56);
+  transform: translateX(-50%);
+  animation: damage-number-rise 1200ms cubic-bezier(.2, .75, .25, 1) both;
 }
 
 .health-bar-highlight {
@@ -263,6 +289,32 @@ body {
     -1px 1px 1px rgba(0, 0, 0, 0.82),
     1px 1px 1px rgba(0, 0, 0, 0.82),
     0 2px 9px rgba(0, 0, 0, 0.95);
+  transition:
+    opacity 300ms ease,
+    transform 320ms ease,
+    filter 300ms ease,
+    visibility 0s linear;
+}
+
+.action-warning.action-leaving,
+.action-warning.action-entering,
+.action-warning.action-hidden {
+  opacity: 0;
+  filter: blur(3px);
+}
+
+.action-warning.action-leaving { transform: translateY(-5px); }
+.action-warning.action-entering { transform: translateY(6px); }
+.action-warning.action-hidden {
+  visibility: hidden;
+  transform: translateY(-5px);
+}
+
+.action-warning.action-visible {
+  visibility: visible;
+  opacity: 1;
+  filter: blur(0);
+  transform: translateY(0);
 }
 
 .telegraph-label,
@@ -295,6 +347,8 @@ body {
   filter: blur(0);
   transform: translateY(0);
 }
+
+.action-description.is-hidden { opacity: 0; }
 
 .telegraph-label {
   flex: 0 0 auto;
@@ -440,6 +494,35 @@ body {
   100% {
     opacity: 0;
     box-shadow: 0 0 2px rgba(214, 73, 47, 0);
+  }
+}
+
+@keyframes damage-number-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 5px) scale(.88);
+  }
+  16% {
+    opacity: 1;
+    transform: translate(-50%, -2px) scale(1);
+  }
+  72% {
+    opacity: .92;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -25px) scale(.97);
+  }
+}
+
+@keyframes hud-entry-return {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

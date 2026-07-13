@@ -7,6 +7,7 @@ import type {
   HealthSequenceRequest,
   HealthSequenceResult,
   MusicCommand,
+  MusicPlaybackState,
   MusicSelectionResult,
   MusicState,
 } from './shared/battle';
@@ -16,6 +17,7 @@ declare global {
     bossAPI: {
       getState: () => Promise<BattleState>;
       getAppVersion: () => Promise<string>;
+      confirmAppClose: () => void;
       dispatch: (command: BattleCommand) => void;
       applyHealthSequence: (
         request: HealthSequenceRequest,
@@ -24,9 +26,11 @@ declare global {
       openMusicWindow: () => Promise<boolean>;
       addMusicTracks: () => Promise<MusicSelectionResult>;
       getMusicState: () => Promise<MusicState>;
+      getMusicPlayback: () => Promise<MusicPlaybackState>;
       dispatchMusic: (command: MusicCommand) => void;
       musicTrackEnded: () => void;
       musicFadeoutComplete: () => void;
+      reportMusicProgress: (state: MusicPlaybackState) => void;
       chooseBackground: () => Promise<BackgroundSelectionResult>;
       clearBackground: () => Promise<boolean>;
       getBackground: () => Promise<BackgroundState>;
@@ -42,7 +46,12 @@ declare global {
       subscribeHealthEffect: (
         callback: (effect: HealthEffect) => void,
       ) => () => void;
+      subscribeAppCloseRequested: (callback: () => void) => () => void;
       subscribeMusic: (callback: (state: MusicState) => void) => () => void;
+      subscribeMusicPlayback: (
+        callback: (state: MusicPlaybackState) => void,
+      ) => () => void;
+      subscribeMusicSeek: (callback: (time: number) => void) => () => void;
       subscribeMusicFadeOut: (
         callback: (duration: number) => void,
       ) => () => void;

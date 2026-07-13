@@ -8,6 +8,7 @@ import type {
   HealthSequenceRequest,
   HealthSequenceResult,
   MusicCommand,
+  MusicPlaybackState,
   MusicSelectionResult,
   MusicState,
 } from './shared/battle';
@@ -18,6 +19,10 @@ let latestBackground: BackgroundState | null = null;
 const backgroundSubscribers = new Set<(state: BackgroundState) => void>();
 let latestMusicState: MusicState | null = null;
 const musicSubscribers = new Set<(state: MusicState) => void>();
+let latestMusicPlayback: MusicPlaybackState | null = null;
+const musicPlaybackSubscribers = new Set<
+  (state: MusicPlaybackState) => void
+>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -38,6 +43,14 @@ ipcRenderer.on('music:state-changed', (_event, state: MusicState) => {
   for (const subscriber of musicSubscribers) subscriber(state);
 });
 
+ipcRenderer.on(
+  'music:playback-changed',
+  (_event, state: MusicPlaybackState) => {
+    latestMusicPlayback = state;
+    for (const subscriber of musicPlaybackSubscribers) subscriber(state);
+  },
+);
+
 contextBridge.exposeInMainWorld('bossAPI', {
   getState: async (): Promise<BattleState> => {
     const state = (await ipcRenderer.invoke('battle:get-state')) as BattleState;
@@ -45,6 +58,7 @@ contextBridge.exposeInMainWorld('bossAPI', {
     return state;
   },
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+  confirmAppClose: () => ipcRenderer.send('app:confirm-close'),
   dispatch: (command: BattleCommand) => {
     ipcRenderer.send('battle:dispatch', command);
   },
@@ -62,6 +76,13 @@ contextBridge.exposeInMainWorld('bossAPI', {
     latestMusicState = state;
     return state;
   },
+  getMusicPlayback: async (): Promise<MusicPlaybackState> => {
+    const state = (await ipcRenderer.invoke(
+      'music:get-playback',
+    )) as MusicPlaybackState;
+    latestMusicPlayback = state;
+    return state;
+  },
   dispatchMusic: (command: MusicCommand) => {
     ipcRenderer.send('music:dispatch', command);
   },
@@ -70,6 +91,9 @@ contextBridge.exposeInMainWorld('bossAPI', {
   },
   musicFadeoutComplete: () => {
     ipcRenderer.send('music:fadeout-complete');
+  },
+  reportMusicProgress: (state: MusicPlaybackState) => {
+    ipcRenderer.send('music:progress', state);
   },
   chooseBackground: (): Promise<BackgroundSelectionResult> =>
     ipcRenderer.invoke('background:choose'),
@@ -120,10 +144,29 @@ contextBridge.exposeInMainWorld('bossAPI', {
     ipcRenderer.on('health:effect', listener);
     return () => ipcRenderer.removeListener('health:effect', listener);
   },
+  subscribeAppCloseRequested: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:close-requested', listener);
+    return () => ipcRenderer.removeListener('app:close-requested', listener);
+  },
   subscribeMusic: (callback: (state: MusicState) => void) => {
     musicSubscribers.add(callback);
     if (latestMusicState) callback(latestMusicState);
     return () => musicSubscribers.delete(callback);
+  },
+  subscribeMusicPlayback: (
+    callback: (state: MusicPlaybackState) => void,
+  ) => {
+    musicPlaybackSubscribers.add(callback);
+    if (latestMusicPlayback) callback(latestMusicPlayback);
+    return () => musicPlaybackSubscribers.delete(callback);
+  },
+  subscribeMusicSeek: (callback: (time: number) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, time: number) => {
+      callback(time);
+    };
+    ipcRenderer.on('music:seek', listener);
+    return () => ipcRenderer.removeListener('music:seek', listener);
   },
   subscribeMusicFadeOut: (callback: (duration: number) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, duration: number) => {

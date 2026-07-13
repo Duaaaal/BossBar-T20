@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  calculateHealthSequence,
   createInitialBoss,
   type BattleState,
   type BossState,
@@ -13,6 +14,22 @@ type CompactNumberFieldProps = {
   onChange: (value: string) => void;
   min?: number;
   max?: number;
+};
+
+const parseHealthExpression = (value: string) => {
+  const parts = value.trim().replace(',', '.').split('/');
+  const total = Number(parts[0]);
+  const hits = parts.length === 2 ? Number(parts[1]) : 1;
+  if (
+    parts.length > 2 ||
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    !Number.isInteger(hits) ||
+    hits < 1 ||
+    hits > 1000
+  ) return null;
+
+  return { total, hits };
 };
 
 const CompactNumberField = ({
@@ -44,6 +61,7 @@ const MasterApp = () => {
   const [defense, setDefense] = useState('10');
   const [skills, setSkills] = useState('10');
   const [damageReduction, setDamageReduction] = useState('10');
+  const [applyDamageReduction, setApplyDamageReduction] = useState(true);
   const [amount, setAmount] = useState('50');
   const [healthError, setHealthError] = useState('');
   const [actionDraft, setActionDraft] = useState('');
@@ -51,7 +69,9 @@ const MasterApp = () => {
   const [pendingBackgroundName, setPendingBackgroundName] = useState<string | null>(null);
   const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const cancelResetButton = useRef<HTMLButtonElement>(null);
+  const cancelCloseButton = useRef<HTMLButtonElement>(null);
   const loadedBossId = useRef<string | null>(null);
 
   const loadBossForm = (boss: BossState) => {
@@ -83,6 +103,13 @@ const MasterApp = () => {
     window.bossAPI.getAppVersion().then(setAppVersion);
   }, []);
 
+  useEffect(
+    () => window.bossAPI.subscribeAppCloseRequested(() => {
+      setCloseConfirmationOpen(true);
+    }),
+    [],
+  );
+
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
 
   useEffect(() => {
@@ -108,6 +135,20 @@ const MasterApp = () => {
     };
   }, [resetConfirmationOpen]);
 
+  useEffect(() => {
+    if (!closeConfirmationOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCloseConfirmationOpen(false);
+    };
+    cancelCloseButton.current?.focus();
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [closeConfirmationOpen]);
+
   const saveBoss = (event: FormEvent) => {
     event.preventDefault();
     if (!activeBoss) return;
@@ -126,17 +167,8 @@ const MasterApp = () => {
 
   const applyHealthChange = async (type: 'damage' | 'heal') => {
     if (!activeBoss) return;
-    const parts = amount.trim().replace(',', '.').split('/');
-    const total = Number(parts[0]);
-    const hits = parts.length === 2 ? Number(parts[1]) : 1;
-    if (
-      parts.length > 2 ||
-      !Number.isFinite(total) ||
-      total <= 0 ||
-      !Number.isInteger(hits) ||
-      hits < 1 ||
-      hits > 1000
-    ) {
+    const parsed = parseHealthExpression(amount);
+    if (!parsed) {
       setHealthError('Use um valor como 50 ou uma divisão como 100/5.');
       return;
     }
@@ -145,8 +177,9 @@ const MasterApp = () => {
     const result = await window.bossAPI.applyHealthSequence({
       bossId: activeBoss.id,
       type,
-      total,
-      hits,
+      total: parsed.total,
+      hits: parsed.hits,
+      ignoreDamageReduction: type === 'damage' && !applyDamageReduction,
     });
     if (!result.ok) setHealthError(result.error ?? 'Não foi possível aplicar o valor.');
   };
@@ -155,6 +188,7 @@ const MasterApp = () => {
     const initialBoss = createInitialBoss('boss-1');
     loadBossForm(initialBoss);
     setAmount('50');
+    setApplyDamageReduction(true);
     setBackgroundError('');
     setPendingBackgroundName(null);
     setPendingBackgroundRemoval(false);
@@ -201,6 +235,28 @@ const MasterApp = () => {
 
   const healthPercent = Math.max(0, Math.min(100, (activeBoss.currentHealth / activeBoss.maxHealth) * 100));
   const backgroundPending = Boolean(pendingBackgroundName || pendingBackgroundRemoval);
+  const parsedHealthAmount = parseHealthExpression(amount);
+  const rawAmount = parsedHealthAmount
+    ? calculateHealthSequence({
+        type: 'damage',
+        total: parsedHealthAmount.total,
+        hits: parsedHealthAmount.hits,
+        ignoreDamageReduction: true,
+      }).effectiveTotal
+    : 0;
+  const reducedDamage = parsedHealthAmount
+    ? calculateHealthSequence({
+        type: 'damage',
+        total: parsedHealthAmount.total,
+        hits: parsedHealthAmount.hits,
+        damageReduction: activeBoss.damageReduction,
+      }).effectiveTotal
+    : 0;
+  const displayedDamage = applyDamageReduction ? reducedDamage : rawAmount;
+  const setupPending = activeBoss.setupStatus !== 'ready';
+  const identitySetupNotice = activeBoss.setupStatus === 'initial'
+    ? 'Revise os dados antes da luta; o aviso some ao salvar ou iniciar.'
+    : 'O novo chefão só entra na luta depois de salvar estes dados.';
 
   return (
     <main className="master-shell">
@@ -267,9 +323,10 @@ const MasterApp = () => {
           <label className="compact-field amount-field">Valor
             <input aria-label="Valor de dano ou cura" inputMode="decimal" value={amount} onChange={(event) => { if (/^[0-9.,/]*$/.test(event.target.value)) setAmount(event.target.value); }} />
           </label>
-          <button className="damage-button" type="button" onClick={() => void applyHealthChange('damage')}>Dano</button>
-          <button className="heal-button" type="button" onClick={() => void applyHealthChange('heal')}>Cura</button>
-          <button className="full-heal-button" type="button" onClick={() => window.bossAPI.dispatch({ type: 'reset-health', bossId: activeBoss.id })}>Full Heal</button>
+          <label className="rd-toggle"><span>RD</span><input type="checkbox" checked={applyDamageReduction} onChange={(event) => setApplyDamageReduction(event.target.checked)} /></label>
+          <button className="damage-button" type="button" onClick={() => void applyHealthChange('damage')}><span>Dano</span><small>({displayedDamage})</small></button>
+          <button className="heal-button" type="button" onClick={() => void applyHealthChange('heal')}><span>Cura</span><small>({rawAmount})</small></button>
+          <button className="full-heal-button" type="button" onClick={() => window.bossAPI.dispatch({ type: 'reset-health', bossId: activeBoss.id })}><span>Full Heal</span><small>({activeBoss.maxHealth})</small></button>
         </div>
         {healthError && <p className="health-error">{healthError}</p>}
         <div className="boss-summary-stats">
@@ -291,12 +348,14 @@ const MasterApp = () => {
           <CompactNumberField label="Perícias" value={skills} onChange={setSkills} />
           <CompactNumberField label="RD" value={damageReduction} onChange={setDamageReduction} />
         </div>
+        {setupPending && <p className="setup-notice">{identitySetupNotice}</p>}
         <button className="secondary-button" type="submit">Salvar dados do chefão</button>
       </form>
 
       <section className="panel">
         <div className="panel-title"><span className="step">02</span><h2>Próxima ação</h2></div>
-        <textarea aria-label="Próxima ação do chefão" value={actionDraft} maxLength={100} rows={2} onChange={(event) => setActionDraft(event.target.value)} />
+        <textarea className="action-input" aria-label="Próxima ação do chefão" placeholder="Descreva a próxima ação para preparar os jogadores." value={actionDraft} maxLength={100} rows={1} onChange={(event) => setActionDraft(event.target.value)} />
+        {setupPending && <p className="setup-notice action-setup-notice">Revise também a descrição antes de revelar este chefão.</p>}
         <div className="field-meta"><p className="field-note">O texto só aparece para os jogadores depois de ser publicado.</p><span>{actionDraft.length}/100</span></div>
         <div className="publish-action-grid">
           <button className="publish-button" type="button" onClick={() => publishAction('normal')}>Publicar ação</button>
@@ -316,6 +375,19 @@ const MasterApp = () => {
             <div className="modal-actions">
               <button ref={cancelResetButton} className="modal-cancel-button" type="button" onClick={() => setResetConfirmationOpen(false)}>Cancelar</button>
               <button className="modal-confirm-button" type="button" onClick={resetBattle}>Sim, resetar tudo</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {closeConfirmationOpen && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCloseConfirmationOpen(false); }}>
+          <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="close-modal-title" aria-describedby="close-modal-description">
+            <p className="modal-eyebrow">Encerrar aplicativo</p><h2 id="close-modal-title">Deseja realmente fechar?</h2>
+            <p id="close-modal-description">A apresentação e a janela de trilha sonora também serão fechadas.</p>
+            <div className="modal-actions">
+              <button ref={cancelCloseButton} className="modal-cancel-button" type="button" onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
+              <button className="modal-confirm-button" type="button" onClick={() => window.bossAPI.confirmAppClose()}>Sim, fechar</button>
             </div>
           </section>
         </div>

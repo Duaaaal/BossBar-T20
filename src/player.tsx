@@ -7,12 +7,13 @@ import {
   useState,
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import type {
-  BackgroundState,
-  BattleState,
-  BossState,
-  HealthEffect,
-  MusicState,
+import {
+  type BackgroundState,
+  type BattleState,
+  type BossState,
+  type HealthEffect,
+  type MusicState,
+  volumeToGain,
 } from './shared/battle';
 import './player.css';
 
@@ -39,11 +40,14 @@ const AnimatedHealthBar = ({
   const previous = useRef({ current, maximum });
   const [displayPercent, setDisplayPercent] = useState(initialPercent);
   const [damageTrailPercent, setDamageTrailPercent] = useState(initialPercent);
+  const [damageTrailPrimed, setDamageTrailPrimed] = useState(false);
   const [healingPreviewPercent, setHealingPreviewPercent] = useState(0);
   const [healingPreviewActive, setHealingPreviewActive] = useState(false);
+  const [healingPreviewPrimed, setHealingPreviewPrimed] = useState(false);
 
   useEffect(() => {
     const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const animationFrames: number[] = [];
     const previousValue = previous.current;
     const nextPercent = healthPercent(current, maximum);
     const oldPercent = healthPercent(
@@ -56,21 +60,36 @@ const AnimatedHealthBar = ({
       setDamageTrailPercent(nextPercent);
       setHealingPreviewPercent(0);
       setHealingPreviewActive(false);
+      setDamageTrailPrimed(false);
+      setHealingPreviewPrimed(false);
     } else if (current < previousValue.current) {
       setHealingPreviewPercent(0);
       setHealingPreviewActive(false);
-      setDamageTrailPercent(Math.max(oldPercent, nextPercent));
-      setDisplayPercent(nextPercent);
+      setHealingPreviewPrimed(false);
+      setDisplayPercent(oldPercent);
+      setDamageTrailPercent((trailPercent) =>
+        Math.max(trailPercent, oldPercent),
+      );
+      setDamageTrailPrimed(true);
+      animationFrames.push(requestAnimationFrame(() => {
+        setDamageTrailPrimed(false);
+        setDisplayPercent(nextPercent);
+      }));
       timers.push(
         setTimeout(() => setDamageTrailPercent(nextPercent), 850),
       );
     } else if (current > previousValue.current) {
       setDamageTrailPercent(oldPercent);
+      setDamageTrailPrimed(false);
       setDisplayPercent(oldPercent);
       setHealingPreviewPercent(oldPercent);
       setHealingPreviewActive(true);
+      setHealingPreviewPrimed(true);
+      animationFrames.push(requestAnimationFrame(() => {
+        setHealingPreviewPrimed(false);
+        setHealingPreviewPercent(nextPercent);
+      }));
       timers.push(
-        setTimeout(() => setHealingPreviewPercent(nextPercent), 20),
         setTimeout(() => setDisplayPercent(nextPercent), 560),
         setTimeout(() => setHealingPreviewActive(false), 1180),
         setTimeout(() => setHealingPreviewPercent(0), 1380),
@@ -78,7 +97,10 @@ const AnimatedHealthBar = ({
     }
 
     previous.current = { current, maximum };
-    return () => timers.forEach(clearTimeout);
+    return () => {
+      timers.forEach(clearTimeout);
+      animationFrames.forEach(cancelAnimationFrame);
+    };
   }, [current, maximum]);
 
   useEffect(() => {
@@ -163,13 +185,13 @@ const AnimatedHealthBar = ({
         aria-valuenow={current}
       >
         <div
-          className="health-damage-trail"
+          className={`health-damage-trail ${damageTrailPrimed ? 'is-primed' : ''}`}
           style={{ width: `${damageTrailPercent}%` }}
         />
         <div
           className={`health-healing-preview ${
             healingPreviewActive ? 'is-active' : ''
-          }`}
+          } ${healingPreviewPrimed ? 'is-primed' : ''}`}
           style={{ width: `${healingPreviewPercent}%` }}
         />
         <div
@@ -201,6 +223,27 @@ const AnimatedHealthBar = ({
           />
         ))}
       </div>
+      {effects
+        .filter((effect) => effect.type === 'damage' && effect.from > effect.to)
+        .map((effect, index) => {
+          const damage = Math.round(effect.from - effect.to);
+          const impactPosition = Math.max(
+            3,
+            Math.min(97, healthPercent(effect.to, effect.maximum)),
+          );
+          return (
+            <span
+              className="damage-number"
+              key={`damage-${effect.id}`}
+              style={{
+                '--damage-position': `${impactPosition}%`,
+                '--damage-stack': `${index * 5}px`,
+              } as CSSProperties}
+            >
+              −{damage}
+            </span>
+          );
+        })}
     </div>
   );
 };
@@ -226,6 +269,18 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const currentTrack = music?.tracks.find(
     (track) => track.id === music.currentTrackId,
   );
+
+  const reportProgress = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    window.bossAPI.reportMusicProgress({
+      trackId: currentTrack?.id ?? null,
+      currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+      duration:
+        currentTrack?.duration ||
+        (Number.isFinite(audio.duration) ? audio.duration : 0),
+    });
+  }, [currentTrack?.id]);
 
   const stopFade = useCallback(() => {
     if (fadeTimer.current) clearInterval(fadeTimer.current);
@@ -267,7 +322,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
     stopFade();
     audio.src = currentTrack.url;
-    audio.volume = music?.volume ?? 0.8;
+    audio.volume = volumeToGain(music?.volume ?? 0.8);
     audio.load();
     if (music?.isPlaying) void audio.play().catch((): void => {});
   }, [currentTrack?.id, music?.playbackVersion, stopFade]);
@@ -277,7 +332,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     if (!audio || !currentTrack) return;
     if (music?.isPlaying) {
       stopFade();
-      audio.volume = music.volume;
+      audio.volume = volumeToGain(music.volume);
       void audio.play().catch((): void => {});
     }
     else audio.pause();
@@ -285,7 +340,9 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (audio && !fading.current) audio.volume = music?.volume ?? 0.8;
+    if (audio && !fading.current) {
+      audio.volume = volumeToGain(music?.volume ?? 0.8);
+    }
   }, [music?.volume]);
 
   useEffect(
@@ -293,7 +350,28 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     [fadeOut],
   );
 
-  const allDefeated = battle.bosses.every((boss) => boss.currentHealth === 0);
+  useEffect(
+    () => window.bossAPI.subscribeMusicSeek((time) => {
+      const audio = audioRef.current;
+      if (!audio || !Number.isFinite(time)) return;
+      const maximum = currentTrack?.duration || audio.duration;
+      audio.currentTime = Math.max(
+        0,
+        Number.isFinite(maximum) && maximum > 0
+          ? Math.min(time, maximum)
+          : time,
+      );
+      reportProgress();
+    }),
+    [reportProgress],
+  );
+
+  const preparedBosses = battle.bosses.filter(
+    (boss) => boss.setupStatus === 'ready',
+  );
+  const allDefeated =
+    preparedBosses.length > 0 &&
+    preparedBosses.every((boss) => boss.currentHealth === 0);
   useEffect(() => {
     if (!battle.battleStarted || !allDefeated || !music?.isPlaying) return;
     const timer = setTimeout(() => fadeOut(1800), 5600);
@@ -311,7 +389,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     ) return;
 
     stopFade();
-    audio.volume = music.volume;
+    audio.volume = volumeToGain(music.volume);
     void audio.play().catch((): void => {});
   }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.volume, stopFade]);
 
@@ -323,6 +401,10 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
       ref={audioRef}
       loop={music?.loop ?? false}
       onEnded={() => window.bossAPI.musicTrackEnded()}
+      onLoadedMetadata={reportProgress}
+      onDurationChange={reportProgress}
+      onTimeUpdate={reportProgress}
+      onSeeked={reportProgress}
       onError={() => {
         if (music?.isPlaying) window.bossAPI.musicFadeoutComplete();
       }}
@@ -366,16 +448,52 @@ type AnimatedActionProps = {
 const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
   const [renderedText, setRenderedText] = useState(text);
   const [renderedSeverity, setRenderedSeverity] = useState(severity);
-  const [phase, setPhase] = useState<'visible' | 'leaving' | 'entering'>(
-    'visible',
+  const [phase, setPhase] = useState<
+    'visible' | 'leaving' | 'entering' | 'hidden'
+  >(text ? 'visible' : 'hidden');
+  const [containerPhase, setContainerPhase] = useState<
+    'visible' | 'leaving' | 'entering' | 'hidden'
+  >(
+    text ? 'visible' : 'hidden',
   );
 
   useEffect(() => {
     if (text === renderedText && severity === renderedSeverity) return;
 
+    let changeTimer: ReturnType<typeof setTimeout> | undefined;
     let visibleTimer: ReturnType<typeof setTimeout> | undefined;
+
+    if (!text) {
+      setPhase('leaving');
+      setContainerPhase('leaving');
+      changeTimer = setTimeout(() => {
+        setRenderedText('');
+        setRenderedSeverity('normal');
+        setPhase('hidden');
+        setContainerPhase('hidden');
+      }, 300);
+      return () => {
+        if (changeTimer) clearTimeout(changeTimer);
+      };
+    }
+
+    if (!renderedText) {
+      setRenderedText(text);
+      setRenderedSeverity(severity);
+      setPhase('entering');
+      setContainerPhase('entering');
+      visibleTimer = setTimeout(() => {
+        setPhase('visible');
+        setContainerPhase('visible');
+      }, 30);
+      return () => {
+        if (visibleTimer) clearTimeout(visibleTimer);
+      };
+    }
+
     setPhase('leaving');
-    const changeTimer = setTimeout(() => {
+    setContainerPhase('visible');
+    changeTimer = setTimeout(() => {
       setRenderedText(text);
       setRenderedSeverity(severity);
       setPhase('entering');
@@ -383,15 +501,13 @@ const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
     }, 260);
 
     return () => {
-      clearTimeout(changeTimer);
+      if (changeTimer) clearTimeout(changeTimer);
       if (visibleTimer) clearTimeout(visibleTimer);
     };
   }, [text, severity]);
 
-  if (!renderedText) return null;
-
   return (
-    <div className={`action-warning ${renderedSeverity === 'grave' ? 'is-grave' : ''}`}>
+    <div className={`action-warning action-${containerPhase} ${renderedSeverity === 'grave' ? 'is-grave' : ''}`}>
       <span className="telegraph-label">Preparem-se</span>
       <span className="action-divider" aria-hidden="true" />
       <p className={`action-description is-${phase}`}>{renderedText}</p>
@@ -409,6 +525,12 @@ const PlayerApp = () => {
   const [healthEffects, setHealthEffects] = useState<
     Record<string, HealthEffect[]>
   >({});
+  const [hiddenDefeatedBosses, setHiddenDefeatedBosses] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const defeatedRemovalTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
   const readySent = useRef(false);
 
   useEffect(() => {
@@ -422,6 +544,53 @@ const PlayerApp = () => {
       active = false;
       unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!state) return;
+    const preparedBosses = state.bosses.filter(
+      (boss) => boss.setupStatus === 'ready',
+    );
+    const hasLivingBoss = preparedBosses.some((boss) => boss.currentHealth > 0);
+
+    setHiddenDefeatedBosses((hidden) => {
+      const next = new Set(
+        [...hidden].filter((id) =>
+          preparedBosses.some((boss) => boss.id === id && boss.currentHealth === 0),
+        ),
+      );
+      return next.size === hidden.size && [...next].every((id) => hidden.has(id))
+        ? hidden
+        : next;
+    });
+
+    for (const [bossId, timer] of defeatedRemovalTimers.current) {
+      const boss = preparedBosses.find((item) => item.id === bossId);
+      if (!boss || boss.currentHealth > 0 || !hasLivingBoss) {
+        clearTimeout(timer);
+        defeatedRemovalTimers.current.delete(bossId);
+      }
+    }
+
+    if (!hasLivingBoss) return;
+    for (const boss of preparedBosses) {
+      if (
+        boss.currentHealth > 0 ||
+        hiddenDefeatedBosses.has(boss.id) ||
+        defeatedRemovalTimers.current.has(boss.id)
+      ) continue;
+
+      const timer = setTimeout(() => {
+        defeatedRemovalTimers.current.delete(boss.id);
+        setHiddenDefeatedBosses((hidden) => new Set(hidden).add(boss.id));
+      }, 5600);
+      defeatedRemovalTimers.current.set(boss.id, timer);
+    }
+  }, [hiddenDefeatedBosses, state]);
+
+  useEffect(() => () => {
+    defeatedRemovalTimers.current.forEach(clearTimeout);
+    defeatedRemovalTimers.current.clear();
   }, []);
 
   useEffect(() => {
@@ -515,6 +684,10 @@ const PlayerApp = () => {
         '--battle-background': `url("${background.url}")`,
       } as CSSProperties)
     : undefined;
+  const visibleBosses = state.bosses.filter(
+    (boss) =>
+      boss.setupStatus === 'ready' && !hiddenDefeatedBosses.has(boss.id),
+  );
 
   return (
     <>
@@ -537,10 +710,10 @@ const PlayerApp = () => {
             state.battleStarted && state.hudVisible ? 'is-active' : ''
           }`}
         >
-          {state.bosses.map((boss) => (
+          {visibleBosses.map((boss) => (
             <BossHud
               boss={boss}
-              bossCount={state.bosses.length}
+              bossCount={visibleBosses.length}
               effects={healthEffects[boss.id] ?? noHealthEffects}
               key={boss.id}
             />

@@ -13,7 +13,12 @@
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx,.mts ."
   },
-  "keywords": ["electron", "rpg", "boss-battle", "discord"],
+  "keywords": [
+    "electron",
+    "rpg",
+    "boss-battle",
+    "discord"
+  ],
   "author": {
     "name": "Brian",
     "email": "Briannascimento111@gmail.com"
@@ -43,6 +48,7 @@
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
+    "music-metadata": "^11.13.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   }

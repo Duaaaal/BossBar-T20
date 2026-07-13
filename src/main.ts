@@ -1,10 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } from 'electron';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
+// O resolvedor do ESLint ainda não reconhece o export condicional "node" do pacote.
+// eslint-disable-next-line import/no-unresolved
+import { parseFile } from 'music-metadata';
 import {
   applyBattleCommand,
+  calculateHealthSequence,
   initialBattleState,
   isBattleCommand,
   type BackgroundSelectionResult,
@@ -14,6 +20,7 @@ import {
   type HealthSequenceRequest,
   type HealthSequenceResult,
   type MusicCommand,
+  type MusicPlaybackState,
   type MusicSelectionResult,
   type MusicState,
   isMusicCommand,
@@ -47,7 +54,12 @@ let activeBackgroundFilePath: string | null = null;
 let backgroundRevision = 0;
 let healthEffectSequence = 0;
 const pendingHealthTimers = new Set<ReturnType<typeof setTimeout>>();
-type InternalMusicTrack = { id: string; name: string; filePath: string };
+type InternalMusicTrack = {
+  id: string;
+  name: string;
+  filePath: string;
+  duration: number;
+};
 const musicTracks: InternalMusicTrack[] = [];
 let musicTrackSequence = 0;
 let musicState: Omit<MusicState, 'tracks'> = {
@@ -58,7 +70,13 @@ let musicState: Omit<MusicState, 'tracks'> = {
   playbackVersion: 0,
   revision: 0,
 };
+let musicPlaybackState: MusicPlaybackState = {
+  trackId: null,
+  currentTime: 0,
+  duration: 0,
+};
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
+let allowAppClose = false;
 let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -105,9 +123,10 @@ const loadRenderer = (
 
 const getMusicState = (): MusicState => ({
   ...musicState,
-  tracks: musicTracks.map(({ id, name }) => ({
+  tracks: musicTracks.map(({ id, name, duration }) => ({
     id,
     name,
+    duration,
     url: `boss-media://audio/${id}`,
   })),
 });
@@ -121,6 +140,19 @@ const broadcastMusicState = () => {
   }
 };
 
+const broadcastMusicPlayback = () => {
+  if (musicWindow && !musicWindow.isDestroyed()) {
+    musicWindow.webContents.send('music:playback-changed', musicPlaybackState);
+  }
+};
+
+const resetMusicPlayback = (trackId = musicState.currentTrackId) => {
+  const duration =
+    musicTracks.find((track) => track.id === trackId)?.duration ?? 0;
+  musicPlaybackState = { trackId, currentTime: 0, duration };
+  broadcastMusicPlayback();
+};
+
 const createMusicWindow = () => {
   if (musicWindow && !musicWindow.isDestroyed()) {
     if (musicWindow.isMinimized()) musicWindow.restore();
@@ -129,9 +161,14 @@ const createMusicWindow = () => {
     return musicWindow;
   }
 
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = Math.min(590, workArea.width);
+  const height = Math.min(860, workArea.height);
   const window = new BrowserWindow({
-    width: 560,
-    height: 700,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    width,
     minWidth: 470,
     minHeight: 560,
     title: 'Trilha Sonora',
@@ -149,6 +186,7 @@ const createMusicWindow = () => {
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
       window.webContents.send('music:state-changed', getMusicState());
+      window.webContents.send('music:playback-changed', musicPlaybackState);
     }
   });
   loadRenderer(window, 'music');
@@ -170,39 +208,22 @@ const getInitialWindowLayout = (): {
   master: WindowBounds;
 } => {
   const { workArea } = screen.getPrimaryDisplay();
-  const edge = 12;
   const gap = 12;
-  const masterWidth = 460;
-  const masterHeight = Math.max(680, Math.min(820, workArea.height - edge * 2));
-  const maximumCenteredPlayerWidth =
-    workArea.width - (masterWidth + gap + edge) * 2;
-  let playerWidth = Math.max(
-    800,
-    Math.min(1280, maximumCenteredPlayerWidth),
-  );
+  const masterWidth = 500;
+  const masterHeight = Math.min(1320, workArea.height);
+  const playerAreaWidth = Math.max(800, workArea.width - masterWidth - gap);
+  let playerWidth = Math.min(1280, playerAreaWidth);
   let playerHeight = Math.round(playerWidth * (9 / 16));
-  const maximumPlayerHeight = Math.max(450, workArea.height - edge * 2);
+  const maximumPlayerHeight = Math.max(450, workArea.height);
 
   if (playerHeight > maximumPlayerHeight) {
     playerHeight = maximumPlayerHeight;
     playerWidth = Math.max(800, Math.round(playerHeight * (16 / 9)));
   }
 
-  let playerX =
-    workArea.x + Math.round((workArea.width - playerWidth) / 2);
-  let masterX = playerX + playerWidth + gap;
-  const rightEdge = workArea.x + workArea.width - edge;
-  const combinedWidth = playerWidth + gap + masterWidth;
-
-  if (masterX + masterWidth > rightEdge) {
-    if (combinedWidth <= workArea.width - edge * 2) {
-      const overflow = masterX + masterWidth - rightEdge;
-      playerX -= overflow;
-      masterX -= overflow;
-    } else {
-      masterX = rightEdge - masterWidth;
-    }
-  }
+  const playerX =
+    workArea.x + Math.round((playerAreaWidth - playerWidth) / 2);
+  const masterX = workArea.x + workArea.width - masterWidth;
 
   return {
     player: {
@@ -213,7 +234,7 @@ const getInitialWindowLayout = (): {
     },
     master: {
       x: masterX,
-      y: workArea.y + Math.round((workArea.height - masterHeight) / 2),
+      y: workArea.y,
       width: masterWidth,
       height: masterHeight,
     },
@@ -304,8 +325,9 @@ const createWindows = () => {
   const layout = getInitialWindowLayout();
   masterWindow = new BrowserWindow({
     ...layout.master,
-    minWidth: 460,
-    minHeight: 680,
+    minWidth: 450,
+    minHeight: Math.min(680, layout.master.height),
+    maxHeight: Math.min(1320, screen.getPrimaryDisplay().workArea.height),
     title: 'Controle do Mestre',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
@@ -319,6 +341,12 @@ const createWindows = () => {
 
   loadRenderer(masterWindow, 'master');
   createPlayerWindow(layout.player);
+
+  masterWindow.on('close', (event) => {
+    if (allowAppClose) return;
+    event.preventDefault();
+    masterWindow?.webContents.send('app:close-requested');
+  });
 
   masterWindow.on('closed', () => {
     masterWindow = null;
@@ -353,6 +381,12 @@ const isMusicSender = (senderId: number) =>
 
 ipcMain.handle('battle:get-state', () => battleState);
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+ipcMain.on('app:confirm-close', (event) => {
+  if (!isMasterSender(event.sender.id) || !masterWindow) return;
+  allowAppClose = true;
+  masterWindow.close();
+});
 
 ipcMain.handle(
   'background:get',
@@ -432,6 +466,10 @@ ipcMain.handle('music:open-window', (event) => {
 });
 
 ipcMain.handle('music:get-state', (): MusicState => getMusicState());
+ipcMain.handle(
+  'music:get-playback',
+  (): MusicPlaybackState => musicPlaybackState,
+);
 
 ipcMain.handle(
   'music:add-tracks',
@@ -462,11 +500,22 @@ ipcMain.handle(
         continue;
       }
 
+      let duration = 0;
+      try {
+        const metadata = await parseFile(filePath, { duration: true });
+        duration = Number.isFinite(metadata.format.duration)
+          ? metadata.format.duration ?? 0
+          : 0;
+      } catch {
+        duration = 0;
+      }
+
       musicTrackSequence += 1;
       musicTracks.push({
         id: String(musicTrackSequence),
         name: path.basename(filePath, path.extname(filePath)),
         filePath,
+        duration,
       });
       added += 1;
     }
@@ -480,6 +529,7 @@ ipcMain.handle(
 
     if (!musicState.currentTrackId) {
       musicState = { ...musicState, currentTrackId: musicTracks[0].id };
+      resetMusicPlayback(musicTracks[0].id);
     }
     musicState = { ...musicState, revision: musicState.revision + 1 };
     broadcastMusicState();
@@ -502,6 +552,7 @@ const moveMusicTrack = (direction: -1 | 1) => {
     playbackVersion: musicState.playbackVersion + 1,
     revision: musicState.revision + 1,
   };
+  resetMusicPlayback(musicState.currentTrackId);
 };
 
 const applyMusicCommand = (command: MusicCommand) => {
@@ -526,6 +577,7 @@ const applyMusicCommand = (command: MusicCommand) => {
         playbackVersion: musicState.playbackVersion + 1,
         revision: musicState.revision + 1,
       };
+      resetMusicPlayback();
       break;
     case 'previous':
       moveMusicTrack(-1);
@@ -547,6 +599,55 @@ const applyMusicCommand = (command: MusicCommand) => {
         revision: musicState.revision + 1,
       };
       break;
+    case 'seek': {
+      const duration = Math.max(0, musicPlaybackState.duration);
+      const time = Math.max(0, Math.min(command.time, duration || command.time));
+      musicPlaybackState = {
+        ...musicPlaybackState,
+        trackId: musicState.currentTrackId,
+        currentTime: time,
+      };
+      if (playerWindow && !playerWindow.isDestroyed()) {
+        playerWindow.webContents.send('music:seek', time);
+      }
+      broadcastMusicPlayback();
+      return;
+    }
+    case 'remove-track': {
+      const removedIndex = musicTracks.findIndex(
+        (track) => track.id === command.trackId,
+      );
+      if (removedIndex < 0) return;
+      const removingCurrent = musicState.currentTrackId === command.trackId;
+      musicTracks.splice(removedIndex, 1);
+
+      if (removingCurrent) {
+        const replacement =
+          musicTracks[Math.min(removedIndex, musicTracks.length - 1)] ?? null;
+        musicState = {
+          ...musicState,
+          currentTrackId: replacement?.id ?? null,
+          isPlaying: Boolean(replacement) && musicState.isPlaying,
+          playbackVersion: musicState.playbackVersion + 1,
+          revision: musicState.revision + 1,
+        };
+        resetMusicPlayback(replacement?.id ?? null);
+      } else {
+        musicState = { ...musicState, revision: musicState.revision + 1 };
+      }
+      break;
+    }
+    case 'clear-tracks':
+      musicTracks.splice(0, musicTracks.length);
+      musicState = {
+        ...musicState,
+        currentTrackId: null,
+        isPlaying: false,
+        playbackVersion: musicState.playbackVersion + 1,
+        revision: musicState.revision + 1,
+      };
+      resetMusicPlayback(null);
+      break;
     case 'play-track':
       if (!musicTracks.some((track) => track.id === command.trackId)) return;
       musicState = {
@@ -556,6 +657,7 @@ const applyMusicCommand = (command: MusicCommand) => {
         playbackVersion: musicState.playbackVersion + 1,
         revision: musicState.revision + 1,
       };
+      resetMusicPlayback(command.trackId);
       break;
   }
 
@@ -572,6 +674,34 @@ ipcMain.on('music:track-ended', (event) => {
   if (musicState.loop) return;
   moveMusicTrack(1);
   broadcastMusicState();
+});
+
+ipcMain.on('music:progress', (event, playback: unknown) => {
+  if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
+  if (!playback || typeof playback !== 'object') return;
+  const candidate = playback as Record<string, unknown>;
+  if (
+    (candidate.trackId !== null && typeof candidate.trackId !== 'string') ||
+    typeof candidate.currentTime !== 'number' ||
+    !Number.isFinite(candidate.currentTime) ||
+    typeof candidate.duration !== 'number' ||
+    !Number.isFinite(candidate.duration)
+  ) return;
+
+  musicPlaybackState = {
+    trackId: candidate.trackId as string | null,
+    currentTime: Math.max(0, candidate.currentTime),
+    duration: (() => {
+      const metadataDuration = musicTracks.find(
+        (track) => track.id === candidate.trackId,
+      )?.duration;
+      if (metadataDuration && metadataDuration > 0) return metadataDuration;
+      return candidate.duration > 0
+        ? candidate.duration
+        : musicPlaybackState.duration;
+    })(),
+  };
+  broadcastMusicPlayback();
 });
 
 ipcMain.on('music:fadeout-complete', (event) => {
@@ -655,7 +785,9 @@ ipcMain.handle(
       request.total <= 0 ||
       !Number.isInteger(request.hits) ||
       request.hits < 1 ||
-      request.hits > 1000
+      request.hits > 1000 ||
+      (request.ignoreDamageReduction !== undefined &&
+        typeof request.ignoreDamageReduction !== 'boolean')
     ) {
       return { ok: false, error: 'Valor ou quantidade de parcelas inválida.' };
     }
@@ -664,25 +796,23 @@ ipcMain.handle(
     if (!boss) return { ok: false, error: 'Chefão não encontrado.' };
 
     const total = Math.min(1_000_000, Math.ceil(request.total));
-    const amountPerHit = Math.ceil(total / request.hits);
-    const reductionPerHit =
-      request.type === 'damage'
-        ? Math.ceil(boss.damageReduction / request.hits)
-        : 0;
-    const effectiveAmount =
-      request.type === 'damage'
-        ? Math.max(1, amountPerHit - reductionPerHit)
-        : amountPerHit;
+    const { effectiveAmountPerHit } = calculateHealthSequence({
+      type: request.type,
+      total,
+      hits: request.hits,
+      damageReduction: boss.damageReduction,
+      ignoreDamageReduction: request.ignoreDamageReduction,
+    });
 
     for (let index = 0; index < request.hits; index += 1) {
       if (index === 0) {
-        applyHealthMutation(request.type, request.bossId, effectiveAmount);
+        applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
         continue;
       }
 
       const timer = setTimeout(() => {
         pendingHealthTimers.delete(timer);
-        applyHealthMutation(request.type, request.bossId, effectiveAmount);
+        applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
       }, index * 150);
       pendingHealthTimers.add(timer);
     }
@@ -690,7 +820,7 @@ ipcMain.handle(
     return {
       ok: true,
       hits: request.hits,
-      amountPerHit: effectiveAmount,
+      amountPerHit: effectiveAmountPerHit,
     };
   },
 );
@@ -782,6 +912,70 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   if (backgroundChanged) broadcastBackground();
 });
 
+const createAudioResponse = async (request: Request, filePath: string) => {
+  const fileInfo = await stat(filePath);
+  const fileSize = fileInfo.size;
+  const rangeHeader = request.headers.get('range');
+  const baseHeaders = new Headers({
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    'Content-Type': 'audio/mpeg',
+  });
+
+  let start = 0;
+  let end = Math.max(0, fileSize - 1);
+  let partial = false;
+
+  if (rangeHeader) {
+    const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+    if (!match || (!match[1] && !match[2])) {
+      baseHeaders.set('Content-Range', `bytes */${fileSize}`);
+      return new Response(null, { status: 416, headers: baseHeaders });
+    }
+
+    partial = true;
+    if (!match[1]) {
+      const suffixLength = Number(match[2]);
+      start = Math.max(0, fileSize - suffixLength);
+    } else {
+      start = Number(match[1]);
+    }
+    end = match[2] ? Number(match[2]) : fileSize - 1;
+    end = Math.min(end, fileSize - 1);
+
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      start >= fileSize ||
+      end < start
+    ) {
+      baseHeaders.set('Content-Range', `bytes */${fileSize}`);
+      return new Response(null, { status: 416, headers: baseHeaders });
+    }
+  }
+
+  const contentLength = end - start + 1;
+  baseHeaders.set('Content-Length', String(contentLength));
+  if (partial) {
+    baseHeaders.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+  }
+
+  if (request.method === 'HEAD') {
+    return new Response(null, {
+      status: partial ? 206 : 200,
+      headers: baseHeaders,
+    });
+  }
+
+  const nodeStream = createReadStream(filePath, { start, end });
+  const webStream = Readable.toWeb(nodeStream) as unknown as BodyInit;
+  return new Response(webStream, {
+    status: partial ? 206 : 200,
+    headers: baseHeaders,
+  });
+};
+
 app.whenReady().then(async () => {
   await protocol.handle('boss-media', async (request) => {
     const requestUrl = new URL(request.url);
@@ -803,7 +997,13 @@ app.whenReady().then(async () => {
     }
 
     try {
-      return await net.fetch(pathToFileURL(mediaPath).toString());
+      if (requestUrl.hostname === 'audio') {
+        return await createAudioResponse(request, mediaPath);
+      }
+      return await net.fetch(pathToFileURL(mediaPath).toString(), {
+        method: request.method,
+        headers: request.headers,
+      });
     } catch {
       return new Response(`Não foi possível carregar a ${errorLabel}.`, {
         status: 500,
@@ -821,6 +1021,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  allowAppClose = true;
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);

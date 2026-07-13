@@ -28,7 +28,7 @@ textarea {
 .master-shell {
   width: min(100%, 560px);
   margin: 0 auto;
-  padding: 28px 24px 44px;
+  padding: 28px 24px 12px;
 }
 
 .master-header h1 {
@@ -358,6 +358,21 @@ textarea {
   line-height: 1.45;
 }
 
+.action-input {
+  height: 42px;
+  min-height: 42px;
+  resize: none;
+  overflow: hidden;
+  padding: 9px 12px;
+  line-height: 22px;
+}
+
+.action-input::placeholder {
+  color: #77717d;
+  font-size: .68rem;
+  letter-spacing: -.01em;
+}
+
 input:focus,
 textarea:focus {
   border-color: #9a5fc4;
@@ -393,9 +408,9 @@ button:disabled:hover {
 
 .health-action-row {
   display: grid;
-  grid-template-columns: minmax(76px, 0.85fr) repeat(3, minmax(72px, 1fr));
+  grid-template-columns: minmax(64px, 0.75fr) 42px repeat(3, minmax(0, 1fr));
   align-items: end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .status-health-actions {
@@ -411,10 +426,62 @@ button:disabled:hover {
 }
 
 .health-action-row button {
+  display: flex;
   min-width: 0;
-  padding: 8px 6px;
-  font-size: 0.78rem;
+  min-height: 48px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 3px;
+  font-size: 0.67rem;
   white-space: nowrap;
+}
+
+.health-action-row button small {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.59rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.health-action-row button > span {
+  display: inline;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.rd-toggle {
+  display: flex;
+  height: 48px;
+  margin: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid #49414e;
+  border-radius: 9px;
+  background: #17141a;
+  cursor: pointer;
+}
+
+.rd-toggle > span {
+  margin: 0;
+  color: #aaa1ad;
+  font-size: .58rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.rd-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #b7404c;
+  cursor: pointer;
 }
 
 .amount-field input {
@@ -427,6 +494,21 @@ button:disabled:hover {
 
 .heal-button {
   background: linear-gradient(135deg, #176b58, #259c6d);
+}
+
+.setup-notice {
+  overflow: hidden;
+  margin: 10px 0 -3px;
+  color: #cda86d;
+  font-size: .65rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-setup-notice {
+  margin-bottom: 0;
+  color: #b997c9;
 }
 
 .full-heal-button {
@@ -569,9 +651,9 @@ button:disabled:hover {
 }
 
 .master-footer {
-  margin-top: 30px;
+  margin-top: 18px;
   border-top: 1px solid rgba(106, 91, 115, 0.22);
-  padding-top: 14px;
+  padding-top: 11px;
   color: #6f6874;
   font-size: 0.64rem;
   letter-spacing: 0.035em;

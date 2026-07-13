@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   applyBattleCommand,
+  calculateHealthSequence,
   createInitialBoss,
   initialBattleState,
+  isMusicCommand,
+  volumeToGain,
 } from '../src/shared/battle.ts';
 
 const freshBattle = () => ({
@@ -86,4 +89,82 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.currentHealth, 1_000_000);
   assert.equal(boss.attack, 999);
   assert.equal(boss.rangedAttack, 0);
+});
+
+test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () => {
+  assert.deepEqual(
+    calculateHealthSequence({
+      type: 'damage',
+      total: 100,
+      hits: 4,
+      damageReduction: 12,
+    }),
+    {
+      amountPerHit: 25,
+      reductionPerHit: 3,
+      effectiveAmountPerHit: 22,
+      effectiveTotal: 88,
+    },
+  );
+  assert.equal(
+    calculateHealthSequence({
+      type: 'damage',
+      total: 3,
+      hits: 3,
+      damageReduction: 99,
+    }).effectiveTotal,
+    3,
+  );
+});
+
+test('ignora RD no dano bruto e valida o comando de busca da música', () => {
+  assert.equal(
+    calculateHealthSequence({
+      type: 'damage',
+      total: 100,
+      hits: 4,
+      damageReduction: 999,
+      ignoreDamageReduction: true,
+    }).effectiveTotal,
+    100,
+  );
+  assert.equal(isMusicCommand({ type: 'seek', time: 42.5 }), true);
+  assert.equal(isMusicCommand({ type: 'seek', time: Number.NaN }), false);
+  assert.equal(isMusicCommand({ type: 'remove-track', trackId: 'faixa-1' }), true);
+  assert.equal(isMusicCommand({ type: 'clear-tracks' }), true);
+});
+
+test('só prepara chefões novos ao salvar e libera o inicial ao começar', () => {
+  let state = freshBattle();
+  assert.equal(state.bosses[0].setupStatus, 'initial');
+  assert.equal(state.bosses[0].nextAction, '');
+
+  state = applyBattleCommand(state, { type: 'add-boss' });
+  const newBossId = state.activeBossId;
+  assert.equal(state.bosses[1].setupStatus, 'pending');
+
+  state = applyBattleCommand(state, { type: 'start-battle' });
+  assert.equal(state.bosses[0].setupStatus, 'ready');
+  assert.equal(state.bosses[1].setupStatus, 'pending');
+
+  state = applyBattleCommand(state, {
+    type: 'configure',
+    bossId: newBossId,
+    bossName: 'Chefe preparado',
+    maxHealth: 600,
+    attack: 10,
+    rangedAttack: 10,
+    defense: 10,
+    skills: 10,
+    damageReduction: 10,
+  });
+  assert.equal(state.bosses[1].setupStatus, 'ready');
+});
+
+test('converte o controle de volume para ganho perceptual', () => {
+  assert.equal(volumeToGain(0), 0);
+  assert.equal(volumeToGain(1), 1);
+  assert.ok(volumeToGain(0.5) > 0.21 && volumeToGain(0.5) < 0.22);
+  assert.ok(volumeToGain(0.8) < 0.8);
+  assert.equal(volumeToGain(2), 1);
 });
