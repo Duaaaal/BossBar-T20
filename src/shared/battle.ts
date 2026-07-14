@@ -1,7 +1,11 @@
 export type BossState = {
   id: string;
   setupStatus: 'initial' | 'pending' | 'ready';
+  identityPrepared: boolean;
+  actionPrepared: boolean;
   bossName: string;
+  controlAmount: string;
+  applyDamageReduction: boolean;
   maxHealth: number;
   currentHealth: number;
   attack: number;
@@ -254,6 +258,8 @@ export type BattleCommand =
       shield: number;
       skills: number;
       damageReduction: number;
+      controlAmount?: string;
+      applyDamageReduction?: boolean;
     }
   | { type: 'damage'; bossId: string; amount: number }
   | { type: 'heal'; bossId: string; amount: number }
@@ -264,6 +270,8 @@ export type BattleCommand =
       severity: 'normal' | 'grave';
     }
   | { type: 'select-boss'; bossId: string }
+  | { type: 'mark-identity-unprepared'; bossId: string }
+  | { type: 'mark-action-unprepared'; bossId: string }
   | { type: 'add-boss' }
   | { type: 'remove-boss'; bossId: string }
   | { type: 'start-battle' }
@@ -276,7 +284,11 @@ export type BattleCommand =
 export const createInitialBoss = (id: string, index = 0): BossState => ({
   id,
   setupStatus: index === 0 ? 'initial' : 'pending',
+  identityPrepared: false,
+  actionPrepared: false,
   bossName: index === 0 ? 'O Chefão Sem Nome' : `Chefão ${index + 1}`,
+  controlAmount: '50',
+  applyDamageReduction: true,
   maxHealth: 500,
   currentHealth: 500,
   attack: 10,
@@ -316,7 +328,11 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
         ['maxHealth', 'attack', 'rangedAttack', 'defense', 'shield', 'skills', 'damageReduction'].every(
           (field) =>
             typeof command[field] === 'number' && Number.isFinite(command[field]),
-        )
+        ) &&
+        (command.controlAmount === undefined ||
+          typeof command.controlAmount === 'string') &&
+        (command.applyDamageReduction === undefined ||
+          typeof command.applyDamageReduction === 'boolean')
       );
     case 'damage':
     case 'heal':
@@ -332,6 +348,8 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
         (command.severity === 'normal' || command.severity === 'grave')
       );
     case 'select-boss':
+    case 'mark-identity-unprepared':
+    case 'mark-action-unprepared':
     case 'remove-boss':
     case 'reset-health':
       return hasBossId(command);
@@ -372,7 +390,14 @@ export const applyBattleCommand = (
         return {
           ...boss,
           setupStatus: 'ready',
+          identityPrepared: true,
           bossName: command.bossName.trim().slice(0, 100) || 'Chefão Sem Nome',
+          controlAmount:
+            command.controlAmount && /^[0-9.,/]{1,24}$/.test(command.controlAmount)
+              ? command.controlAmount
+              : boss.controlAmount,
+          applyDamageReduction:
+            command.applyDamageReduction ?? boss.applyDamageReduction,
           maxHealth,
           currentHealth: wasAtFullHealth
             ? maxHealth
@@ -412,9 +437,20 @@ export const applyBattleCommand = (
     case 'publish-action':
       return updateBoss(state, command.bossId, (boss) => ({
         ...boss,
+        actionPrepared: command.text.trim().length > 0,
         nextAction: command.text.trim().slice(0, 100),
         actionSeverity:
           command.text.trim().length === 0 ? 'normal' : command.severity,
+      }));
+    case 'mark-identity-unprepared':
+      return updateBoss(state, command.bossId, (boss) => ({
+        ...boss,
+        identityPrepared: false,
+      }));
+    case 'mark-action-unprepared':
+      return updateBoss(state, command.bossId, (boss) => ({
+        ...boss,
+        actionPrepared: false,
       }));
     case 'select-boss':
       return state.bosses.some((boss) => boss.id === command.bossId)

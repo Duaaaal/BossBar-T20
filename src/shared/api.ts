@@ -36,8 +36,12 @@ export type BossAPI = {
     request: HealthSequenceRequest,
   ) => Promise<HealthSequenceResult>;
   openPresentation: () => Promise<boolean>;
+  isPresentationOpen: () => Promise<boolean>;
+  setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
   openMusicWindow: () => Promise<boolean>;
   openBossLibrary: () => Promise<boolean>;
+  hasEncounterLibraryEntries: () => Promise<boolean>;
+  startNewEncounter: () => Promise<boolean>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
   saveBossToLibrary: (
     draft: BossLibraryDraft,
@@ -92,6 +96,7 @@ export type BossAPI = {
     callback: (effect: HealthEffect) => void,
   ) => () => void;
   subscribeAppCloseRequested: (callback: () => void) => () => void;
+  subscribePresentationOpen: (callback: (open: boolean) => void) => () => void;
   subscribeBossLoaded: (
     callback: (loaded: BossLibraryLoaded) => void,
   ) => () => void;

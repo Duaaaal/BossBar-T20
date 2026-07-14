@@ -168,6 +168,49 @@ test('só prepara chefões novos ao salvar e libera o inicial ao começar', () =
   assert.equal(state.bosses[1].setupStatus, 'ready');
 });
 
+test('acompanha separadamente a preparação da identidade e da próxima ação', () => {
+  let state = freshBattle();
+  assert.equal(state.bosses[0].identityPrepared, false);
+  assert.equal(state.bosses[0].actionPrepared, false);
+
+  state = applyBattleCommand(state, {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Arauto Carmesim',
+    controlAmount: '100/4',
+    applyDamageReduction: false,
+    maxHealth: 800,
+    attack: 20,
+    rangedAttack: 18,
+    defense: 22,
+    shield: 1,
+    skills: 16,
+    damageReduction: 12,
+  });
+  state = applyBattleCommand(state, {
+    type: 'publish-action',
+    bossId: 'boss-1',
+    text: 'O chão começará a ruir.',
+    severity: 'grave',
+  });
+  assert.equal(state.bosses[0].identityPrepared, true);
+  assert.equal(state.bosses[0].actionPrepared, true);
+  assert.equal(state.bosses[0].controlAmount, '100/4');
+  assert.equal(state.bosses[0].applyDamageReduction, false);
+
+  state = applyBattleCommand(state, {
+    type: 'mark-identity-unprepared',
+    bossId: 'boss-1',
+  });
+  state = applyBattleCommand(state, {
+    type: 'mark-action-unprepared',
+    bossId: 'boss-1',
+  });
+  assert.equal(state.bosses[0].identityPrepared, false);
+  assert.equal(state.bosses[0].actionPrepared, false);
+  assert.equal(state.bosses[0].setupStatus, 'ready');
+});
+
 test('converte o controle de volume para ganho perceptual', () => {
   assert.equal(volumeToGain(0), 0);
   assert.equal(volumeToGain(0.8), 1);

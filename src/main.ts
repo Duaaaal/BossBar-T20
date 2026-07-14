@@ -21,6 +21,7 @@ import { parseFile } from 'music-metadata';
 import {
   applyBattleCommand,
   calculateHealthSequence,
+  createInitialBoss,
   initialBattleState,
   isBattleCommand,
   type BackgroundSelectionResult,
@@ -78,6 +79,8 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let masterWindow: BrowserWindow | null = null;
 let playerWindow: BrowserWindow | null = null;
+let controlWindow: BrowserWindow | null = null;
+let launcherWindow: BrowserWindow | null = null;
 let musicWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let playerWindowReady = false;
@@ -134,6 +137,15 @@ let allowAppClose = false;
 let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let allowControlWindowClose = false;
+let dockedPresentationMaximized = false;
+let normalPlayerBounds: WindowBounds | null = null;
+let synchronizingDockedWindows = false;
+let synchronizingDockedFocus = false;
+const CONTROL_PANEL_MINIMIZED_HEIGHT = 32;
+const CONTROL_PANEL_DOCK_OVERLAP = 1;
+let controlPanelMinimized = false;
+let controlPanelExpandedHeight = 300;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -191,7 +203,13 @@ const getBackgroundState = (): BackgroundState => ({
     : null,
 });
 
-type RendererPage = 'master' | 'player' | 'music' | 'library';
+type RendererPage =
+  | 'launcher'
+  | 'master'
+  | 'player'
+  | 'control'
+  | 'music'
+  | 'library';
 
 const rendererFile = (page: RendererPage) =>
   path.join(
@@ -442,8 +460,10 @@ const persistBossLibrary = () => {
 };
 
 const notifyLibraryChanged = () => {
-  if (libraryWindow && !libraryWindow.isDestroyed()) {
-    libraryWindow.webContents.send('library:entries-changed');
+  for (const window of [libraryWindow, launcherWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('library:entries-changed');
+    }
   }
 };
 
@@ -713,7 +733,7 @@ const createMusicWindow = () => {
 
   const { workArea } = screen.getPrimaryDisplay();
   const width = Math.min(590, workArea.width);
-  const height = Math.min(777, workArea.height);
+  const height = Math.min(750, workArea.height);
   const minimumHeight = Math.min(560, height);
   const window = new BrowserWindow({
     icon: applicationIcon(),
@@ -798,46 +818,213 @@ type WindowBounds = {
   height: number;
 };
 
+const getDockedControlBounds = (
+  playerBounds: WindowBounds,
+  controlHeight: number,
+): WindowBounds => ({
+  x: playerBounds.x,
+  y: playerBounds.y + playerBounds.height - CONTROL_PANEL_DOCK_OVERLAP,
+  width: playerBounds.width,
+  height: controlHeight,
+});
+
+const getDockedControlBoundsForWindow = (
+  window: BrowserWindow,
+  controlHeight: number,
+): WindowBounds => {
+  const contentBounds = window.getContentBounds();
+  return getDockedControlBounds(contentBounds, controlHeight);
+};
+
 const getInitialWindowLayout = (): {
   player: WindowBounds;
+  control: WindowBounds;
   master: WindowBounds;
 } => {
   const { workArea } = screen.getPrimaryDisplay();
   const gap = 12;
-  const masterWidth = 500;
-  const masterHeight = Math.min(1380, workArea.height);
-  const playerAreaWidth = Math.max(800, workArea.width - masterWidth - gap);
-  let playerWidth = Math.min(1280, playerAreaWidth);
+  const masterWidth = Math.min(430, Math.max(390, Math.round(workArea.width * 0.25)));
+  const masterHeight = Math.min(660, workArea.height);
+  const controlHeight = Math.min(300, Math.max(250, Math.round(workArea.height * 0.28)));
+  const playerAreaWidth = Math.max(720, workArea.width - masterWidth - gap);
+  const maximumPlayerHeight = Math.max(405, workArea.height - controlHeight);
+  let playerWidth = Math.min(1180, playerAreaWidth, Math.floor(maximumPlayerHeight * (16 / 9)));
   let playerHeight = Math.round(playerWidth * (9 / 16));
-  const maximumPlayerHeight = Math.max(450, workArea.height);
 
   if (playerHeight > maximumPlayerHeight) {
     playerHeight = maximumPlayerHeight;
-    playerWidth = Math.max(800, Math.round(playerHeight * (16 / 9)));
+    playerWidth = Math.max(720, Math.round(playerHeight * (16 / 9)));
   }
 
   const playerX =
     workArea.x + Math.round((playerAreaWidth - playerWidth) / 2);
+  const groupHeight = playerHeight + controlHeight;
+  const playerY = workArea.y + Math.max(0, Math.round((workArea.height - groupHeight) / 2));
   const masterX = workArea.x + workArea.width - masterWidth;
 
   return {
     player: {
       x: playerX,
-      y: workArea.y + Math.round((workArea.height - playerHeight) / 2),
+      y: playerY,
       width: playerWidth,
       height: playerHeight,
     },
+    control: getDockedControlBounds(
+      { x: playerX, y: playerY, width: playerWidth, height: playerHeight },
+      controlHeight,
+    ),
     master: {
       x: masterX,
-      y: workArea.y,
+      y: workArea.y + Math.max(0, Math.round((workArea.height - masterHeight) / 2)),
       width: masterWidth,
       height: masterHeight,
     },
   };
 };
 
+const getMaximizedDockedLayout = (display: Electron.Display) => {
+  const { workArea } = display;
+  const expandedControlHeight = Math.min(310, Math.max(250, Math.round(workArea.height * 0.28)));
+  const controlHeight = controlPanelMinimized
+    ? CONTROL_PANEL_MINIMIZED_HEIGHT
+    : expandedControlHeight;
+  const outerBounds = playerWindow?.getBounds();
+  const contentBounds = playerWindow?.getContentBounds();
+  const frameWidth = outerBounds && contentBounds
+    ? Math.max(0, outerBounds.width - contentBounds.width)
+    : 0;
+  const frameHeight = outerBounds && contentBounds
+    ? Math.max(0, outerBounds.height - contentBounds.height)
+    : 0;
+  const availableContentHeight = Math.max(
+    405,
+    workArea.height - controlHeight - frameHeight,
+  );
+  const contentWidth = Math.min(
+    workArea.width - frameWidth,
+    Math.floor(availableContentHeight * (16 / 9)),
+  );
+  const contentHeight = Math.round(contentWidth * (9 / 16));
+  const playerWidth = contentWidth + frameWidth;
+  const playerHeight = contentHeight + frameHeight;
+  const groupHeight = playerHeight + controlHeight;
+  const x = workArea.x + Math.round((workArea.width - playerWidth) / 2);
+  const y = workArea.y + Math.max(0, Math.round((workArea.height - groupHeight) / 2));
+  return {
+    player: { x, y, width: playerWidth, height: playerHeight },
+    control: getDockedControlBounds(
+      { x, y, width: playerWidth, height: playerHeight },
+      controlHeight,
+    ),
+  };
+};
+
+const syncControlWindow = () => {
+  if (
+    synchronizingDockedWindows ||
+    !playerWindow ||
+    playerWindow.isDestroyed() ||
+    !controlWindow ||
+    controlWindow.isDestroyed()
+  ) return;
+  const currentControlBounds = controlWindow.getBounds();
+  synchronizingDockedWindows = true;
+  controlWindow.setBounds(
+    getDockedControlBoundsForWindow(playerWindow, currentControlBounds.height),
+  );
+  synchronizingDockedWindows = false;
+};
+
+const raiseDockedWindowGroup = (focusedWindow: 'player' | 'control') => {
+  if (
+    synchronizingDockedFocus ||
+    !playerWindow ||
+    playerWindow.isDestroyed() ||
+    !controlWindow ||
+    controlWindow.isDestroyed()
+  ) return;
+
+  synchronizingDockedFocus = true;
+  playerWindow.moveTop();
+  controlWindow.showInactive();
+  controlWindow.moveTop();
+  if (focusedWindow === 'player') {
+    playerWindow.focus();
+  } else {
+    controlWindow.focus();
+  }
+  setTimeout(() => {
+    synchronizingDockedFocus = false;
+  }, 0);
+};
+
+const createControlWindow = (bounds: WindowBounds) => {
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.setBounds(bounds);
+    controlWindow.showInactive();
+    return controlWindow;
+  }
+
+  const window = new BrowserWindow({
+    ...bounds,
+    icon: applicationIcon(),
+    parent: playerWindow ?? undefined,
+    show: false,
+    frame: false,
+    hasShadow: false,
+    minWidth: 720,
+    minHeight: CONTROL_PANEL_MINIMIZED_HEIGHT,
+    maxHeight: 340,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    title: 'Painel Privado do Encontro - BossBar T20',
+    backgroundColor: '#111117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  controlWindow = window;
+  allowControlWindowClose = false;
+  controlPanelMinimized = false;
+  controlPanelExpandedHeight = bounds.height;
+  window.setClosable(false);
+  window.setContentProtection(true);
+  window.on('focus', () => raiseDockedWindowGroup('control'));
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('battle:state-changed', battleState);
+      if (playerWindowReady) window.showInactive();
+    }
+  });
+  loadRenderer(window, 'control');
+  window.on('close', (event) => {
+    if (!allowControlWindowClose) event.preventDefault();
+  });
+  window.on('closed', () => {
+    if (controlWindow === window) controlWindow = null;
+    allowControlWindowClose = false;
+    controlPanelMinimized = false;
+  });
+  return window;
+};
+
 const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
+    if (!controlWindow || controlWindow.isDestroyed()) {
+      const controlHeight = getInitialWindowLayout().control.height;
+      createControlWindow(
+        getDockedControlBoundsForWindow(playerWindow, controlHeight),
+      );
+    }
     if (playerWindowReady) {
       if (playerWindow.isMinimized()) {
         playerWindow.restore();
@@ -852,6 +1039,7 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
     icon: applicationIcon(),
     ...bounds,
     show: false,
+    hasShadow: false,
     minWidth: 800,
     minHeight: 450,
     title: 'Apresentação do Chefão - BossBar T20',
@@ -866,9 +1054,21 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   });
 
   playerWindow = window;
+  broadcastPresentationOpen();
   playerWindowReady = false;
   allowPlayerWindowClose = false;
   playerWindowClosePending = false;
+  window.setAspectRatio(16 / 9);
+  const outerBounds = window.getBounds();
+  const contentBounds = window.getContentBounds();
+  const frameWidth = Math.max(0, outerBounds.width - contentBounds.width);
+  const contentWidth = Math.max(1, bounds.width - frameWidth);
+  window.setContentSize(contentWidth, Math.round(contentWidth * (9 / 16)));
+
+  const initialControlBounds = getInitialWindowLayout().control;
+  createControlWindow(
+    getDockedControlBoundsForWindow(window, initialControlBounds.height),
+  );
 
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
@@ -879,6 +1079,41 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   });
 
   loadRenderer(window, 'player');
+
+  window.on('focus', () => raiseDockedWindowGroup('player'));
+  window.on('move', () => {
+    syncControlWindow();
+    if (window.isFocused()) raiseDockedWindowGroup('player');
+  });
+  window.on('resize', syncControlWindow);
+  window.on('minimize', () => controlWindow?.hide());
+  window.on('restore', () => {
+    syncControlWindow();
+    controlWindow?.showInactive();
+  });
+  window.on('show', () => controlWindow?.showInactive());
+  window.on('maximize', () => {
+    const restoreDock = dockedPresentationMaximized;
+    if (!restoreDock) normalPlayerBounds = window.getNormalBounds();
+    setTimeout(() => {
+      if (playerWindow !== window || window.isDestroyed()) return;
+      synchronizingDockedWindows = true;
+      if (window.isMaximized()) window.unmaximize();
+      if (restoreDock && normalPlayerBounds) {
+        window.setBounds(normalPlayerBounds);
+        dockedPresentationMaximized = false;
+      } else {
+        const layout = getMaximizedDockedLayout(
+          screen.getDisplayMatching(window.getBounds()),
+        );
+        window.setBounds(layout.player);
+        controlWindow?.setBounds(layout.control);
+        dockedPresentationMaximized = true;
+      }
+      synchronizingDockedWindows = false;
+      syncControlWindow();
+    }, 0);
+  });
 
   window.on('close', (event) => {
     if (!allowPlayerWindowClose && musicState.isPlaying) {
@@ -912,20 +1147,35 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
       soundEffectSources.clear();
       if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
       playerWindowCloseTimer = null;
+      if (controlWindow && !controlWindow.isDestroyed()) {
+        allowControlWindowClose = true;
+        controlWindow.setClosable(true);
+        controlWindow.close();
+      }
+      dockedPresentationMaximized = false;
+      normalPlayerBounds = null;
+      controlPanelMinimized = false;
+      broadcastPresentationOpen();
     }
   });
 
   return window;
 };
 
-const createWindows = () => {
+const createEncounterWindows = () => {
+  if (masterWindow && !masterWindow.isDestroyed()) {
+    masterWindow.show();
+    createPlayerWindow();
+    return;
+  }
   const layout = getInitialWindowLayout();
   masterWindow = new BrowserWindow({
     ...layout.master,
     icon: applicationIcon(),
-    minWidth: 450,
-    minHeight: Math.min(680, layout.master.height),
-    maxHeight: Math.min(1380, screen.getPrimaryDisplay().workArea.height),
+    minWidth: 390,
+    maxWidth: 480,
+    minHeight: Math.min(600, layout.master.height),
+    maxHeight: Math.min(700, screen.getPrimaryDisplay().workArea.height),
     title: 'Controle do Mestre - BossBar T20',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
@@ -971,14 +1221,68 @@ const createWindows = () => {
     libraryWindow?.close();
     musicWindow?.close();
     playerWindow?.close();
+    if (controlWindow && !controlWindow.isDestroyed()) {
+      allowControlWindowClose = true;
+      controlWindow.setClosable(true);
+      controlWindow.close();
+    }
   });
 };
 
+const createLauncherWindow = () => {
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    launcherWindow.show();
+    launcherWindow.focus();
+    return launcherWindow;
+  }
+
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = Math.min(660, workArea.width);
+  const height = Math.min(430, workArea.height);
+  const window = new BrowserWindow({
+    icon: applicationIcon(),
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    minWidth: Math.min(580, width),
+    minHeight: Math.min(380, height),
+    maxWidth: width,
+    maxHeight: height,
+    resizable: false,
+    title: 'Início - BossBar T20',
+    backgroundColor: '#0d0b10',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  launcherWindow = window;
+  loadRenderer(window, 'launcher');
+  window.on('closed', () => {
+    if (launcherWindow === window) launcherWindow = null;
+  });
+  return window;
+};
+
 const broadcastBattleState = () => {
-  for (const window of [masterWindow, playerWindow]) {
+  for (const window of [masterWindow, playerWindow, controlWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('battle:state-changed', battleState);
     }
+  }
+};
+
+const isPresentationOpen = () =>
+  Boolean(playerWindow && !playerWindow.isDestroyed());
+
+const broadcastPresentationOpen = () => {
+  if (masterWindow && !masterWindow.isDestroyed()) {
+    masterWindow.webContents.send('presentation:open-changed', isPresentationOpen());
   }
 };
 
@@ -995,6 +1299,15 @@ const broadcastBackground = () => {
 const isMasterSender = (senderId: number) =>
   Boolean(masterWindow && senderId === masterWindow.webContents.id);
 
+const isControlSender = (senderId: number) =>
+  Boolean(controlWindow && senderId === controlWindow.webContents.id);
+
+const isLauncherSender = (senderId: number) =>
+  Boolean(launcherWindow && senderId === launcherWindow.webContents.id);
+
+const isEncounterControllerSender = (senderId: number) =>
+  isMasterSender(senderId) || isControlSender(senderId);
+
 const isMusicSender = (senderId: number) =>
   Boolean(musicWindow && senderId === musicWindow.webContents.id);
 
@@ -1003,6 +1316,32 @@ const isLibrarySender = (senderId: number) =>
 
 ipcMain.handle('battle:get-state', () => battleState);
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+ipcMain.handle('presentation:is-open', (event) =>
+  isMasterSender(event.sender.id) ? isPresentationOpen() : false,
+);
+
+ipcMain.handle('control:set-minimized', (event, minimized: unknown) => {
+  if (
+    !isControlSender(event.sender.id) ||
+    typeof minimized !== 'boolean' ||
+    !controlWindow ||
+    controlWindow.isDestroyed() ||
+    !playerWindow ||
+    playerWindow.isDestroyed()
+  ) return false;
+
+  const controlBounds = controlWindow.getBounds();
+  if (!controlPanelMinimized) {
+    controlPanelExpandedHeight = Math.max(240, controlBounds.height);
+  }
+  controlPanelMinimized = minimized;
+  controlWindow.setBounds(getDockedControlBoundsForWindow(
+    playerWindow,
+    minimized ? CONTROL_PANEL_MINIMIZED_HEIGHT : controlPanelExpandedHeight,
+  ));
+  return true;
+});
 
 ipcMain.on('app:confirm-close', (event) => {
   if (!isMasterSender(event.sender.id) || !masterWindow) return;
@@ -1080,6 +1419,7 @@ ipcMain.handle('presentation:open', (event) => {
     return false;
   }
 
+  if (isPresentationOpen()) return false;
   createPlayerWindow();
   return true;
 });
@@ -1091,8 +1431,27 @@ ipcMain.handle('music:open-window', (event) => {
 });
 
 ipcMain.handle('library:open-window', (event) => {
-  if (!isMasterSender(event.sender.id)) return false;
+  if (!isMasterSender(event.sender.id) && !isLauncherSender(event.sender.id)) {
+    return false;
+  }
   return Boolean(createLibraryWindow());
+});
+
+ipcMain.handle('library:has-entries', (event) =>
+  isLauncherSender(event.sender.id) && bossLibraryEntries.length > 0,
+);
+
+ipcMain.handle('launcher:new-encounter', (event) => {
+  if (!isLauncherSender(event.sender.id)) return false;
+  battleState = {
+    ...initialBattleState,
+    bosses: [createInitialBoss('boss-1')],
+    revision: battleState.revision + 1,
+  };
+  linkedLibraryEntryId = null;
+  createEncounterWindows();
+  launcherWindow?.close();
+  return true;
 });
 
 ipcMain.handle(
@@ -1231,7 +1590,11 @@ const restoreLibraryEntry = (
     return {
       id: `boss-${index + 1}`,
       setupStatus: 'ready' as const,
+      identityPrepared: true,
+      actionPrepared: storedBoss.description.trim().length > 0,
       bossName: storedBoss.bossName.trim().slice(0, 100) || 'Chefão Sem Nome',
+      controlAmount: storedBoss.amount,
+      applyDamageReduction: true,
       maxHealth,
       currentHealth: clampInteger(storedBoss.currentHealth, 0, maxHealth),
       attack: clampInteger(storedBoss.attack, 0, 999),
@@ -1349,6 +1712,10 @@ ipcMain.handle(
       entry,
       new Set(missingFiles.map((file) => file.key)),
     );
+    if (!masterWindow || masterWindow.isDestroyed()) {
+      createEncounterWindows();
+      launcherWindow?.close();
+    }
     if (masterWindow && !masterWindow.isDestroyed()) {
       masterWindow.webContents.send('library:boss-loaded', loaded);
       masterWindow.show();
@@ -1967,6 +2334,8 @@ ipcMain.on('presentation:ready', (event) => {
   playerWindowReady = true;
   playerWindow.show();
   playerWindow.focus();
+  syncControlWindow();
+  controlWindow?.showInactive();
 });
 
 ipcMain.on('background:load-error', (event, message: unknown) => {
@@ -2019,7 +2388,7 @@ const applyHealthMutation = (
 ipcMain.handle(
   'health:sequence',
   (event, request: HealthSequenceRequest): HealthSequenceResult => {
-    if (!isMasterSender(event.sender.id)) {
+    if (!isEncounterControllerSender(event.sender.id)) {
       return { ok: false, error: 'Ação não autorizada.' };
     }
 
@@ -2082,7 +2451,7 @@ ipcMain.handle(
 );
 
 ipcMain.on('battle:dispatch', (event, command: unknown) => {
-  if (!isMasterSender(event.sender.id)) {
+  if (!isEncounterControllerSender(event.sender.id)) {
     return;
   }
 
@@ -2277,7 +2646,7 @@ app.whenReady().then(async () => {
     }
   });
 
-  createWindows();
+  createLauncherWindow();
 });
 
 app.on('window-all-closed', () => {
@@ -2288,6 +2657,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   allowAppClose = true;
+  allowControlWindowClose = true;
+  controlWindow?.setClosable(true);
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
@@ -2297,6 +2668,6 @@ app.on('before-quit', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindows();
+    createLauncherWindow();
   }
 });

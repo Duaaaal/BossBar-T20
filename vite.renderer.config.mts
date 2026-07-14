@@ -28,8 +28,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
+        launcher: path.resolve(projectRoot, 'launcher.html'),
         master: path.resolve(projectRoot, 'master.html'),
         player: path.resolve(projectRoot, 'player.html'),
+        control: path.resolve(projectRoot, 'control.html'),
         music: path.resolve(projectRoot, 'music.html'),
         library: path.resolve(projectRoot, 'library.html'),
       },

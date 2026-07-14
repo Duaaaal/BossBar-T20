@@ -90,10 +90,18 @@ const bossAPI = {
   ): Promise<HealthSequenceResult> => ipcRenderer.invoke('health:sequence', request),
   openPresentation: (): Promise<boolean> =>
     ipcRenderer.invoke('presentation:open'),
+  isPresentationOpen: (): Promise<boolean> =>
+    ipcRenderer.invoke('presentation:is-open'),
+  setControlPanelMinimized: (minimized: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('control:set-minimized', minimized),
   openMusicWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('music:open-window'),
   openBossLibrary: (): Promise<boolean> =>
     ipcRenderer.invoke('library:open-window'),
+  hasEncounterLibraryEntries: (): Promise<boolean> =>
+    ipcRenderer.invoke('library:has-entries'),
+  startNewEncounter: (): Promise<boolean> =>
+    ipcRenderer.invoke('launcher:new-encounter'),
   getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
     ipcRenderer.invoke('library:get-entries'),
   saveBossToLibrary: (
@@ -226,6 +234,11 @@ const bossAPI = {
     const listener = () => callback();
     ipcRenderer.on('app:close-requested', listener);
     return () => ipcRenderer.removeListener('app:close-requested', listener);
+  },
+  subscribePresentationOpen: (callback: (open: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, open: boolean) => callback(open);
+    ipcRenderer.on('presentation:open-changed', listener);
+    return () => ipcRenderer.removeListener('presentation:open-changed', listener);
   },
   subscribeBossLoaded: (callback: (loaded: BossLibraryLoaded) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, loaded: BossLibraryLoaded) => {
