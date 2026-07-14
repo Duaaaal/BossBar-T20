@@ -12,9 +12,12 @@ const config: ForgeConfig = {
     ? { outDir: process.env.BOSS_BUILD_OUT }
     : {}),
   packagerConfig: {
-    asar: true,
+    // Mantém futuras mídias de `assets` fora do ASAR para permitir streaming e seek.
+    asar: {
+      unpack: '**/assets/**/*.{aac,flac,m4a,m4v,mkv,mov,mp3,mp4,oga,ogg,ogv,wav,webm}',
+    },
     icon: 'assets/bossbar-icon.ico',
-    extraResource: ['assets/bossbar-icon.ico'],
+    extraResource: ['assets'],
   },
   rebuildConfig: {},
   makers: [

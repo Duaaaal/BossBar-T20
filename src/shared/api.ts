@@ -37,7 +37,7 @@ export type BossAPI = {
   ) => Promise<HealthSequenceResult>;
   openPresentation: () => Promise<boolean>;
   openMusicWindow: () => Promise<boolean>;
-  openBossLibrary: (bossId: string) => Promise<boolean>;
+  openBossLibrary: () => Promise<boolean>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
   saveBossToLibrary: (
     draft: BossLibraryDraft,

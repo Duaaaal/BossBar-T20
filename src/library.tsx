@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type {
   BossLibraryEntrySummary,
+  BossLibraryBossSummary,
   MissingLibraryFile,
 } from './shared/library';
 import './library.css';
@@ -21,8 +22,34 @@ const formatSavedAt = (value: string) => {
   }).format(date);
 };
 
-const bossNameFontSize = (name: string) =>
-  Math.max(0.46, 0.86 - Math.max(0, name.length - 22) * 0.005);
+const bossColors = ['#efb660', '#72c4ee', '#cf91e8'] as const;
+
+const bossNameFontSize = (name: string, bossCount: number) => {
+  const baseSize = bossCount === 3 ? 0.7 : bossCount === 2 ? 0.78 : 0.86;
+  return Math.max(0.43, baseSize - Math.max(0, name.length - 22) * 0.005);
+};
+
+type NumericBossField = Exclude<keyof BossLibraryBossSummary, 'bossName'>;
+
+const ColoredValues = ({
+  bosses,
+  field,
+}: {
+  bosses: BossLibraryBossSummary[];
+  field: NumericBossField;
+}) => (
+  <span className="library-multi-values">
+    {bosses.map((boss, index) => (
+      <Fragment key={`${field}-${index}`}>
+        <strong style={{ color: bossColors[index] }}>{boss[field]}</strong>
+        {index < bosses.length - 1 && <i aria-hidden="true">/</i>}
+      </Fragment>
+    ))}
+  </span>
+);
+
+const encounterLabel = (entry: BossLibraryEntrySummary) =>
+  entry.bosses.map((boss) => boss.bossName).join(' / ');
 
 const LibraryApp = () => {
   const [entries, setEntries] = useState<BossLibraryEntrySummary[]>([]);
@@ -68,7 +95,7 @@ const LibraryApp = () => {
       setMissingState({ entryId, files: result.missingFiles });
       return;
     }
-    setMessage(result.error ?? 'Não foi possível carregar o chefão.');
+    setMessage(result.error ?? 'Não foi possível carregar o encontro.');
   };
 
   const replaceMissingFile = async (file: MissingLibraryFile) => {
@@ -99,7 +126,7 @@ const LibraryApp = () => {
     const result = await window.bossAPI.deleteBossLibraryEntry(deleteTarget.id);
     setDeletingEntryId(null);
     if (!result.ok) {
-      setMessage(result.error ?? 'Não foi possível excluir o chefão.');
+      setMessage(result.error ?? 'Não foi possível excluir o encontro.');
       return;
     }
     setDeleteTarget(null);
@@ -108,17 +135,16 @@ const LibraryApp = () => {
   return (
     <main className="library-shell">
       <header className="library-header">
-        <h1>Biblioteca de Chefões</h1>
+        <h1>Biblioteca de Encontros</h1>
         <button type="button" onClick={() => window.bossAPI.closeBossLibrary()}>
           Fechar
         </button>
       </header>
 
-      <section className="library-panel" aria-label="Chefões salvos">
-        <div className="library-table" role="table" aria-label="Biblioteca de chefões">
+      <section className="library-panel" aria-label="Encontros salvos">
+        <div className="library-table" role="table" aria-label="Biblioteca de encontros">
           <div className="library-row library-table-head" role="row">
-            <span>Chefão</span>
-            <span>Valor</span>
+            <span>Encontro</span>
             <span>Vida</span>
             <span>Ataque</span>
             <span>Tiro</span>
@@ -134,8 +160,8 @@ const LibraryApp = () => {
             <div className="library-empty">Abrindo biblioteca...</div>
           ) : entries.length === 0 ? (
             <div className="library-empty">
-              <strong>Nenhum chefão salvo</strong>
-              <span>Use “Salvar chefão” na janela do mestre.</span>
+              <strong>Nenhum encontro salvo</strong>
+              <span>Use “Salvar encontro” na janela do mestre.</span>
             </div>
           ) : entries.map((entry) => (
             <div
@@ -144,32 +170,47 @@ const LibraryApp = () => {
               role="row"
               onDoubleClick={() => void loadEntry(entry.id)}
             >
-              <span className="library-boss-name">
+              <span className="library-encounter-name">
                 {entry.isAutosave && <small>Salvamento automático</small>}
-                <strong
-                  style={{ fontSize: `${bossNameFontSize(entry.bossName)}rem` }}
-                  title={entry.bossName}
-                >
-                  {entry.bossName}
-                </strong>
-              </span>
-              <span>{entry.amount}</span>
-              <span className="library-health-cell">
-                <strong>{entry.currentHealth}/{entry.maxHealth}</strong>
-                <span className={`library-health-track ${entry.shield > 0 ? 'is-shielded' : ''}`} aria-hidden="true">
-                  <span
-                    style={{
-                      width: `${Math.max(0, Math.min(100, (entry.currentHealth / Math.max(1, entry.maxHealth)) * 100))}%`,
-                    }}
-                  />
+                <span className="library-encounter-bosses">
+                  {entry.bosses.map((boss, index) => (
+                    <strong
+                      key={`${entry.id}-${index}`}
+                      style={{
+                        color: bossColors[index],
+                        fontSize: `${bossNameFontSize(boss.bossName, entry.bosses.length)}rem`,
+                      }}
+                      title={boss.bossName}
+                    >
+                      {boss.bossName}
+                    </strong>
+                  ))}
                 </span>
               </span>
-              <span>{entry.attack}</span>
-              <span>{entry.rangedAttack}</span>
-              <span>{entry.defense}</span>
-              <span>{entry.skills}</span>
-              <span>{entry.damageReduction}</span>
-              <span>{entry.shield}</span>
+              <span className={`library-health-list ${entry.isAutosave ? 'has-autosave' : ''}`}>
+                {entry.bosses.map((boss, index) => (
+                  <span className="library-health-cell" key={`${entry.id}-health-${index}`}>
+                    <strong style={{ color: bossColors[index] }}>
+                      {boss.currentHealth}/{boss.maxHealth}
+                    </strong>
+                    <span className={`library-health-track ${boss.shield > 0 ? 'is-shielded' : ''}`} aria-hidden="true">
+                      <span
+                        style={{
+                          width: `${Math.max(0, Math.min(100, (boss.currentHealth / Math.max(1, boss.maxHealth)) * 100))}%`,
+                          background: `linear-gradient(90deg, color-mix(in srgb, ${bossColors[index]} 55%, #591826), ${bossColors[index]})`,
+                          boxShadow: `0 0 6px color-mix(in srgb, ${bossColors[index]} 52%, transparent)`,
+                        }}
+                      />
+                    </span>
+                  </span>
+                ))}
+              </span>
+              <ColoredValues bosses={entry.bosses} field="attack" />
+              <ColoredValues bosses={entry.bosses} field="rangedAttack" />
+              <ColoredValues bosses={entry.bosses} field="defense" />
+              <ColoredValues bosses={entry.bosses} field="skills" />
+              <ColoredValues bosses={entry.bosses} field="damageReduction" />
+              <ColoredValues bosses={entry.bosses} field="shield" />
               <span className="library-date">{formatSavedAt(entry.updatedAt)}</span>
               <span className="library-row-actions" onDoubleClick={(event) => event.stopPropagation()}>
                 <button
@@ -182,8 +223,8 @@ const LibraryApp = () => {
                 <button
                   className="delete-library-button"
                   type="button"
-                  title={`Excluir ${entry.bossName}`}
-                  aria-label={`Excluir ${entry.bossName}`}
+                  title={`Excluir encontro: ${encounterLabel(entry)}`}
+                  aria-label={`Excluir encontro: ${encounterLabel(entry)}`}
                   disabled={loadingEntryId !== null || deletingEntryId !== null}
                   onClick={() => setDeleteTarget(entry)}
                 >
@@ -232,9 +273,9 @@ const LibraryApp = () => {
       {deleteTarget && (
         <div className="library-modal-backdrop">
           <section className="library-modal library-delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-            <p className="library-modal-eyebrow">Excluir chefão</p>
-            <h2 id="delete-title">Excluir “{deleteTarget.bossName}” da biblioteca?</h2>
-            <p>Esta linha salva será removida permanentemente.</p>
+            <p className="library-modal-eyebrow">Excluir encontro</p>
+            <h2 id="delete-title">Excluir este encontro da biblioteca?</h2>
+            <p>“{encounterLabel(deleteTarget)}” será removido permanentemente.</p>
             <div className="library-modal-actions">
               <button className="library-cancel" type="button" disabled={deletingEntryId !== null} onClick={() => setDeleteTarget(null)}>
                 Cancelar

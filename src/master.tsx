@@ -149,24 +149,43 @@ const MasterApp = () => {
 
   useEffect(() => {
     latestLibraryDraft.current =
-      activeBoss && loadedBossId.current === activeBoss.id
+      state && activeBoss && loadedBossId.current === activeBoss.id
       ? {
-          bossId: activeBoss.id,
-          bossName,
-          amount,
-          maxHealth: numberOrFallback(maxHealth, activeBoss.maxHealth),
-          currentHealth: activeBoss.currentHealth,
-          attack: numberOrFallback(attack, activeBoss.attack),
-          rangedAttack: numberOrFallback(rangedAttack, activeBoss.rangedAttack),
-          defense: numberOrFallback(defense, activeBoss.defense),
-          shield: numberOrFallback(shield, activeBoss.shield),
-          skills: numberOrFallback(skills, activeBoss.skills),
-          damageReduction: numberOrFallback(
-            damageReduction,
-            activeBoss.damageReduction,
-          ),
-          description: actionDraft,
-          actionSeverity: activeBoss.actionSeverity,
+          activeBossId: state.activeBossId,
+          bosses: state.bosses.map((boss) => boss.id === activeBoss.id
+            ? {
+                bossId: boss.id,
+                bossName,
+                amount,
+                maxHealth: numberOrFallback(maxHealth, boss.maxHealth),
+                currentHealth: boss.currentHealth,
+                attack: numberOrFallback(attack, boss.attack),
+                rangedAttack: numberOrFallback(rangedAttack, boss.rangedAttack),
+                defense: numberOrFallback(defense, boss.defense),
+                shield: numberOrFallback(shield, boss.shield),
+                skills: numberOrFallback(skills, boss.skills),
+                damageReduction: numberOrFallback(
+                  damageReduction,
+                  boss.damageReduction,
+                ),
+                description: actionDraft,
+                actionSeverity: boss.actionSeverity,
+              }
+            : {
+                bossId: boss.id,
+                bossName: boss.bossName,
+                amount,
+                maxHealth: boss.maxHealth,
+                currentHealth: boss.currentHealth,
+                attack: boss.attack,
+                rangedAttack: boss.rangedAttack,
+                defense: boss.defense,
+                shield: boss.shield,
+                skills: boss.skills,
+                damageReduction: boss.damageReduction,
+                description: boss.nextAction,
+                actionSeverity: boss.actionSeverity,
+              }),
         }
       : null;
   }, [
@@ -181,6 +200,7 @@ const MasterApp = () => {
     rangedAttack,
     shield,
     skills,
+    state,
   ]);
 
   useEffect(() => {
@@ -197,13 +217,17 @@ const MasterApp = () => {
   );
 
   useEffect(
-    () => window.bossAPI.subscribeBossLoaded(({ boss, amount: loadedAmount }) => {
+    () => window.bossAPI.subscribeBossLoaded(({ boss, amount: loadedAmount, bossCount }) => {
       loadBossForm(boss);
       setAmount(loadedAmount);
       setPendingBackgroundName(null);
       setPendingBackgroundRemoval(false);
       setBackgroundError('');
-      setLibraryMessage(`“${boss.bossName}” foi carregado da biblioteca.`);
+      setLibraryMessage(
+        bossCount === 1
+          ? `O encontro com “${boss.bossName}” foi carregado.`
+          : `Encontro com ${bossCount} chefões carregado da biblioteca.`,
+      );
     }),
     [],
   );
@@ -368,14 +392,14 @@ const MasterApp = () => {
       return;
     }
     if (!result.ok) {
-      setLibraryMessage(result.error ?? 'Não foi possível salvar o chefão.');
+      setLibraryMessage(result.error ?? 'Não foi possível salvar o encontro.');
       return;
     }
     setOverwriteConfirmationOpen(false);
     setLibraryMessage(
       mode === 'overwrite'
-        ? 'Chefão sobrescrito com sucesso.'
-        : 'Chefão salvo na biblioteca.',
+        ? 'Encontro sobrescrito com sucesso.'
+        : 'Encontro salvo na biblioteca.',
     );
   };
 
@@ -486,7 +510,7 @@ const MasterApp = () => {
       <section className="global-background-control" aria-label="Fundo universal da apresentação">
         <div className="background-control">
           <div className="background-copy">
-            <strong>Imagem ou GIF de fundo</strong>
+            <strong>Imagem, GIF ou vídeo de fundo</strong>
             <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
           </div>
           <div className="background-actions">
@@ -496,7 +520,7 @@ const MasterApp = () => {
           </div>
         </div>
         {backgroundError && <p className="upload-error">{backgroundError}</p>}
-        <p className="background-note">Recomendado: 1920 × 1080 px (16:9) · até 25 MB.</p>
+        <p className="background-note">Recomendado: 1920 × 1080 px (16:9) · vídeos em loop e sem áudio · até 25 MB.</p>
       </section>
 
       <nav className="boss-tabs" aria-label="Chefões da batalha">
@@ -564,10 +588,10 @@ const MasterApp = () => {
         </div>
       </section>
 
-      <section className="library-actions" aria-label="Biblioteca de chefões">
+      <section className="library-actions" aria-label="Biblioteca de encontros">
         <div>
-          <strong>Biblioteca</strong>
-          <span>Guarde ou recupere este chefão com suas mídias e controles.</span>
+          <strong>Biblioteca de Encontros</strong>
+          <span>Guarde ou recupere a luta completa com suas mídias e controles.</span>
         </div>
         <div className="library-action-buttons">
           <button
@@ -576,14 +600,14 @@ const MasterApp = () => {
             disabled={savingLibrary}
             onClick={() => void saveBossToLibrary()}
           >
-            {savingLibrary ? 'Salvando...' : 'Salvar chefão'}
+            {savingLibrary ? 'Salvando...' : 'Salvar encontro'}
           </button>
           <button
             className="load-library-button"
             type="button"
-            onClick={() => void window.bossAPI.openBossLibrary(activeBoss.id)}
+            onClick={() => void window.bossAPI.openBossLibrary()}
           >
-            Carregar chefão
+            Carregar encontro
           </button>
         </div>
         {libraryMessage && <p className="library-status-message">{libraryMessage}</p>}
@@ -622,8 +646,8 @@ const MasterApp = () => {
       {overwriteConfirmationOpen && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOverwriteConfirmationOpen(false); }}>
           <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="overwrite-modal-title">
-            <p className="modal-eyebrow">Chefão já salvo</p>
-            <h2 id="overwrite-modal-title">Deseja sobrescrever o chefão existente?</h2>
+            <p className="modal-eyebrow">Encontro já salvo</p>
+            <h2 id="overwrite-modal-title">Deseja sobrescrever o encontro existente?</h2>
             <p>A versão anterior será substituída por todos os dados e mídias atuais.</p>
             <div className="modal-actions library-overwrite-actions">
               <button className="modal-cancel-button" type="button" onClick={() => setOverwriteConfirmationOpen(false)}>Cancelar</button>

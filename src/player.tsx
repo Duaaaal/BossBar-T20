@@ -782,6 +782,7 @@ const PlayerApp = () => {
   const [background, setBackground] = useState<BackgroundState>({
     url: null,
     name: null,
+    mediaType: null,
   });
   const [backgroundReady, setBackgroundReady] = useState(false);
   const [healthEffects, setHealthEffects] = useState<
@@ -898,18 +899,28 @@ const PlayerApp = () => {
     let active = true;
     let requestId = 0;
     let pendingImage: HTMLImageElement | null = null;
+    let pendingVideo: HTMLVideoElement | null = null;
 
-    const cancelPendingImage = () => {
-      if (!pendingImage) return;
-      pendingImage.onload = null;
-      pendingImage.onerror = null;
-      pendingImage.removeAttribute('src');
-      pendingImage = null;
+    const cancelPendingMedia = () => {
+      if (pendingImage) {
+        pendingImage.onload = null;
+        pendingImage.onerror = null;
+        pendingImage.removeAttribute('src');
+        pendingImage = null;
+      }
+      if (pendingVideo) {
+        pendingVideo.onloadeddata = null;
+        pendingVideo.onerror = null;
+        pendingVideo.pause();
+        pendingVideo.removeAttribute('src');
+        pendingVideo.load();
+        pendingVideo = null;
+      }
     };
 
     const prepareBackground = (nextBackground: BackgroundState) => {
       const currentRequest = ++requestId;
-      cancelPendingImage();
+      cancelPendingMedia();
 
       if (!nextBackground.url) {
         if (active) {
@@ -919,25 +930,57 @@ const PlayerApp = () => {
         return;
       }
 
-      const image = new Image();
-      pendingImage = image;
       const finish = (loaded: boolean) => {
-        image.onload = null;
-        image.onerror = null;
-        if (pendingImage === image) pendingImage = null;
         if (active && currentRequest === requestId) {
           setBackground(
-            loaded ? nextBackground : { ...nextBackground, url: null },
+            loaded
+              ? nextBackground
+              : { ...nextBackground, url: null, mediaType: null },
           );
           setBackgroundReady(true);
         }
       };
-      image.onload = () => finish(true);
+
+      if (nextBackground.mediaType === 'video') {
+        const video = document.createElement('video');
+        pendingVideo = video;
+        video.muted = true;
+        video.loop = true;
+        video.preload = 'auto';
+        video.onloadeddata = () => {
+          video.onloadeddata = null;
+          video.onerror = null;
+          if (pendingVideo === video) pendingVideo = null;
+          finish(true);
+        };
+        video.onerror = () => {
+          video.onloadeddata = null;
+          video.onerror = null;
+          if (pendingVideo === video) pendingVideo = null;
+          window.bossAPI.reportBackgroundError(
+            `O vídeo "${nextBackground.name ?? 'selecionado'}" não pôde ser decodificado. Tente convertê-lo para MP4 ou WebM em 1920 × 1080 px.`,
+          );
+          finish(false);
+        };
+        video.src = nextBackground.url;
+        video.load();
+        return;
+      }
+
+      const image = new Image();
+      pendingImage = image;
+      const finishImage = (loaded: boolean) => {
+        image.onload = null;
+        image.onerror = null;
+        if (pendingImage === image) pendingImage = null;
+        finish(loaded);
+      };
+      image.onload = () => finishImage(true);
       image.onerror = () => {
         window.bossAPI.reportBackgroundError(
           `A imagem "${nextBackground.name ?? 'selecionada'}" não pôde ser decodificada. Tente convertê-la para PNG, JPG ou GIF em 1920 × 1080 px.`,
         );
-        finish(false);
+        finishImage(false);
       };
       image.src = nextBackground.url;
     };
@@ -947,7 +990,7 @@ const PlayerApp = () => {
 
     return () => {
       active = false;
-      cancelPendingImage();
+      cancelPendingMedia();
       unsubscribe();
     };
   }, []);
@@ -963,11 +1006,17 @@ const PlayerApp = () => {
     return <main className="player-loading">Preparando o encontro...</main>;
   }
 
-  const backgroundStyle = state.battleStarted && background.url
+  const backgroundStyle = state.battleStarted &&
+    background.url &&
+    background.mediaType === 'image'
     ? ({
         '--battle-background': `url("${background.url}")`,
       } as CSSProperties)
     : undefined;
+  const activeVideoUrl = state.battleStarted &&
+    background.mediaType === 'video'
+    ? background.url
+    : null;
   const visibleBosses = state.bosses.filter(
     (boss) =>
       boss.setupStatus === 'ready' && !hiddenDefeatedBosses.has(boss.id),
@@ -978,6 +1027,20 @@ const PlayerApp = () => {
       <MusicPlayer battle={state} />
       <SoundboardPlayer />
       <main className="player-stage" style={backgroundStyle}>
+        {activeVideoUrl && (
+          <video
+            key={activeVideoUrl}
+            className="battle-background-video"
+            src={activeVideoUrl}
+            autoPlay
+            disablePictureInPicture
+            loop
+            muted
+            playsInline
+            preload="auto"
+            aria-hidden="true"
+          />
+        )}
         <div className="ambient ambient-one" />
         <div className="ambient ambient-two" />
 

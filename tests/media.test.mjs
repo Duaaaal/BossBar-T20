@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveByteRange } from '../src/shared/media.ts';
+import {
+  backgroundMediaTypeForFile,
+  backgroundVideoMimeTypeForFile,
+  resolveByteRange,
+} from '../src/shared/media.ts';
+
+test('identifica imagens e vídeos compatíveis para o fundo', () => {
+  assert.equal(backgroundMediaTypeForFile('arena.PNG'), 'image');
+  assert.equal(backgroundMediaTypeForFile('ameaça.gif'), 'image');
+  assert.equal(backgroundMediaTypeForFile('entrada.MP4'), 'video');
+  assert.equal(backgroundMediaTypeForFile('portal.webm'), 'video');
+  assert.equal(backgroundMediaTypeForFile('arquivo.exe'), null);
+  assert.equal(backgroundVideoMimeTypeForFile('entrada.mp4'), 'video/mp4');
+  assert.equal(backgroundVideoMimeTypeForFile('portal.webm'), 'video/webm');
+  assert.equal(backgroundVideoMimeTypeForFile('arena.png'), null);
+});
 
 test('resolve a leitura completa e intervalos explícitos de áudio', () => {
   assert.deepEqual(resolveByteRange(null, 1000), {

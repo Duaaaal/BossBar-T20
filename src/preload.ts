@@ -92,8 +92,8 @@ const bossAPI = {
     ipcRenderer.invoke('presentation:open'),
   openMusicWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('music:open-window'),
-  openBossLibrary: (bossId: string): Promise<boolean> =>
-    ipcRenderer.invoke('library:open-window', bossId),
+  openBossLibrary: (): Promise<boolean> =>
+    ipcRenderer.invoke('library:open-window'),
   getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
     ipcRenderer.invoke('library:get-entries'),
   saveBossToLibrary: (

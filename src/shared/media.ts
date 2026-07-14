@@ -4,6 +4,58 @@ export type ByteRange = {
   partial: boolean;
 };
 
+export type BackgroundMediaType = 'image' | 'video';
+
+export const backgroundImageExtensions = [
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.jfif',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.webp',
+] as const;
+
+export const backgroundVideoExtensions = [
+  '.m4v',
+  '.mkv',
+  '.mov',
+  '.mp4',
+  '.ogv',
+  '.webm',
+] as const;
+
+const backgroundVideoMimeTypes: Readonly<Record<string, string>> = {
+  '.m4v': 'video/mp4',
+  '.mkv': 'video/x-matroska',
+  '.mov': 'video/quicktime',
+  '.mp4': 'video/mp4',
+  '.ogv': 'video/ogg',
+  '.webm': 'video/webm',
+};
+
+const fileExtension = (fileName: string) => {
+  const extensionStart = fileName.lastIndexOf('.');
+  return extensionStart < 0 ? '' : fileName.slice(extensionStart).toLowerCase();
+};
+
+export const backgroundMediaTypeForFile = (
+  fileName: string,
+): BackgroundMediaType | null => {
+  const extension = fileExtension(fileName);
+  if ((backgroundImageExtensions as readonly string[]).includes(extension)) {
+    return 'image';
+  }
+  if ((backgroundVideoExtensions as readonly string[]).includes(extension)) {
+    return 'video';
+  }
+  return null;
+};
+
+export const backgroundVideoMimeTypeForFile = (fileName: string) =>
+  backgroundVideoMimeTypes[fileExtension(fileName)] ?? null;
+
 export const resolveByteRange = (
   rangeHeader: string | null,
   fileSize: number,

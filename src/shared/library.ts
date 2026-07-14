@@ -1,6 +1,6 @@
 import type { BossState } from './battle';
 
-export type BossLibraryDraft = {
+export type BossLibraryBossDraft = {
   bossId: string;
   bossName: string;
   amount: string;
@@ -16,11 +16,13 @@ export type BossLibraryDraft = {
   actionSeverity: 'normal' | 'grave';
 };
 
-export type BossLibraryEntrySummary = {
-  id: string;
-  isAutosave: boolean;
+export type BossLibraryDraft = {
+  activeBossId: string;
+  bosses: BossLibraryBossDraft[];
+};
+
+export type BossLibraryBossSummary = {
   bossName: string;
-  amount: string;
   maxHealth: number;
   currentHealth: number;
   attack: number;
@@ -29,6 +31,12 @@ export type BossLibraryEntrySummary = {
   shield: number;
   skills: number;
   damageReduction: number;
+};
+
+export type BossLibraryEntrySummary = {
+  id: string;
+  isAutosave: boolean;
+  bosses: BossLibraryBossSummary[];
   updatedAt: string;
 };
 
@@ -68,4 +76,5 @@ export type BossLibraryReplaceResult = {
 export type BossLibraryLoaded = {
   boss: BossState;
   amount: string;
+  bossCount: number;
 };

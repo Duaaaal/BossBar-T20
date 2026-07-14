@@ -26,6 +26,7 @@ export type BattleState = {
 export type BackgroundState = {
   url: string | null;
   name: string | null;
+  mediaType: 'image' | 'video' | null;
 };
 
 export type BackgroundSelectionResult = {
