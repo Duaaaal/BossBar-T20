@@ -31,6 +31,7 @@ export default defineConfig({
         master: path.resolve(projectRoot, 'master.html'),
         player: path.resolve(projectRoot, 'player.html'),
         music: path.resolve(projectRoot, 'music.html'),
+        library: path.resolve(projectRoot, 'library.html'),
       },
     },
   },

@@ -7,6 +7,7 @@ export type BossState = {
   attack: number;
   rangedAttack: number;
   defense: number;
+  shield: number;
   skills: number;
   damageReduction: number;
   nextAction: string;
@@ -42,7 +43,16 @@ export type HealthEffect = {
   from: number;
   to: number;
   maximum: number;
+  shieldFrom: number;
+  shieldTo: number;
 };
+
+export const isHeavyDamageEffect = (effect: HealthEffect) =>
+  effect.type === 'damage' &&
+  effect.from - effect.to > effect.maximum * 0.1;
+
+export const isShieldBreakEffect = (effect: HealthEffect) =>
+  effect.type === 'damage' && effect.shieldFrom > 0 && effect.shieldTo === 0;
 
 export type HealthSequenceRequest = {
   bossId: string;
@@ -104,6 +114,7 @@ export type MusicState = {
   loop: boolean;
   volume: number;
   muted: boolean;
+  universalMuted: boolean;
   playbackVersion: number;
   revision: number;
 };
@@ -142,6 +153,7 @@ export type SoundboardState = {
   slots: SoundboardSlot[];
   volume: number;
   muted: boolean;
+  universalMuted: boolean;
   revision: number;
 };
 
@@ -238,6 +250,7 @@ export type BattleCommand =
       attack: number;
       rangedAttack: number;
       defense: number;
+      shield: number;
       skills: number;
       damageReduction: number;
     }
@@ -268,6 +281,7 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   attack: 10,
   rangedAttack: 10,
   defense: 10,
+  shield: 0,
   skills: 10,
   damageReduction: 10,
   nextAction: '',
@@ -298,7 +312,7 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
       return (
         hasBossId(command) &&
         typeof command.bossName === 'string' &&
-        ['maxHealth', 'attack', 'rangedAttack', 'defense', 'skills', 'damageReduction'].every(
+        ['maxHealth', 'attack', 'rangedAttack', 'defense', 'shield', 'skills', 'damageReduction'].every(
           (field) =>
             typeof command[field] === 'number' && Number.isFinite(command[field]),
         )
@@ -365,18 +379,27 @@ export const applyBattleCommand = (
           attack: clampInteger(command.attack, 0, 999),
           rangedAttack: clampInteger(command.rangedAttack, 0, 999),
           defense: clampInteger(command.defense, 0, 999),
+          shield: clampInteger(command.shield, 0, 999),
           skills: clampInteger(command.skills, 0, 999),
           damageReduction: clampInteger(command.damageReduction, 0, 999),
         };
       });
     case 'damage':
-      return updateBoss(state, command.bossId, (boss) => ({
-        ...boss,
-        currentHealth: Math.max(
-          0,
-          boss.currentHealth - clampInteger(Math.abs(command.amount), 0, 1_000_000),
-        ),
-      }));
+      return updateBoss(state, command.bossId, (boss) =>
+        boss.shield > 0
+          ? { ...boss, shield: boss.shield - 1 }
+          : {
+              ...boss,
+              currentHealth: Math.max(
+                0,
+                boss.currentHealth - clampInteger(
+                  Math.abs(command.amount),
+                  0,
+                  1_000_000,
+                ),
+              ),
+            },
+      );
     case 'heal':
       return updateBoss(state, command.bossId, (boss) => ({
         ...boss,

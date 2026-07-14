@@ -6,9 +6,15 @@ import {
   type BattleState,
   type BossState,
 } from './shared/battle';
+import type {
+  BossLibraryDraft,
+  BossLibrarySaveMode,
+} from './shared/library';
 import './master.css';
+import './scrollbars.css';
 
 type CompactNumberFieldProps = {
+  className?: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -32,14 +38,20 @@ const parseHealthExpression = (value: string) => {
   return { total, hits };
 };
 
+const numberOrFallback = (value: string, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 const CompactNumberField = ({
+  className = '',
   label,
   value,
   onChange,
   min = 0,
   max = 999,
 }: CompactNumberFieldProps) => (
-  <label className="compact-field">
+  <label className={`compact-field ${className}`}>
     {label}
     <input
       value={value}
@@ -54,11 +66,13 @@ const CompactNumberField = ({
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [appVersion, setAppVersion] = useState('...');
+  const [universalMuted, setUniversalMuted] = useState(false);
   const [bossName, setBossName] = useState('');
   const [maxHealth, setMaxHealth] = useState('');
   const [attack, setAttack] = useState('10');
   const [rangedAttack, setRangedAttack] = useState('10');
   const [defense, setDefense] = useState('10');
+  const [shield, setShield] = useState('0');
   const [skills, setSkills] = useState('10');
   const [damageReduction, setDamageReduction] = useState('10');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
@@ -70,9 +84,16 @@ const MasterApp = () => {
   const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
+  const [overwriteConfirmationOpen, setOverwriteConfirmationOpen] = useState(false);
+  const [libraryMessage, setLibraryMessage] = useState('');
+  const [savingLibrary, setSavingLibrary] = useState(false);
+  const [closingApp, setClosingApp] = useState(false);
+  const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
   const cancelResetButton = useRef<HTMLButtonElement>(null);
   const cancelCloseButton = useRef<HTMLButtonElement>(null);
   const loadedBossId = useRef<string | null>(null);
+  const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
+  const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadBossForm = (boss: BossState) => {
     loadedBossId.current = boss.id;
@@ -81,6 +102,7 @@ const MasterApp = () => {
     setAttack(String(boss.attack));
     setRangedAttack(String(boss.rangedAttack));
     setDefense(String(boss.defense));
+    setShield(String(boss.shield));
     setSkills(String(boss.skills));
     setDamageReduction(String(boss.damageReduction));
     setActionDraft(boss.nextAction);
@@ -103,6 +125,19 @@ const MasterApp = () => {
     window.bossAPI.getAppVersion().then(setAppVersion);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const updateMute = (musicState: { universalMuted: boolean }) => {
+      if (active) setUniversalMuted(musicState.universalMuted);
+    };
+    window.bossAPI.getMusicState().then(updateMute);
+    const unsubscribe = window.bossAPI.subscribeMusic(updateMute);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
   useEffect(
     () => window.bossAPI.subscribeAppCloseRequested(() => {
       setCloseConfirmationOpen(true);
@@ -113,13 +148,93 @@ const MasterApp = () => {
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
 
   useEffect(() => {
+    latestLibraryDraft.current =
+      activeBoss && loadedBossId.current === activeBoss.id
+      ? {
+          bossId: activeBoss.id,
+          bossName,
+          amount,
+          maxHealth: numberOrFallback(maxHealth, activeBoss.maxHealth),
+          currentHealth: activeBoss.currentHealth,
+          attack: numberOrFallback(attack, activeBoss.attack),
+          rangedAttack: numberOrFallback(rangedAttack, activeBoss.rangedAttack),
+          defense: numberOrFallback(defense, activeBoss.defense),
+          shield: numberOrFallback(shield, activeBoss.shield),
+          skills: numberOrFallback(skills, activeBoss.skills),
+          damageReduction: numberOrFallback(
+            damageReduction,
+            activeBoss.damageReduction,
+          ),
+          description: actionDraft,
+          actionSeverity: activeBoss.actionSeverity,
+        }
+      : null;
+  }, [
+    actionDraft,
+    activeBoss,
+    amount,
+    attack,
+    bossName,
+    damageReduction,
+    defense,
+    maxHealth,
+    rangedAttack,
+    shield,
+    skills,
+  ]);
+
+  useEffect(() => {
     if (activeBoss && loadedBossId.current !== activeBoss.id) loadBossForm(activeBoss);
   }, [activeBoss]);
+
+  useEffect(() => {
+    if (activeBoss) setShield(String(activeBoss.shield));
+  }, [activeBoss?.id, activeBoss?.shield]);
 
   useEffect(
     () => window.bossAPI.subscribeBackgroundError(setBackgroundError),
     [],
   );
+
+  useEffect(
+    () => window.bossAPI.subscribeBossLoaded(({ boss, amount: loadedAmount }) => {
+      loadBossForm(boss);
+      setAmount(loadedAmount);
+      setPendingBackgroundName(null);
+      setPendingBackgroundRemoval(false);
+      setBackgroundError('');
+      setLibraryMessage(`“${boss.bossName}” foi carregado da biblioteca.`);
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const draft = latestLibraryDraft.current;
+      if (!draft) return;
+      void window.bossAPI.saveBossAutosave(draft).then((result) => {
+        if (!result.ok) {
+          console.error(result.error ?? 'Falha no salvamento automático.');
+          return;
+        }
+        setAutosaveNoticeVisible(true);
+        if (autosaveNoticeTimer.current) {
+          clearTimeout(autosaveNoticeTimer.current);
+        }
+        autosaveNoticeTimer.current = setTimeout(() => {
+          autosaveNoticeTimer.current = null;
+          setAutosaveNoticeVisible(false);
+        }, 4000);
+      });
+    }, 5 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      if (autosaveNoticeTimer.current) {
+        clearTimeout(autosaveNoticeTimer.current);
+        autosaveNoticeTimer.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!resetConfirmationOpen) return;
@@ -149,6 +264,15 @@ const MasterApp = () => {
     };
   }, [closeConfirmationOpen]);
 
+  useEffect(() => {
+    if (!overwriteConfirmationOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOverwriteConfirmationOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [overwriteConfirmationOpen]);
+
   const saveBoss = (event: FormEvent) => {
     event.preventDefault();
     if (!activeBoss) return;
@@ -160,6 +284,7 @@ const MasterApp = () => {
       attack: Number(attack),
       rangedAttack: Number(rangedAttack),
       defense: Number(defense),
+      shield: Number(shield),
       skills: Number(skills),
       damageReduction: Number(damageReduction),
     });
@@ -231,35 +356,110 @@ const MasterApp = () => {
     });
   };
 
+  const saveBossToLibrary = async (mode: BossLibrarySaveMode = 'prompt') => {
+    const draft = latestLibraryDraft.current;
+    if (!draft) return;
+    setSavingLibrary(true);
+    setLibraryMessage('');
+    const result = await window.bossAPI.saveBossToLibrary(draft, mode);
+    setSavingLibrary(false);
+    if (result.requiresOverwrite) {
+      setOverwriteConfirmationOpen(true);
+      return;
+    }
+    if (!result.ok) {
+      setLibraryMessage(result.error ?? 'Não foi possível salvar o chefão.');
+      return;
+    }
+    setOverwriteConfirmationOpen(false);
+    setLibraryMessage(
+      mode === 'overwrite'
+        ? 'Chefão sobrescrito com sucesso.'
+        : 'Chefão salvo na biblioteca.',
+    );
+  };
+
+  const confirmAppClose = async () => {
+    const draft = latestLibraryDraft.current;
+    setClosingApp(true);
+    if (draft) {
+      const result = await window.bossAPI.saveBossAutosave(draft);
+      if (!result.ok) {
+        setClosingApp(false);
+        setCloseConfirmationOpen(false);
+        setLibraryMessage(
+          result.error ?? 'Não foi possível criar o salvamento automático antes de fechar.',
+        );
+        return;
+      }
+    }
+    window.bossAPI.confirmAppClose();
+  };
+
   if (!state || !activeBoss) return <main className="master-loading">Conectando à luta...</main>;
 
   const healthPercent = Math.max(0, Math.min(100, (activeBoss.currentHealth / activeBoss.maxHealth) * 100));
   const backgroundPending = Boolean(pendingBackgroundName || pendingBackgroundRemoval);
   const parsedHealthAmount = parseHealthExpression(amount);
-  const rawAmount = parsedHealthAmount
+  const rawSequence = parsedHealthAmount
     ? calculateHealthSequence({
         type: 'damage',
         total: parsedHealthAmount.total,
         hits: parsedHealthAmount.hits,
         ignoreDamageReduction: true,
-      }).effectiveTotal
-    : 0;
-  const reducedDamage = parsedHealthAmount
+      })
+    : null;
+  const reducedSequence = parsedHealthAmount
     ? calculateHealthSequence({
         type: 'damage',
         total: parsedHealthAmount.total,
         hits: parsedHealthAmount.hits,
         damageReduction: activeBoss.damageReduction,
-      }).effectiveTotal
+      })
+    : null;
+  const rawAmount = rawSequence?.effectiveTotal ?? 0;
+  const damagingHits = parsedHealthAmount
+    ? Math.max(0, parsedHealthAmount.hits - activeBoss.shield)
     : 0;
-  const displayedDamage = applyDamageReduction ? reducedDamage : rawAmount;
+  const selectedDamagePerHit = applyDamageReduction
+    ? reducedSequence?.effectiveAmountPerHit ?? 0
+    : rawSequence?.effectiveAmountPerHit ?? 0;
+  const displayedDamage = selectedDamagePerHit * damagingHits;
   const setupPending = activeBoss.setupStatus !== 'ready';
   const identitySetupNotice = activeBoss.setupStatus === 'initial'
     ? 'Revise os dados do chefão antes de iniciar a luta.'
     : 'Salve os dados antes de revelar este novo chefão na luta.';
 
+  const dismissAutosaveNotice = () => {
+    if (autosaveNoticeTimer.current) {
+      clearTimeout(autosaveNoticeTimer.current);
+      autosaveNoticeTimer.current = null;
+    }
+    setAutosaveNoticeVisible(false);
+  };
+
   return (
     <main className="master-shell">
+      <button
+        className={`universal-mute-button ${universalMuted ? 'is-muted' : ''}`}
+        type="button"
+        title={universalMuted ? 'Desativar mute universal' : 'Ativar mute universal'}
+        aria-label={universalMuted ? 'Desativar mute universal' : 'Ativar mute universal'}
+        aria-pressed={universalMuted}
+        onClick={() => window.bossAPI.setUniversalMute(!universalMuted)}
+      >
+        <span aria-hidden="true">{universalMuted ? '🔇' : '🔊'}</span>
+      </button>
+      {autosaveNoticeVisible && (
+        <button
+          className="autosave-notification"
+          type="button"
+          aria-live="polite"
+          onClick={dismissAutosaveNotice}
+        >
+          Salvamento automático concluído
+        </button>
+      )}
       <header className="master-header">
         <p className="master-brand">
           <span>BossBar</span><small>para</small><strong>Tormenta 20</strong>
@@ -296,7 +496,7 @@ const MasterApp = () => {
           </div>
         </div>
         {backgroundError && <p className="upload-error">{backgroundError}</p>}
-        <p className="background-note">Fundo universal · recomendado: 1920 × 1080 px (16:9) · até 25 MB.</p>
+        <p className="background-note">Recomendado: 1920 × 1080 px (16:9) · até 25 MB.</p>
       </section>
 
       <nav className="boss-tabs" aria-label="Chefões da batalha">
@@ -318,7 +518,7 @@ const MasterApp = () => {
       <section className="status-card" aria-label="Estado atual do chefão">
         <div><span>Chefão atual</span><strong>{activeBoss.bossName}</strong></div>
         <div className="health-numbers"><strong>{activeBoss.currentHealth}</strong><span>/ {activeBoss.maxHealth} PV</span></div>
-        <div className="health-track"><div className="health-fill" style={{ width: `${healthPercent}%` }} /></div>
+        <div className="health-track"><div className={`health-fill ${activeBoss.shield > 0 ? 'is-shielded' : ''}`} style={{ width: `${healthPercent}%` }} /></div>
         <div className="health-action-row status-health-actions">
           <label className="compact-field amount-field">Valor
             <input aria-label="Valor de dano ou cura" inputMode="decimal" value={amount} onChange={(event) => { if (/^[0-9.,/]*$/.test(event.target.value)) setAmount(event.target.value); }} />
@@ -331,7 +531,7 @@ const MasterApp = () => {
         {healthError && <p className="health-error">{healthError}</p>}
         <div className="boss-summary-stats">
           {[
-            ['Ataque', activeBoss.attack], ['Tiro', activeBoss.rangedAttack], ['Perícias', activeBoss.skills], ['Defesa', activeBoss.defense], ['RD', activeBoss.damageReduction],
+            ['Ataque', activeBoss.attack], ['Tiro', activeBoss.rangedAttack], ['Perícias', activeBoss.skills], ['Defesa', activeBoss.defense], ['Escudo', activeBoss.shield], ['RD', activeBoss.damageReduction],
           ].map(([label, value]) => <div className="summary-stat" key={label}><span>{label}</span><strong>{value}</strong></div>)}
         </div>
 
@@ -344,23 +544,49 @@ const MasterApp = () => {
           <CompactNumberField label="Vida máx." value={maxHealth} min={1} max={1_000_000} onChange={setMaxHealth} />
           <CompactNumberField label="Ataque" value={attack} onChange={setAttack} />
           <CompactNumberField label="Tiro" value={rangedAttack} onChange={setRangedAttack} />
-          <CompactNumberField label="Defesa" value={defense} onChange={setDefense} />
           <CompactNumberField label="Perícias" value={skills} onChange={setSkills} />
+          <CompactNumberField label="Defesa" value={defense} onChange={setDefense} />
           <CompactNumberField label="RD" value={damageReduction} onChange={setDamageReduction} />
+          <CompactNumberField label="Escudo" value={shield} onChange={setShield} />
+          <button className="identity-save-button" type="submit">Salvar</button>
         </div>
         {setupPending && <p className="setup-notice">{identitySetupNotice}</p>}
-        <button className="secondary-button" type="submit">Salvar dados do chefão</button>
       </form>
 
       <section className="panel">
         <div className="panel-title"><span className="step">02</span><h2>Próxima ação</h2></div>
-        <textarea className="action-input" aria-label="Próxima ação do chefão" placeholder="Descreva a próxima ação para preparar os jogadores." value={actionDraft} maxLength={100} rows={1} onChange={(event) => setActionDraft(event.target.value)} />
-        {setupPending && <p className="setup-notice action-setup-notice">Revise também a descrição antes de revelar este chefão.</p>}
+        <textarea className="action-input" aria-label="Próxima ação do chefão" placeholder="Descreva a próxima ação para preparar os jogadores." value={actionDraft} maxLength={100} rows={2} onChange={(event) => setActionDraft(event.target.value)} />
+        {setupPending && <p className="setup-notice action-setup-notice">Revise a descrição antes de revelar este chefão.</p>}
         <div className="field-meta"><p className="field-note">O texto só aparece para os jogadores depois de ser publicado.</p><span>{actionDraft.length}/100</span></div>
         <div className="publish-action-grid">
           <button className="publish-button" type="button" onClick={() => publishAction('normal')}>Publicar ação</button>
           <button className="publish-danger-button" type="button" onClick={() => publishAction('grave')}>Publicar ação grave</button>
         </div>
+      </section>
+
+      <section className="library-actions" aria-label="Biblioteca de chefões">
+        <div>
+          <strong>Biblioteca</strong>
+          <span>Guarde ou recupere este chefão com suas mídias e controles.</span>
+        </div>
+        <div className="library-action-buttons">
+          <button
+            className="save-library-button"
+            type="button"
+            disabled={savingLibrary}
+            onClick={() => void saveBossToLibrary()}
+          >
+            {savingLibrary ? 'Salvando...' : 'Salvar chefão'}
+          </button>
+          <button
+            className="load-library-button"
+            type="button"
+            onClick={() => void window.bossAPI.openBossLibrary(activeBoss.id)}
+          >
+            Carregar chefão
+          </button>
+        </div>
+        {libraryMessage && <p className="library-status-message">{libraryMessage}</p>}
       </section>
 
       <footer className="master-footer">
@@ -387,7 +613,22 @@ const MasterApp = () => {
             <p id="close-modal-description">A apresentação e a janela de trilha sonora também serão fechadas.</p>
             <div className="modal-actions">
               <button ref={cancelCloseButton} className="modal-cancel-button" type="button" onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
-              <button className="modal-confirm-button" type="button" onClick={() => window.bossAPI.confirmAppClose()}>Sim, fechar</button>
+              <button className="modal-confirm-button" type="button" disabled={closingApp} onClick={() => void confirmAppClose()}>{closingApp ? 'Salvando...' : 'Sim, fechar'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {overwriteConfirmationOpen && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOverwriteConfirmationOpen(false); }}>
+          <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="overwrite-modal-title">
+            <p className="modal-eyebrow">Chefão já salvo</p>
+            <h2 id="overwrite-modal-title">Deseja sobrescrever o chefão existente?</h2>
+            <p>A versão anterior será substituída por todos os dados e mídias atuais.</p>
+            <div className="modal-actions library-overwrite-actions">
+              <button className="modal-cancel-button" type="button" onClick={() => setOverwriteConfirmationOpen(false)}>Cancelar</button>
+              <button className="modal-cancel-button" type="button" onClick={() => void saveBossToLibrary('new')}>Salvar como novo</button>
+              <button className="modal-confirm-button" type="button" onClick={() => void saveBossToLibrary('overwrite')}>Sobrescrever</button>
             </div>
           </section>
         </div>

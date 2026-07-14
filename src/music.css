@@ -22,13 +22,50 @@ button { font: inherit; }
 .music-shell.is-soundboard-open {
   display: grid;
   grid-template-columns: minmax(440px, 540px) minmax(390px, 1fr);
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   column-gap: 18px;
 }
 
 .music-shell.is-soundboard-open .music-header { grid-column: 1 / -1; }
-.music-shell.is-soundboard-open .playlist-panel { grid-column: 1; grid-row: 2; }
-.music-shell.is-soundboard-open .transport-panel { grid-column: 1; grid-row: 3; align-self: start; }
+.music-shell.is-soundboard-open .universal-mute-warning { grid-column: 1 / -1; grid-row: 2; }
+.music-shell.is-soundboard-open .playlist-panel { grid-column: 1; grid-row: 3; }
+.music-shell.is-soundboard-open .transport-panel { grid-column: 1; grid-row: 4; align-self: start; }
+
+.universal-mute-warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid rgba(235, 75, 94, .68);
+  border-radius: 11px;
+  padding: 10px 13px;
+  background:
+    linear-gradient(90deg, rgba(113, 25, 40, .96), rgba(74, 22, 34, .94));
+  box-shadow: 0 0 22px rgba(218, 50, 72, .2);
+  color: #ffe5e8;
+}
+
+.universal-mute-warning > span {
+  flex: 0 0 auto;
+  font-size: 1.25rem;
+}
+
+.universal-mute-warning strong {
+  display: block;
+  font-size: .72rem;
+  font-weight: 950;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.universal-mute-warning p {
+  margin: 3px 0 0;
+  color: #efb9c0;
+  font-size: .65rem;
+  line-height: 1.35;
+}
+
+.music-shell.is-universally-muted .playlist { height: 238px; }
 
 .now-playing-label {
   margin: 0;
@@ -45,7 +82,7 @@ button { font: inherit; }
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 0 7px;
+  margin: 0;
   color: #c398df;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   font-size: .72rem;
@@ -201,7 +238,7 @@ button { font: inherit; }
 
 .soundboard-panel {
   grid-column: 2;
-  grid-row: 2 / 4;
+  grid-row: 3 / 5;
   min-height: 0;
   margin-top: 22px;
   border: 1px solid #3b3041;

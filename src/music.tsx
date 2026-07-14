@@ -9,6 +9,7 @@ import type {
   SoundboardState,
 } from './shared/battle';
 import './music.css';
+import './scrollbars.css';
 
 const MusicApp = () => {
   const [state, setState] = useState<MusicState | null>(null);
@@ -146,11 +147,10 @@ const MusicApp = () => {
   };
 
   return (
-    <main className={`music-shell ${soundboardOpen ? 'is-soundboard-open' : ''}`}>
+    <main className={`music-shell ${soundboardOpen ? 'is-soundboard-open' : ''} ${state.universalMuted ? 'is-universally-muted' : ''}`}>
       <header className="music-header">
         <div>
           <h1>Trilha Sonora</h1>
-          <span>O áudio é reproduzido somente na apresentação.</span>
         </div>
         <button
           className={soundboardOpen ? 'is-active' : ''}
@@ -162,11 +162,21 @@ const MusicApp = () => {
         </button>
       </header>
 
+      {state.universalMuted && (
+        <aside className="universal-mute-warning" role="status" aria-live="assertive">
+          <span aria-hidden="true">🔇</span>
+          <div>
+            <strong>Mute universal ativo</strong>
+            <p>Nenhum som será emitido pela playlist ou pelo soundboard, embora os controles continuem funcionando.</p>
+          </div>
+        </aside>
+      )}
+
       <section className="playlist-panel">
         <div className="playlist-heading">
           <div>
             <h2>Playlist</h2>
-            <span>{state.tracks.length} faixa(s) · somente MP3</span>
+            <span>{state.tracks.length} faixa(s)</span>
           </div>
           <div className="playlist-heading-actions">
             <button className="clear-playlist-button" type="button" disabled={state.tracks.length === 0} onClick={() => setClearConfirmationOpen(true)}>
@@ -321,7 +331,6 @@ const MusicApp = () => {
           <div className="soundboard-heading">
             <div>
               <h2>Soundboard</h2>
-              <span>20 atalhos locais · somente MP3</span>
             </div>
             <div className="soundboard-heading-actions">
               <button

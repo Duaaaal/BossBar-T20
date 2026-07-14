@@ -16,6 +16,16 @@ import type {
   SoundboardStop,
   SoundEffect,
 } from './battle';
+import type {
+  BossLibraryDraft,
+  BossLibraryDeleteResult,
+  BossLibraryEntrySummary,
+  BossLibraryLoadResult,
+  BossLibraryLoaded,
+  BossLibraryReplaceResult,
+  BossLibrarySaveMode,
+  BossLibrarySaveResult,
+} from './library';
 
 export type BossAPI = {
   getState: () => Promise<BattleState>;
@@ -27,10 +37,32 @@ export type BossAPI = {
   ) => Promise<HealthSequenceResult>;
   openPresentation: () => Promise<boolean>;
   openMusicWindow: () => Promise<boolean>;
+  openBossLibrary: (bossId: string) => Promise<boolean>;
+  getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
+  saveBossToLibrary: (
+    draft: BossLibraryDraft,
+    mode: BossLibrarySaveMode,
+  ) => Promise<BossLibrarySaveResult>;
+  saveBossAutosave: (
+    draft: BossLibraryDraft,
+  ) => Promise<BossLibrarySaveResult>;
+  loadBossFromLibrary: (
+    entryId: string,
+    continueWithoutMissing: boolean,
+  ) => Promise<BossLibraryLoadResult>;
+  replaceBossLibraryFile: (
+    entryId: string,
+    key: string,
+  ) => Promise<BossLibraryReplaceResult>;
+  deleteBossLibraryEntry: (
+    entryId: string,
+  ) => Promise<BossLibraryDeleteResult>;
+  closeBossLibrary: () => void;
   addMusicTracks: () => Promise<MusicSelectionResult>;
   getMusicState: () => Promise<MusicState>;
   getMusicPlayback: () => Promise<MusicPlaybackState>;
   dispatchMusic: (command: MusicCommand) => void;
+  setUniversalMute: (muted: boolean) => void;
   getSoundboardState: () => Promise<SoundboardState>;
   assignSoundboardSlot: (
     index: number,
@@ -60,6 +92,10 @@ export type BossAPI = {
     callback: (effect: HealthEffect) => void,
   ) => () => void;
   subscribeAppCloseRequested: (callback: () => void) => () => void;
+  subscribeBossLoaded: (
+    callback: (loaded: BossLibraryLoaded) => void,
+  ) => () => void;
+  subscribeBossLibraryChanged: (callback: () => void) => () => void;
   subscribeMusic: (callback: (state: MusicState) => void) => () => void;
   subscribeMusicPlayback: (
     callback: (state: MusicPlaybackState) => void,

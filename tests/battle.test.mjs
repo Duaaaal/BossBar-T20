@@ -5,6 +5,8 @@ import {
   calculateHealthSequence,
   createInitialBoss,
   initialBattleState,
+  isHeavyDamageEffect,
+  isShieldBreakEffect,
   isMusicCommand,
   isSoundboardCommand,
   volumeToGain,
@@ -38,6 +40,7 @@ test('mantém os dados e a vida isolados por chefão', () => {
     attack: 22,
     rangedAttack: 18,
     defense: 16,
+    shield: 0,
     skills: 14,
     damageReduction: 8,
   });
@@ -80,6 +83,7 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
     attack: 2000,
     rangedAttack: -5,
     defense: 20,
+    shield: 2000,
     skills: 30,
     damageReduction: 40,
   });
@@ -90,6 +94,7 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.currentHealth, 1_000_000);
   assert.equal(boss.attack, 999);
   assert.equal(boss.rangedAttack, 0);
+  assert.equal(boss.shield, 999);
 });
 
 test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () => {
@@ -156,6 +161,7 @@ test('só prepara chefões novos ao salvar e libera o inicial ao começar', () =
     attack: 10,
     rangedAttack: 10,
     defense: 10,
+    shield: 0,
     skills: 10,
     damageReduction: 10,
   });
@@ -184,4 +190,66 @@ test('valida comandos limitados aos 20 botões do soundboard', () => {
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: 0.75 }), true);
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: Number.NaN }), false);
   assert.equal(isMusicCommand({ type: 'toggle-mute' }), true);
+});
+
+test('só considera pesado o golpe que remove mais de dez por cento da vida', () => {
+  const effect = {
+    id: 1,
+    bossId: 'boss-1',
+    type: 'damage',
+    intensity: 'normal',
+    from: 500,
+    to: 450,
+    maximum: 500,
+    shieldFrom: 0,
+    shieldTo: 0,
+  };
+  assert.equal(isHeavyDamageEffect(effect), false);
+  assert.equal(isHeavyDamageEffect({ ...effect, to: 449 }), true);
+  assert.equal(isHeavyDamageEffect({ ...effect, type: 'heal', to: 300 }), false);
+});
+
+test('consome um ponto de escudo por golpe antes de atingir a vida', () => {
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Guardião de Aço',
+    maxHealth: 500,
+    attack: 10,
+    rangedAttack: 10,
+    defense: 10,
+    shield: 3,
+    skills: 10,
+    damageReduction: 10,
+  });
+
+  for (let hit = 0; hit < 3; hit += 1) {
+    state = applyBattleCommand(state, {
+      type: 'damage',
+      bossId: 'boss-1',
+      amount: 100,
+    });
+  }
+  assert.equal(state.bosses[0].shield, 0);
+  assert.equal(state.bosses[0].currentHealth, 500);
+
+  state = applyBattleCommand(state, {
+    type: 'damage',
+    bossId: 'boss-1',
+    amount: 100,
+  });
+  assert.equal(state.bosses[0].currentHealth, 400);
+
+  const breakEffect = {
+    id: 2,
+    bossId: 'boss-1',
+    type: 'damage',
+    intensity: 'normal',
+    from: 500,
+    to: 500,
+    maximum: 500,
+    shieldFrom: 1,
+    shieldTo: 0,
+  };
+  assert.equal(isShieldBreakEffect(breakEffect), true);
 });

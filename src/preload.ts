@@ -18,6 +18,16 @@ import type {
   SoundboardStop,
   SoundEffect,
 } from './shared/battle';
+import type {
+  BossLibraryDraft,
+  BossLibraryDeleteResult,
+  BossLibraryEntrySummary,
+  BossLibraryLoadResult,
+  BossLibraryLoaded,
+  BossLibraryReplaceResult,
+  BossLibrarySaveMode,
+  BossLibrarySaveResult,
+} from './shared/library';
 
 let latestBattleState: BattleState | null = null;
 const stateSubscribers = new Set<(state: BattleState) => void>();
@@ -82,6 +92,34 @@ const bossAPI = {
     ipcRenderer.invoke('presentation:open'),
   openMusicWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('music:open-window'),
+  openBossLibrary: (bossId: string): Promise<boolean> =>
+    ipcRenderer.invoke('library:open-window', bossId),
+  getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
+    ipcRenderer.invoke('library:get-entries'),
+  saveBossToLibrary: (
+    draft: BossLibraryDraft,
+    mode: BossLibrarySaveMode,
+  ): Promise<BossLibrarySaveResult> =>
+    ipcRenderer.invoke('library:save-boss', draft, mode),
+  saveBossAutosave: (
+    draft: BossLibraryDraft,
+  ): Promise<BossLibrarySaveResult> =>
+    ipcRenderer.invoke('library:autosave', draft),
+  loadBossFromLibrary: (
+    entryId: string,
+    continueWithoutMissing: boolean,
+  ): Promise<BossLibraryLoadResult> =>
+    ipcRenderer.invoke('library:load-boss', entryId, continueWithoutMissing),
+  replaceBossLibraryFile: (
+    entryId: string,
+    key: string,
+  ): Promise<BossLibraryReplaceResult> =>
+    ipcRenderer.invoke('library:replace-file', entryId, key),
+  deleteBossLibraryEntry: (
+    entryId: string,
+  ): Promise<BossLibraryDeleteResult> =>
+    ipcRenderer.invoke('library:delete-entry', entryId),
+  closeBossLibrary: () => ipcRenderer.send('library:close-window'),
   addMusicTracks: (): Promise<MusicSelectionResult> =>
     ipcRenderer.invoke('music:add-tracks'),
   getMusicState: async (): Promise<MusicState> => {
@@ -98,6 +136,9 @@ const bossAPI = {
   },
   dispatchMusic: (command: MusicCommand) => {
     ipcRenderer.send('music:dispatch', command);
+  },
+  setUniversalMute: (muted: boolean) => {
+    ipcRenderer.send('audio:set-universal-muted', muted);
   },
   getSoundboardState: async (): Promise<SoundboardState> => {
     const state = (await ipcRenderer.invoke(
@@ -185,6 +226,18 @@ const bossAPI = {
     const listener = () => callback();
     ipcRenderer.on('app:close-requested', listener);
     return () => ipcRenderer.removeListener('app:close-requested', listener);
+  },
+  subscribeBossLoaded: (callback: (loaded: BossLibraryLoaded) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, loaded: BossLibraryLoaded) => {
+      callback(loaded);
+    };
+    ipcRenderer.on('library:boss-loaded', listener);
+    return () => ipcRenderer.removeListener('library:boss-loaded', listener);
+  },
+  subscribeBossLibraryChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('library:entries-changed', listener);
+    return () => ipcRenderer.removeListener('library:entries-changed', listener);
   },
   subscribeMusic: (callback: (state: MusicState) => void) => {
     musicSubscribers.add(callback);

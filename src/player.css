@@ -161,6 +161,107 @@ body {
   transition: width 560ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.health-bar.is-shielded {
+  border-color: rgba(210, 221, 226, .82);
+  background: rgba(18, 21, 23, .94);
+  box-shadow:
+    0 0 0 1px rgba(35, 40, 43, .88),
+    inset 0 1px 5px rgba(255, 255, 255, .15),
+    0 0 16px rgba(185, 204, 213, .25);
+}
+
+.health-bar.is-shielded .health-bar-fill {
+  background:
+    linear-gradient(180deg, #f1f3f4 0%, #aeb5ba 30%, #626a70 58%, #c8cdd0 78%, #747c82 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .9),
+    inset 0 -1px 2px rgba(25, 29, 32, .7),
+    0 0 15px rgba(197, 216, 225, .38);
+}
+
+.shield-badge {
+  position: absolute;
+  z-index: 16;
+  right: calc(-8px * var(--hud-scale));
+  bottom: calc(100% - 4px * var(--hud-scale));
+  display: grid;
+  width: calc(44px * var(--hud-scale));
+  height: calc(49px * var(--hud-scale));
+  place-items: center;
+  background: url("../assets/shield-icon.png") center / contain no-repeat;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .82));
+  pointer-events: none;
+  animation: shield-badge-entry 340ms cubic-bezier(.2, .85, .25, 1.15) both;
+}
+
+.shield-badge span {
+  margin-top: calc(-1px * var(--hud-scale));
+  color: #25292c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: calc(.86rem * var(--hud-scale));
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, .82);
+}
+
+.shield-break-effect {
+  position: absolute;
+  z-index: 18;
+  inset: -16px -8px -22px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.shield-break-effect::before {
+  position: absolute;
+  inset: 12px 4px 20px;
+  background: linear-gradient(90deg, transparent, rgba(235, 248, 255, .82), transparent);
+  filter: blur(3px);
+  content: "";
+  animation: shield-break-flash 620ms ease-out both;
+}
+
+.shield-break-effect span {
+  --fragment-x: 0px;
+  --fragment-y: 26px;
+  --fragment-rotation: 120deg;
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  width: calc(13px * var(--hud-scale));
+  height: calc(8px * var(--hud-scale));
+  background: linear-gradient(135deg, #f4f6f7, #737d83 52%, #cbd1d4);
+  clip-path: polygon(0 18%, 72% 0, 100% 62%, 38% 100%);
+  box-shadow: 0 0 5px rgba(218, 235, 243, .72);
+  opacity: 0;
+  animation: shield-fragment-burst 1500ms cubic-bezier(.18, .72, .25, 1) both;
+}
+
+.shield-break-effect span:nth-child(1) { left: 4%; --fragment-x: -18px; --fragment-y: 34px; --fragment-rotation: -210deg; }
+.shield-break-effect span:nth-child(2) { left: 13%; --fragment-x: 8px; --fragment-y: -25px; --fragment-rotation: 170deg; animation-delay: 25ms; }
+.shield-break-effect span:nth-child(3) { left: 23%; --fragment-x: -12px; --fragment-y: 42px; --fragment-rotation: -145deg; animation-delay: 45ms; }
+.shield-break-effect span:nth-child(4) { left: 32%; --fragment-x: 15px; --fragment-y: -31px; --fragment-rotation: 235deg; }
+.shield-break-effect span:nth-child(5) { left: 41%; --fragment-x: -8px; --fragment-y: 37px; --fragment-rotation: -260deg; animation-delay: 55ms; }
+.shield-break-effect span:nth-child(6) { left: 50%; --fragment-x: 10px; --fragment-y: -34px; --fragment-rotation: 190deg; animation-delay: 20ms; }
+.shield-break-effect span:nth-child(7) { left: 59%; --fragment-x: -7px; --fragment-y: 45px; --fragment-rotation: -185deg; animation-delay: 35ms; }
+.shield-break-effect span:nth-child(8) { left: 68%; --fragment-x: 16px; --fragment-y: -27px; --fragment-rotation: 250deg; }
+.shield-break-effect span:nth-child(9) { left: 77%; --fragment-x: -13px; --fragment-y: 39px; --fragment-rotation: -230deg; animation-delay: 60ms; }
+.shield-break-effect span:nth-child(10) { left: 86%; --fragment-x: 19px; --fragment-y: -20px; --fragment-rotation: 155deg; animation-delay: 30ms; }
+.shield-break-effect span:nth-child(11) { left: 94%; --fragment-x: 24px; --fragment-y: 31px; --fragment-rotation: 270deg; animation-delay: 50ms; }
+.shield-break-effect span:nth-child(12) { left: 99%; --fragment-x: -3px; --fragment-y: -33px; --fragment-rotation: -175deg; animation-delay: 15ms; }
+.shield-break-effect span:nth-child(13) { left: 2%; --fragment-x: -28px; --fragment-y: -18px; --fragment-rotation: 225deg; animation-delay: 65ms; }
+.shield-break-effect span:nth-child(14) { left: 9%; --fragment-x: 4px; --fragment-y: 49px; --fragment-rotation: -285deg; animation-delay: 85ms; }
+.shield-break-effect span:nth-child(15) { left: 18%; --fragment-x: -20px; --fragment-y: -37px; --fragment-rotation: 195deg; animation-delay: 40ms; }
+.shield-break-effect span:nth-child(16) { left: 27%; --fragment-x: 24px; --fragment-y: 31px; --fragment-rotation: -240deg; animation-delay: 75ms; }
+.shield-break-effect span:nth-child(17) { left: 36%; --fragment-x: -16px; --fragment-y: -44px; --fragment-rotation: 310deg; animation-delay: 95ms; }
+.shield-break-effect span:nth-child(18) { left: 45%; --fragment-x: 20px; --fragment-y: 47px; --fragment-rotation: -205deg; animation-delay: 50ms; }
+.shield-break-effect span:nth-child(19) { left: 55%; --fragment-x: -19px; --fragment-y: -39px; --fragment-rotation: 265deg; animation-delay: 80ms; }
+.shield-break-effect span:nth-child(20) { left: 64%; --fragment-x: 25px; --fragment-y: 38px; --fragment-rotation: -315deg; animation-delay: 35ms; }
+.shield-break-effect span:nth-child(21) { left: 73%; --fragment-x: -22px; --fragment-y: -28px; --fragment-rotation: 180deg; animation-delay: 100ms; }
+.shield-break-effect span:nth-child(22) { left: 82%; --fragment-x: 29px; --fragment-y: 45px; --fragment-rotation: -255deg; animation-delay: 55ms; }
+.shield-break-effect span:nth-child(23) { left: 91%; --fragment-x: -9px; --fragment-y: -46px; --fragment-rotation: 295deg; animation-delay: 70ms; }
+.shield-break-effect span:nth-child(24) { left: 97%; --fragment-x: 31px; --fragment-y: 20px; --fragment-rotation: -190deg; animation-delay: 90ms; }
+
 .health-damage-trail,
 .health-healing-preview {
   position: absolute;
@@ -214,6 +315,17 @@ body {
   animation: damage-number-rise 1200ms cubic-bezier(.2, .75, .25, 1) both;
 }
 
+.damage-number.is-heavy {
+  color: #fff0d3;
+  font-size: calc(clamp(1rem, 1.65vw, 1.35rem) * var(--hud-scale));
+  font-weight: 900;
+  text-shadow:
+    0 2px 3px #000,
+    0 0 10px rgba(255, 226, 179, .88),
+    0 0 20px rgba(224, 50, 34, .9);
+  animation: heavy-damage-number-rise 2000ms cubic-bezier(.15, .8, .2, 1) both;
+}
+
 .health-bar-highlight {
   position: absolute;
   z-index: 5;
@@ -261,6 +373,10 @@ body {
 
 .health-impact.is-damage {
   animation: damage-impact 540ms ease-out both;
+}
+
+.health-impact.is-damage.is-heavy {
+  animation: heavy-damage-impact 2000ms cubic-bezier(.16, .84, .24, 1) both;
 }
 
 .health-impact.is-heal {
@@ -422,16 +538,61 @@ body {
   inset: 0;
   display: flex;
   align-items: center;
-  flex-direction: column;
   justify-content: center;
   padding: 48px;
-  background: rgba(5, 4, 8, 0.33);
+  isolation: isolate;
+  overflow: hidden;
+  background: #050408;
   text-align: center;
-  text-shadow: 0 4px 22px rgba(0, 0, 0, 0.95);
-  transition:
-    opacity 1200ms ease,
-    transform 1500ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0s linear;
+  transition: none;
+}
+
+.waiting-screen::before,
+.waiting-screen::after {
+  position: absolute;
+  z-index: -2;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.waiting-screen::before {
+  background: #050408 url("../assets/waiting-background.png") center / cover no-repeat;
+}
+
+.waiting-screen::after {
+  z-index: -1;
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.98), rgba(0, 0, 0, 0.7) 36%, transparent),
+    linear-gradient(to left, rgba(0, 0, 0, 0.98), rgba(0, 0, 0, 0.7) 36%, transparent),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.98), rgba(0, 0, 0, 0.7) 36%, transparent),
+    linear-gradient(to top, rgba(0, 0, 0, 0.98), rgba(0, 0, 0, 0.7) 36%, transparent);
+  background-position: left center, right center, center top, center bottom;
+  background-repeat: no-repeat;
+  animation: waiting-vignette-pulse 4s ease-in-out infinite;
+  will-change: background-size, opacity;
+}
+
+.waiting-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  width: min(900px, 86vw);
+  padding: clamp(52px, 7vw, 92px) clamp(42px, 8vw, 120px);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(3, 2, 4, 0.78) 0%,
+    rgba(3, 2, 4, 0.54) 44%,
+    rgba(3, 2, 4, 0.2) 64%,
+    transparent 76%
+  );
+  filter: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.75));
+  text-shadow:
+    0 2px 3px rgba(0, 0, 0, 1),
+    0 0 18px rgba(0, 0, 0, 0.96),
+    0 0 34px rgba(130, 37, 30, 0.42);
 }
 
 .waiting-screen.is-hidden {
@@ -442,6 +603,12 @@ body {
     opacity 1200ms ease,
     transform 1500ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s linear 1300ms;
+}
+
+.waiting-screen:not(.is-hidden) + .boss-hud {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: none;
 }
 
 .waiting-screen p {
@@ -466,6 +633,9 @@ body {
   width: 46px;
   height: 46px;
   border: 1px solid rgba(200, 167, 110, 0.72);
+  filter:
+    drop-shadow(0 2px 4px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 12px rgba(200, 167, 110, 0.38));
   transform: rotate(45deg);
 }
 
@@ -480,6 +650,19 @@ body {
 .waiting-mark::after {
   inset: 15px;
   background: rgba(200, 167, 110, 0.7);
+}
+
+@keyframes waiting-vignette-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    background-size: 24% 100%, 24% 100%, 100% 24%, 100% 24%;
+  }
+
+  50% {
+    opacity: 1;
+    background-size: 40% 100%, 40% 100%, 100% 40%, 100% 40%;
+  }
 }
 
 @keyframes damage-impact {
@@ -501,6 +684,30 @@ body {
   }
 }
 
+@keyframes heavy-damage-impact {
+  0% {
+    opacity: 1;
+    background: rgba(255, 230, 176, .5);
+    box-shadow:
+      0 0 18px rgba(255, 225, 160, 1),
+      0 0 42px rgba(225, 54, 35, .96),
+      inset 0 0 16px rgba(255, 242, 208, .9);
+  }
+  22% {
+    opacity: .95;
+    background: rgba(191, 23, 28, .42);
+    box-shadow:
+      0 0 30px rgba(245, 69, 42, .95),
+      0 0 58px rgba(141, 13, 26, .72),
+      inset 0 0 22px rgba(255, 119, 78, .76);
+  }
+  100% {
+    opacity: 0;
+    background: transparent;
+    box-shadow: 0 0 3px rgba(171, 24, 31, 0);
+  }
+}
+
 @keyframes damage-number-rise {
   0% {
     opacity: 0;
@@ -516,6 +723,53 @@ body {
   100% {
     opacity: 0;
     transform: translate(-50%, -25px) scale(.97);
+  }
+}
+
+@keyframes heavy-damage-number-rise {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translate(-50%, 8px) scale(1.7);
+  }
+  14% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translate(-50%, -5px) scale(1.08);
+  }
+  32% {
+    transform: translate(-50%, -8px) scale(1.18);
+  }
+  76% {
+    opacity: .96;
+  }
+  100% {
+    opacity: 0;
+    filter: blur(1px);
+    transform: translate(-50%, -37px) scale(.96);
+  }
+}
+
+@keyframes shield-badge-entry {
+  from { opacity: 0; transform: scale(.72) rotate(-7deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+@keyframes shield-break-flash {
+  0% { opacity: 0; transform: scaleX(.55); }
+  18% { opacity: 1; transform: scaleX(1.04); }
+  100% { opacity: 0; transform: scaleX(1.16); }
+}
+
+@keyframes shield-fragment-burst {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(0) scale(.75);
+  }
+  12% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(var(--fragment-x), var(--fragment-y)) rotate(var(--fragment-rotation)) scale(.35);
   }
 }
 

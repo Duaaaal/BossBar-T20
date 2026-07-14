@@ -12,11 +12,14 @@ import {
   type BattleState,
   type BossState,
   type HealthEffect,
+  isHeavyDamageEffect,
+  isShieldBreakEffect,
   type MusicState,
   type SoundboardState,
   volumeToGain,
 } from './shared/battle';
 import './player.css';
+import './scrollbars.css';
 
 const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
@@ -47,12 +50,14 @@ const HealthRuler = memo(function HealthRuler() {
 type AnimatedHealthBarProps = {
   current: number;
   maximum: number;
+  shield: number;
   effects: HealthEffect[];
 };
 
 const AnimatedHealthBar = ({
   current,
   maximum,
+  shield,
   effects,
 }: AnimatedHealthBarProps) => {
   const initialPercent = healthPercent(current, maximum);
@@ -138,19 +143,47 @@ const AnimatedHealthBar = ({
       const delay = index * 70;
 
       if (effect.type === 'damage') {
+        const heavyDamage = isHeavyDamageEffect(effect);
         bar.animate(
-          [
-            { filter: 'brightness(1)', transform: 'translateX(0)' },
-            {
-              filter: 'brightness(1.65)',
-              transform: 'translateX(-4px)',
-              offset: 0.22,
-            },
-            { transform: 'translateX(4px)', offset: 0.44 },
-            { transform: 'translateX(-3px)', offset: 0.64 },
-            { filter: 'brightness(1)', transform: 'translateX(0)' },
-          ],
-          { delay, duration: 480, easing: 'ease-out' },
+          heavyDamage
+            ? [
+                {
+                  filter: 'brightness(1) saturate(1)',
+                  transform: 'translateX(0) scaleY(1)',
+                },
+                {
+                  filter: 'brightness(2.4) saturate(1.8)',
+                  transform: 'translateX(-12px) scaleY(1.18) rotate(-0.35deg)',
+                  offset: 0.12,
+                },
+                { transform: 'translateX(11px) scaleY(.9) rotate(.3deg)', offset: 0.24 },
+                { transform: 'translateX(-9px) scaleY(1.1)', offset: 0.37 },
+                { transform: 'translateX(8px) scaleY(.94)', offset: 0.5 },
+                { transform: 'translateX(-6px) scaleY(1.06)', offset: 0.63 },
+                { transform: 'translateX(4px) scaleY(.98)', offset: 0.76 },
+                {
+                  filter: 'brightness(1) saturate(1)',
+                  transform: 'translateX(0) scaleY(1)',
+                },
+              ]
+            : [
+                { filter: 'brightness(1)', transform: 'translateX(0)' },
+                {
+                  filter: 'brightness(1.65)',
+                  transform: 'translateX(-4px)',
+                  offset: 0.22,
+                },
+                { transform: 'translateX(4px)', offset: 0.44 },
+                { transform: 'translateX(-3px)', offset: 0.64 },
+                { filter: 'brightness(1)', transform: 'translateX(0)' },
+              ],
+          {
+            delay,
+            duration: heavyDamage ? 2000 : 480,
+            easing: heavyDamage
+              ? 'cubic-bezier(.16,.84,.24,1)'
+              : 'ease-out',
+          },
         );
       } else {
         const fullHeal = effect.intensity === 'full';
@@ -197,7 +230,7 @@ const AnimatedHealthBar = ({
   return (
     <div className="health-bar-shell">
       <div
-        className="health-bar"
+        className={`health-bar ${shield > 0 ? 'is-shielded' : ''}`}
         ref={healthBarRef}
         role="progressbar"
         aria-label="Vida do chefão"
@@ -225,11 +258,21 @@ const AnimatedHealthBar = ({
           <div
             className={`health-impact is-${effect.type} ${
               effect.intensity === 'full' ? 'is-full' : ''
-            }`}
+            } ${isHeavyDamageEffect(effect) ? 'is-heavy' : ''}`}
             key={effect.id}
           />
         ))}
       </div>
+      {shield > 0 && (
+        <div className="shield-badge" role="status" aria-label={`Escudo ${shield}`}>
+          <span>{shield}</span>
+        </div>
+      )}
+      {effects.filter(isShieldBreakEffect).map((effect) => (
+        <div className="shield-break-effect" key={`shield-break-${effect.id}`} aria-hidden="true">
+          {Array.from({ length: 24 }, (_, index) => <span key={index} />)}
+        </div>
+      ))}
       {effects
         .filter((effect) => effect.type === 'damage' && effect.from > effect.to)
         .map((effect, index) => {
@@ -240,7 +283,7 @@ const AnimatedHealthBar = ({
           );
           return (
             <span
-              className="damage-number"
+              className={`damage-number ${isHeavyDamageEffect(effect) ? 'is-heavy' : ''}`}
               key={`damage-${effect.id}`}
               style={{
                 '--damage-position': `${impactPosition}%`,
@@ -260,6 +303,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
+  const muteGainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const fadeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fading = useRef(false);
@@ -279,6 +323,7 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   const currentTrack = music?.tracks.find(
     (track) => track.id === music.currentTrackId,
   );
+  const outputMuted = Boolean(music?.muted || music?.universalMuted);
 
   const ensureAudioGraph = useCallback(() => {
     const audio = audioRef.current;
@@ -288,12 +333,15 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
       const context = new AudioContext();
       const source = context.createMediaElementSource(audio);
       const gain = context.createGain();
+      const muteGain = context.createGain();
       source.connect(gain);
-      gain.connect(context.destination);
+      gain.connect(muteGain);
+      muteGain.connect(context.destination);
       audio.volume = 1;
       audioContextRef.current = context;
       sourceNodeRef.current = source;
       gainNodeRef.current = gain;
+      muteGainNodeRef.current = muteGain;
     }
 
     if (audioContextRef.current.state === 'suspended') {
@@ -307,6 +355,14 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     const context = audioContextRef.current;
     if (!gain || !context) return;
     gain.gain.setValueAtTime(volumeToGain(volume), context.currentTime);
+  }, [ensureAudioGraph]);
+
+  const setOutputMuted = useCallback((muted: boolean) => {
+    ensureAudioGraph();
+    const context = audioContextRef.current;
+    const muteGain = muteGainNodeRef.current;
+    if (!context || !muteGain) return;
+    muteGain.gain.setValueAtTime(muted ? 0 : 1, context.currentTime);
   }, [ensureAudioGraph]);
 
   const reportProgress = useCallback(() => {
@@ -366,30 +422,35 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
 
     stopFade();
     audio.src = currentTrack.url;
+    setOutputMuted(outputMuted);
     if (music?.isPlaying || gainNodeRef.current) {
-      setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
+      setOutputGain(music?.volume ?? 0.8);
     }
     audio.load();
     if (music?.isPlaying) void audio.play().catch((): void => {});
-  }, [currentTrack?.id, music?.playbackVersion, setOutputGain, stopFade]);
+  }, [currentTrack?.id, music?.playbackVersion, setOutputGain, setOutputMuted, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
     if (music?.isPlaying) {
       stopFade();
-      setOutputGain(music.muted ? 0 : music.volume);
+      setOutputGain(music.volume);
       void audio.play().catch((): void => {});
     }
     else audio.pause();
-  }, [music?.isPlaying, music?.muted, currentTrack?.id, setOutputGain, stopFade]);
+  }, [music?.isPlaying, currentTrack?.id, setOutputGain, stopFade]);
+
+  useEffect(() => {
+    setOutputMuted(outputMuted);
+  }, [outputMuted, setOutputMuted]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (audio && gainNodeRef.current && !fading.current) {
-      setOutputGain(music?.muted ? 0 : (music?.volume ?? 0.8));
+      setOutputGain(music?.volume ?? 0.8);
     }
-  }, [music?.muted, music?.volume, setOutputGain]);
+  }, [music?.volume, setOutputGain]);
 
   useEffect(
     () => window.bossAPI.subscribeMusicFadeOut(fadeOut),
@@ -438,15 +499,16 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     ) return;
 
     stopFade();
-    setOutputGain(music.muted ? 0 : music.volume);
+    setOutputGain(music.volume);
     void audio.play().catch((): void => {});
-  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.muted, music?.volume, setOutputGain, stopFade]);
+  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.volume, setOutputGain, stopFade]);
 
   useEffect(() => () => {
     stopFade();
     void audioContextRef.current?.close();
     audioContextRef.current = null;
     gainNodeRef.current = null;
+    muteGainNodeRef.current = null;
     sourceNodeRef.current = null;
   }, [stopFade]);
 
@@ -472,7 +534,11 @@ const SoundboardPlayer = () => {
   const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
-  const audioSettingsRef = useRef({ volume: 0.8, muted: false });
+  const audioSettingsRef = useRef({
+    volume: 0.8,
+    muted: false,
+    universalMuted: false,
+  });
   const activeSounds = useRef(new Map<
     number,
     {
@@ -506,6 +572,7 @@ const SoundboardPlayer = () => {
       audioSettingsRef.current = {
         volume: state.volume,
         muted: state.muted,
+        universalMuted: state.universalMuted,
       };
       if (active) setSoundboard(state);
     };
@@ -522,15 +589,18 @@ const SoundboardPlayer = () => {
     audioSettingsRef.current = {
       volume: soundboard.volume,
       muted: soundboard.muted,
+      universalMuted: soundboard.universalMuted,
     };
     const context = audioContextRef.current;
     const gain = masterGainRef.current;
     if (!context || !gain) return;
     gain.gain.setValueAtTime(
-      soundboard.muted ? 0 : volumeToGain(soundboard.volume),
+      soundboard.muted || soundboard.universalMuted
+        ? 0
+        : volumeToGain(soundboard.volume),
       context.currentTime,
     );
-  }, [soundboard?.muted, soundboard?.volume]);
+  }, [soundboard?.muted, soundboard?.universalMuted, soundboard?.volume]);
 
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeSoundEffect((effect) => {
@@ -538,7 +608,9 @@ const SoundboardPlayer = () => {
       if (!graph.gain) return;
       const audioSettings = audioSettingsRef.current;
       graph.gain.gain.setValueAtTime(
-        audioSettings.muted ? 0 : volumeToGain(audioSettings.volume),
+        audioSettings.muted || audioSettings.universalMuted
+          ? 0
+          : volumeToGain(audioSettings.volume),
         graph.context.currentTime,
       );
       const audio = new Audio();
@@ -621,6 +693,7 @@ const BossHud = memo(function BossHud({
         current={boss.currentHealth}
         effects={effects}
         maximum={boss.maxHealth}
+        shield={boss.shield}
       />
       <div className="action-slot">
         <AnimatedAction text={boss.nextAction} severity={boss.actionSeverity} />
@@ -792,6 +865,13 @@ const PlayerApp = () => {
           effect,
         ].slice(-16),
       }));
+      const effectDuration = isHeavyDamageEffect(effect)
+        ? 2100
+        : isShieldBreakEffect(effect)
+          ? 1750
+          : effect.intensity === 'full'
+            ? 1600
+            : 1250;
       const timer = setTimeout(() => {
         setHealthEffects((currentEffects) => {
           const nextBossEffects = (currentEffects[effect.bossId] ?? noHealthEffects)
@@ -804,7 +884,7 @@ const PlayerApp = () => {
           return { ...currentEffects, [effect.bossId]: nextBossEffects };
         });
         removalTimers.delete(timer);
-      }, effect.intensity === 'full' ? 1600 : 1250);
+      }, effectDuration);
       removalTimers.add(timer);
     });
 
@@ -905,9 +985,11 @@ const PlayerApp = () => {
           className={`waiting-screen ${state.battleStarted ? 'is-hidden' : ''}`}
           aria-hidden={state.battleStarted}
         >
-          <span className="waiting-mark" aria-hidden="true" />
-          <p>Aguardando todos os jogadores estarem prontos</p>
-          <small>O Mestre iniciará a batalha em breve</small>
+          <div className="waiting-content">
+            <span className="waiting-mark" aria-hidden="true" />
+            <p>Aguardando todos os jogadores estarem prontos</p>
+            <small>O Mestre iniciará a batalha em breve</small>
+          </div>
         </section>
 
         <section

@@ -8,8 +8,9 @@ import {
   screen,
   session,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
@@ -37,6 +38,16 @@ import {
   isMusicCommand,
   isSoundboardCommand,
 } from './shared/battle';
+import type {
+  BossLibraryDeleteResult,
+  BossLibraryDraft,
+  BossLibraryEntrySummary,
+  BossLibraryLoadResult,
+  BossLibraryLoaded,
+  BossLibraryReplaceResult,
+  BossLibrarySaveResult,
+  MissingLibraryFile,
+} from './shared/library';
 import { resolveByteRange } from './shared/media';
 
 protocol.registerSchemesAsPrivileged([
@@ -61,6 +72,8 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 let masterWindow: BrowserWindow | null = null;
 let playerWindow: BrowserWindow | null = null;
 let musicWindow: BrowserWindow | null = null;
+let libraryWindow: BrowserWindow | null = null;
+let libraryTargetBossId: string | null = null;
 let playerWindowReady = false;
 let battleState: BattleState = initialBattleState;
 let activeBackgroundFilePath: string | null = null;
@@ -96,6 +109,7 @@ let musicState: Omit<MusicState, 'tracks'> = {
   loop: false,
   volume: 0.8,
   muted: false,
+  universalMuted: false,
   playbackVersion: 0,
   revision: 0,
 };
@@ -119,6 +133,37 @@ let pendingBackgroundChange:
   | { type: 'clear' }
   | null = null;
 
+type StoredMediaFile = {
+  name: string;
+  filePath: string;
+};
+
+type BossLibraryEntry = {
+  schemaVersion: 1;
+  id: string;
+  isAutosave: boolean;
+  createdAt: string;
+  updatedAt: string;
+  boss: Omit<BossLibraryDraft, 'bossId' | 'shield'> & { shield?: number };
+  background: StoredMediaFile | null;
+  music: {
+    tracks: Array<StoredMediaFile & { duration: number }>;
+    currentTrackFilePath: string | null;
+    loop: boolean;
+    volume: number;
+    muted: boolean;
+  };
+  soundboard: {
+    slots: Array<StoredMediaFile & { index: number }>;
+    volume: number;
+    muted: boolean;
+  };
+};
+
+let bossLibraryEntries: BossLibraryEntry[] = [];
+const linkedLibraryEntries = new Map<string, string>();
+let libraryWriteQueue: Promise<void> = Promise.resolve();
+
 const supportedBackgroundExtensions = new Set([
   '.avif',
   '.bmp',
@@ -137,7 +182,9 @@ const getBackgroundState = (): BackgroundState => ({
   name: battleState.backgroundName,
 });
 
-const rendererFile = (page: 'master' | 'player' | 'music') =>
+type RendererPage = 'master' | 'player' | 'music' | 'library';
+
+const rendererFile = (page: RendererPage) =>
   path.join(
     __dirname,
     `../renderer/${MAIN_WINDOW_VITE_NAME}/${page}.html`,
@@ -147,7 +194,7 @@ const applicationIcon = () => app.isPackaged
   ? path.join(process.resourcesPath, 'bossbar-icon.ico')
   : path.join(app.getAppPath(), 'assets', 'bossbar-icon.ico');
 
-const rendererUrl = (page: 'master' | 'player' | 'music') => {
+const rendererUrl = (page: RendererPage) => {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     const baseUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL.endsWith('/')
       ? MAIN_WINDOW_VITE_DEV_SERVER_URL
@@ -160,7 +207,7 @@ const rendererUrl = (page: 'master' | 'player' | 'music') => {
 
 const loadRenderer = (
   window: BrowserWindow,
-  page: 'master' | 'player' | 'music',
+  page: RendererPage,
 ) => {
   const allowedUrl = rendererUrl(page);
   const blockUnexpectedNavigation = (
@@ -193,12 +240,312 @@ const getSoundboardState = (): SoundboardState => ({
     assigned: Boolean(slot),
   })),
   ...soundboardAudioState,
+  universalMuted: musicState.universalMuted,
   revision: soundboardRevision,
 });
 
+const bossLibraryPath = () =>
+  path.join(app.getPath('userData'), 'boss-library.json');
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object');
+
+const isStoredMediaFile = (value: unknown): value is StoredMediaFile =>
+  isRecord(value) &&
+  typeof value.name === 'string' &&
+  typeof value.filePath === 'string';
+
+const isFiniteStoredNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const isStoredMusicTrack = (
+  value: unknown,
+): value is StoredMediaFile & { duration: number } =>
+  isRecord(value) &&
+  isFiniteStoredNumber(value.duration) &&
+  isStoredMediaFile(value);
+
+const isStoredSoundboardSlot = (
+  value: unknown,
+): value is StoredMediaFile & { index: number } =>
+  isRecord(value) &&
+  isFiniteStoredNumber(value.index) &&
+  isStoredMediaFile(value);
+
+const isStoredLibraryEntry = (value: unknown): value is BossLibraryEntry => {
+  if (!isRecord(value) || value.schemaVersion !== 1) return false;
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.isAutosave !== 'boolean' ||
+    typeof value.createdAt !== 'string' ||
+    typeof value.updatedAt !== 'string' ||
+    !isRecord(value.boss) ||
+    !isRecord(value.music) ||
+    !isRecord(value.soundboard)
+  ) return false;
+
+  const backgroundIsValid =
+    value.background === null || isStoredMediaFile(value.background);
+  const tracksAreValid =
+    Array.isArray(value.music.tracks) &&
+    value.music.tracks.every(isStoredMusicTrack);
+  const slotsAreValid =
+    Array.isArray(value.soundboard.slots) &&
+    value.soundboard.slots.every(isStoredSoundboardSlot);
+
+  return (
+    typeof value.boss.bossName === 'string' &&
+    typeof value.boss.amount === 'string' &&
+    isFiniteStoredNumber(value.boss.maxHealth) &&
+    isFiniteStoredNumber(value.boss.currentHealth) &&
+    isFiniteStoredNumber(value.boss.attack) &&
+    isFiniteStoredNumber(value.boss.rangedAttack) &&
+    isFiniteStoredNumber(value.boss.defense) &&
+    (value.boss.shield === undefined ||
+      isFiniteStoredNumber(value.boss.shield)) &&
+    isFiniteStoredNumber(value.boss.skills) &&
+    isFiniteStoredNumber(value.boss.damageReduction) &&
+    typeof value.boss.description === 'string' &&
+    (value.boss.actionSeverity === 'normal' ||
+      value.boss.actionSeverity === 'grave') &&
+    backgroundIsValid &&
+    tracksAreValid &&
+    (value.music.currentTrackFilePath === null ||
+      typeof value.music.currentTrackFilePath === 'string') &&
+    typeof value.music.loop === 'boolean' &&
+    isFiniteStoredNumber(value.music.volume) &&
+    typeof value.music.muted === 'boolean' &&
+    slotsAreValid &&
+    isFiniteStoredNumber(value.soundboard.volume) &&
+    typeof value.soundboard.muted === 'boolean'
+  );
+};
+
+const loadBossLibrary = async () => {
+  try {
+    const contents = await readFile(bossLibraryPath(), 'utf8');
+    const parsed = JSON.parse(contents) as unknown;
+    if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
+    return parsed.entries.filter(isStoredLibraryEntry);
+  } catch (error) {
+    if (isRecord(error) && error.code !== 'ENOENT') {
+      console.error('Não foi possível ler a biblioteca de chefões.', error);
+    }
+    return [];
+  }
+};
+
+const persistBossLibrary = () => {
+  const filePath = bossLibraryPath();
+  const temporaryPath = `${filePath}.tmp`;
+  const contents = JSON.stringify(
+    { schemaVersion: 1, entries: bossLibraryEntries },
+    null,
+    2,
+  );
+
+  libraryWriteQueue = libraryWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(temporaryPath, contents, 'utf8');
+      try {
+        await rename(temporaryPath, filePath);
+      } catch (error) {
+        if (!isRecord(error) || (error.code !== 'EEXIST' && error.code !== 'EPERM')) {
+          throw error;
+        }
+        await rm(filePath, { force: true });
+        await rename(temporaryPath, filePath);
+      }
+    });
+  return libraryWriteQueue;
+};
+
+const notifyLibraryChanged = () => {
+  if (libraryWindow && !libraryWindow.isDestroyed()) {
+    libraryWindow.webContents.send('library:entries-changed');
+  }
+};
+
+const clampInteger = (value: number, minimum: number, maximum: number) =>
+  Math.max(minimum, Math.min(maximum, Math.round(value)));
+
+const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
+  if (!isRecord(value) || typeof value.bossId !== 'string') return null;
+  const numericFields = [
+    'maxHealth',
+    'currentHealth',
+    'attack',
+    'rangedAttack',
+    'defense',
+    'shield',
+    'skills',
+    'damageReduction',
+  ] as const;
+  if (numericFields.some((field) => !Number.isFinite(value[field]))) return null;
+  if (
+    typeof value.bossName !== 'string' ||
+    typeof value.amount !== 'string' ||
+    typeof value.description !== 'string' ||
+    (value.actionSeverity !== 'normal' && value.actionSeverity !== 'grave')
+  ) return null;
+
+  const maxHealth = clampInteger(value.maxHealth as number, 1, 1_000_000);
+  const amount = /^[0-9.,/]{1,24}$/.test(value.amount.trim())
+    ? value.amount.trim()
+    : '50';
+  return {
+    bossId: value.bossId,
+    bossName: value.bossName.trim().slice(0, 100) || 'O Chefão Sem Nome',
+    amount,
+    maxHealth,
+    currentHealth: clampInteger(value.currentHealth as number, 0, maxHealth),
+    attack: clampInteger(value.attack as number, 0, 999),
+    rangedAttack: clampInteger(value.rangedAttack as number, 0, 999),
+    defense: clampInteger(value.defense as number, 0, 999),
+    shield: clampInteger(value.shield as number, 0, 999),
+    skills: clampInteger(value.skills as number, 0, 999),
+    damageReduction: clampInteger(value.damageReduction as number, 0, 999),
+    description: value.description.trim().slice(0, 100),
+    actionSeverity: value.actionSeverity,
+  };
+};
+
+const captureLibraryEntry = (
+  draft: BossLibraryDraft,
+  existingEntry: BossLibraryEntry | null,
+  isAutosave: boolean,
+): BossLibraryEntry => {
+  const now = new Date().toISOString();
+  const currentTrack = musicTracks.find(
+    (track) => track.id === musicState.currentTrackId,
+  );
+  const boss: Omit<BossLibraryDraft, 'bossId'> = {
+    bossName: draft.bossName,
+    amount: draft.amount,
+    maxHealth: draft.maxHealth,
+    currentHealth: draft.currentHealth,
+    attack: draft.attack,
+    rangedAttack: draft.rangedAttack,
+    defense: draft.defense,
+    shield: draft.shield,
+    skills: draft.skills,
+    damageReduction: draft.damageReduction,
+    description: draft.description,
+    actionSeverity: draft.actionSeverity,
+  };
+  return {
+    schemaVersion: 1,
+    id: existingEntry?.id ?? (isAutosave ? 'autosave' : randomUUID()),
+    isAutosave,
+    createdAt: existingEntry?.createdAt ?? now,
+    updatedAt: now,
+    boss,
+    background: activeBackgroundFilePath
+      ? {
+          filePath: activeBackgroundFilePath,
+          name: battleState.backgroundName ?? path.basename(activeBackgroundFilePath),
+        }
+      : null,
+    music: {
+      tracks: musicTracks.map(({ name, filePath, duration }) => ({
+        name,
+        filePath,
+        duration,
+      })),
+      currentTrackFilePath: currentTrack?.filePath ?? null,
+      loop: musicState.loop,
+      volume: musicState.volume,
+      muted: musicState.muted,
+    },
+    soundboard: {
+      slots: soundboardSlots.flatMap((slot) => slot ? [{ ...slot }] : []),
+      volume: soundboardAudioState.volume,
+      muted: soundboardAudioState.muted,
+    },
+  };
+};
+
+const getBossLibrarySummaries = (): BossLibraryEntrySummary[] =>
+  [...bossLibraryEntries]
+    .sort((left, right) => {
+      if (left.isAutosave !== right.isAutosave) return left.isAutosave ? -1 : 1;
+      return right.updatedAt.localeCompare(left.updatedAt);
+    })
+    .map((entry) => ({
+      id: entry.id,
+      isAutosave: entry.isAutosave,
+      bossName: entry.boss.bossName,
+      amount: entry.boss.amount,
+      maxHealth: entry.boss.maxHealth,
+      currentHealth: entry.boss.currentHealth,
+      attack: entry.boss.attack,
+      rangedAttack: entry.boss.rangedAttack,
+      defense: entry.boss.defense,
+      shield: entry.boss.shield ?? 0,
+      skills: entry.boss.skills,
+      damageReduction: entry.boss.damageReduction,
+      updatedAt: entry.updatedAt,
+    }));
+
+const fileIsAvailable = async (
+  filePath: string,
+  kind: MissingLibraryFile['kind'],
+) => {
+  const extension = path.extname(filePath).toLowerCase();
+  if (kind === 'background' && !supportedBackgroundExtensions.has(extension)) {
+    return false;
+  }
+  if (kind !== 'background' && extension !== '.mp3') return false;
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+};
+
+const findMissingLibraryFiles = async (
+  entry: BossLibraryEntry,
+): Promise<MissingLibraryFile[]> => {
+  const candidates: Array<MissingLibraryFile & { filePath: string }> = [];
+  if (entry.background) {
+    candidates.push({
+      key: 'background',
+      kind: 'background',
+      label: entry.background.name,
+      filePath: entry.background.filePath,
+    });
+  }
+  entry.music.tracks.forEach((track, index) => {
+    candidates.push({
+      key: `music:${index}`,
+      kind: 'music',
+      label: track.name,
+      filePath: track.filePath,
+    });
+  });
+  entry.soundboard.slots.forEach((slot) => {
+    candidates.push({
+      key: `soundboard:${slot.index}`,
+      kind: 'soundboard',
+      label: `Atalho ${slot.index} — ${slot.name}`,
+      filePath: slot.filePath,
+    });
+  });
+
+  const availability = await Promise.all(
+    candidates.map((candidate) => fileIsAvailable(candidate.filePath, candidate.kind)),
+  );
+  return candidates.flatMap((candidate, index) => availability[index]
+    ? []
+    : [{ key: candidate.key, kind: candidate.kind, label: candidate.label }],
+  );
+};
+
 const broadcastMusicState = () => {
   const nextState = getMusicState();
-  for (const window of [musicWindow, playerWindow]) {
+  for (const window of [masterWindow, musicWindow, playerWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('music:state-changed', nextState);
     }
@@ -228,14 +575,18 @@ const stopSoundboardPlayback = (index?: number) => {
 
 const resizeMusicWindow = (soundboardOpen: boolean) => {
   if (!musicWindow || musicWindow.isDestroyed()) return;
-  const { workArea } = screen.getDisplayMatching(musicWindow.getBounds());
-  const width = Math.min(soundboardOpen ? 1080 : 590, workArea.width);
-  const height = Math.min(777, workArea.height);
+  const currentBounds = musicWindow.getBounds();
+  const { workArea } = screen.getDisplayMatching(currentBounds);
+  const availableWidth = Math.max(
+    musicWindow.getMinimumSize()[0],
+    workArea.x + workArea.width - currentBounds.x,
+  );
+  const width = Math.min(soundboardOpen ? 1080 : 590, availableWidth);
   musicWindow.setBounds({
-    x: workArea.x + Math.round((workArea.width - width) / 2),
-    y: workArea.y + Math.round((workArea.height - height) / 2),
+    x: currentBounds.x,
+    y: currentBounds.y,
     width,
-    height,
+    height: currentBounds.height,
   });
 };
 
@@ -289,6 +640,51 @@ const createMusicWindow = () => {
   loadRenderer(window, 'music');
   window.on('closed', () => {
     if (musicWindow === window) musicWindow = null;
+  });
+  return window;
+};
+
+const createLibraryWindow = (bossId: string) => {
+  if (!battleState.bosses.some((boss) => boss.id === bossId)) return null;
+  libraryTargetBossId = bossId;
+
+  if (libraryWindow && !libraryWindow.isDestroyed()) {
+    if (libraryWindow.isMinimized()) libraryWindow.restore();
+    libraryWindow.show();
+    libraryWindow.focus();
+    libraryWindow.webContents.send('library:entries-changed');
+    return libraryWindow;
+  }
+
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = Math.min(1160, workArea.width);
+  const height = Math.min(760, workArea.height);
+  const window = new BrowserWindow({
+    icon: applicationIcon(),
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    minWidth: Math.min(900, width),
+    minHeight: Math.min(520, height),
+    title: 'Biblioteca de Chefões - BossBar T20',
+    backgroundColor: '#111117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  libraryWindow = window;
+  loadRenderer(window, 'library');
+  window.on('closed', () => {
+    if (libraryWindow === window) {
+      libraryWindow = null;
+      libraryTargetBossId = null;
+    }
   });
   return window;
 };
@@ -433,6 +829,7 @@ const createWindows = () => {
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -469,6 +866,7 @@ const createWindows = () => {
     if (masterFocusTimer) clearTimeout(masterFocusTimer);
     masterFocusTimer = null;
     masterWindow = null;
+    libraryWindow?.close();
     musicWindow?.close();
     playerWindow?.close();
   });
@@ -497,6 +895,9 @@ const isMasterSender = (senderId: number) =>
 
 const isMusicSender = (senderId: number) =>
   Boolean(musicWindow && senderId === musicWindow.webContents.id);
+
+const isLibrarySender = (senderId: number) =>
+  Boolean(libraryWindow && senderId === libraryWindow.webContents.id);
 
 ipcMain.handle('battle:get-state', () => battleState);
 ipcMain.handle('app:get-version', () => app.getVersion());
@@ -584,12 +985,443 @@ ipcMain.handle('music:open-window', (event) => {
   return true;
 });
 
+ipcMain.handle('library:open-window', (event, bossId: unknown) => {
+  if (!isMasterSender(event.sender.id) || typeof bossId !== 'string') {
+    return false;
+  }
+  return Boolean(createLibraryWindow(bossId));
+});
+
+ipcMain.handle(
+  'library:save-boss',
+  async (
+    event,
+    rawDraft: unknown,
+    mode: unknown,
+  ): Promise<BossLibrarySaveResult> => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      (mode !== 'prompt' && mode !== 'new' && mode !== 'overwrite')
+    ) return { ok: false, error: 'Ação não autorizada.' };
+
+    const draft = normalizeLibraryDraft(rawDraft);
+    if (!draft) return { ok: false, error: 'Os dados do chefão são inválidos.' };
+
+    const linkedEntryId = linkedLibraryEntries.get(draft.bossId);
+    const linkedEntry = linkedEntryId
+      ? bossLibraryEntries.find(
+          (entry) => entry.id === linkedEntryId && !entry.isAutosave,
+        ) ?? null
+      : null;
+
+    if (mode === 'prompt' && linkedEntry) {
+      return {
+        ok: false,
+        requiresOverwrite: true,
+        entryId: linkedEntry.id,
+        existingName: linkedEntry.boss.bossName,
+      };
+    }
+    if (mode === 'overwrite' && !linkedEntry) {
+      return {
+        ok: false,
+        error: 'O chefão original não está mais disponível na biblioteca.',
+      };
+    }
+
+    const entry = captureLibraryEntry(
+      draft,
+      mode === 'overwrite' ? linkedEntry : null,
+      false,
+    );
+    const previousEntries = bossLibraryEntries;
+    bossLibraryEntries = linkedEntry && mode === 'overwrite'
+      ? bossLibraryEntries.map((item) => item.id === linkedEntry.id ? entry : item)
+      : [...bossLibraryEntries, entry];
+
+    try {
+      await persistBossLibrary();
+    } catch {
+      bossLibraryEntries = previousEntries;
+      return { ok: false, error: 'Não foi possível gravar a biblioteca no disco.' };
+    }
+
+    linkedLibraryEntries.set(draft.bossId, entry.id);
+    notifyLibraryChanged();
+    return { ok: true, entryId: entry.id };
+  },
+);
+
+ipcMain.handle(
+  'library:autosave',
+  async (event, rawDraft: unknown): Promise<BossLibrarySaveResult> => {
+    if (!isMasterSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const draft = normalizeLibraryDraft(rawDraft);
+    if (!draft) return { ok: false, error: 'Os dados do chefão são inválidos.' };
+
+    const currentAutosave =
+      bossLibraryEntries.find((entry) => entry.isAutosave) ?? null;
+    const entry = captureLibraryEntry(draft, currentAutosave, true);
+    const previousEntries = bossLibraryEntries;
+    bossLibraryEntries = currentAutosave
+      ? bossLibraryEntries.map((item) => item.id === currentAutosave.id ? entry : item)
+      : [entry, ...bossLibraryEntries];
+
+    try {
+      await persistBossLibrary();
+    } catch {
+      bossLibraryEntries = previousEntries;
+      return { ok: false, error: 'Não foi possível criar o salvamento automático.' };
+    }
+    notifyLibraryChanged();
+    return { ok: true, entryId: entry.id };
+  },
+);
+
+ipcMain.handle('library:get-entries', (event): BossLibraryEntrySummary[] =>
+  isLibrarySender(event.sender.id) ? getBossLibrarySummaries() : [],
+);
+
+ipcMain.handle(
+  'library:delete-entry',
+  async (event, entryId: unknown): Promise<BossLibraryDeleteResult> => {
+    if (!isLibrarySender(event.sender.id) || typeof entryId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    if (!bossLibraryEntries.some((entry) => entry.id === entryId)) {
+      return { ok: false, error: 'Chefão salvo não encontrado.' };
+    }
+
+    const previousEntries = bossLibraryEntries;
+    bossLibraryEntries = bossLibraryEntries.filter(
+      (entry) => entry.id !== entryId,
+    );
+    try {
+      await persistBossLibrary();
+    } catch {
+      bossLibraryEntries = previousEntries;
+      return { ok: false, error: 'Não foi possível excluir o chefão salvo.' };
+    }
+
+    for (const [bossId, linkedEntryId] of linkedLibraryEntries) {
+      if (linkedEntryId === entryId) linkedLibraryEntries.delete(bossId);
+    }
+    notifyLibraryChanged();
+    return { ok: true };
+  },
+);
+
+const restoreLibraryEntry = (
+  entry: BossLibraryEntry,
+  targetBossId: string,
+  missingKeys: Set<string>,
+): BossLibraryLoaded | null => {
+  const targetBoss = battleState.bosses.find((boss) => boss.id === targetBossId);
+  if (!targetBoss) return null;
+
+  pendingHealthTimers.forEach(clearTimeout);
+  pendingHealthTimers.clear();
+  if (battleMusicStartTimer) {
+    clearTimeout(battleMusicStartTimer);
+    battleMusicStartTimer = null;
+  }
+  stopSoundboardPlayback();
+  soundEffectSources.clear();
+
+  const loadedBoss = {
+    id: targetBossId,
+    setupStatus: 'ready' as const,
+    bossName: entry.boss.bossName,
+    maxHealth: entry.boss.maxHealth,
+    currentHealth: Math.min(entry.boss.currentHealth, entry.boss.maxHealth),
+    attack: entry.boss.attack,
+    rangedAttack: entry.boss.rangedAttack,
+    defense: entry.boss.defense,
+    shield: entry.boss.shield ?? 0,
+    skills: entry.boss.skills,
+    damageReduction: entry.boss.damageReduction,
+    nextAction: entry.boss.description,
+    actionSeverity: entry.boss.actionSeverity,
+  };
+
+  battleState = {
+    ...battleState,
+    bosses: battleState.bosses.map((boss) =>
+      boss.id === targetBossId ? loadedBoss : boss,
+    ),
+    backgroundName:
+      entry.background && !missingKeys.has('background')
+        ? entry.background.name
+        : null,
+    battleStarted: false,
+    hudVisible: true,
+    revision: battleState.revision + 1,
+  };
+  activeBackgroundFilePath =
+    entry.background && !missingKeys.has('background')
+      ? entry.background.filePath
+      : null;
+  pendingBackgroundChange = null;
+  backgroundRevision += 1;
+
+  const restoredTracks = entry.music.tracks.flatMap((track, index) => {
+    if (missingKeys.has(`music:${index}`)) return [];
+    musicTrackSequence += 1;
+    return [{ ...track, id: String(musicTrackSequence) }];
+  });
+  musicTracks.splice(0, musicTracks.length, ...restoredTracks);
+  const restoredCurrentTrack = restoredTracks.find(
+    (track) => track.filePath === entry.music.currentTrackFilePath,
+  ) ?? restoredTracks[0] ?? null;
+  musicState = {
+    currentTrackId: restoredCurrentTrack?.id ?? null,
+    isPlaying: false,
+    loop: Boolean(entry.music.loop),
+    volume: Math.max(0, Math.min(1, entry.music.volume)),
+    muted: Boolean(entry.music.muted),
+    universalMuted: musicState.universalMuted,
+    playbackVersion: musicState.playbackVersion + 1,
+    revision: musicState.revision + 1,
+  };
+  musicPlaybackState = {
+    trackId: restoredCurrentTrack?.id ?? null,
+    currentTime: 0,
+    duration: restoredCurrentTrack?.duration ?? 0,
+  };
+
+  soundboardSlots.fill(null);
+  for (const slot of entry.soundboard.slots) {
+    if (
+      missingKeys.has(`soundboard:${slot.index}`) ||
+      !Number.isInteger(slot.index) ||
+      slot.index < 1 ||
+      slot.index > 20
+    ) continue;
+    soundboardSlots[slot.index - 1] = { ...slot };
+  }
+  soundboardAudioState = {
+    volume: Math.max(0, Math.min(1, entry.soundboard.volume)),
+    muted: Boolean(entry.soundboard.muted),
+  };
+  soundboardRevision += 1;
+
+  if (entry.isAutosave) linkedLibraryEntries.delete(targetBossId);
+  else linkedLibraryEntries.set(targetBossId, entry.id);
+
+  broadcastBattleState();
+  broadcastBackground();
+  broadcastMusicState();
+  broadcastMusicPlayback();
+  broadcastSoundboardState();
+
+  return { boss: loadedBoss, amount: entry.boss.amount };
+};
+
+ipcMain.handle(
+  'library:load-boss',
+  async (
+    event,
+    entryId: unknown,
+    continueWithoutMissing: unknown,
+  ): Promise<BossLibraryLoadResult> => {
+    if (
+      !isLibrarySender(event.sender.id) ||
+      typeof entryId !== 'string' ||
+      typeof continueWithoutMissing !== 'boolean' ||
+      !libraryTargetBossId
+    ) return { ok: false, error: 'Ação não autorizada.' };
+
+    const entry = bossLibraryEntries.find((item) => item.id === entryId);
+    if (!entry) return { ok: false, error: 'Chefão salvo não encontrado.' };
+    const missingFiles = await findMissingLibraryFiles(entry);
+    if (missingFiles.length > 0 && !continueWithoutMissing) {
+      return { ok: false, missingFiles };
+    }
+
+    const loaded = restoreLibraryEntry(
+      entry,
+      libraryTargetBossId,
+      new Set(missingFiles.map((file) => file.key)),
+    );
+    if (!loaded) {
+      return { ok: false, error: 'A aba de destino não está mais disponível.' };
+    }
+    if (masterWindow && !masterWindow.isDestroyed()) {
+      masterWindow.webContents.send('library:boss-loaded', loaded);
+      masterWindow.show();
+      masterWindow.focus();
+    }
+    return { ok: true };
+  },
+);
+
+ipcMain.handle(
+  'library:replace-file',
+  async (
+    event,
+    entryId: unknown,
+    key: unknown,
+  ): Promise<BossLibraryReplaceResult> => {
+    if (
+      !libraryWindow ||
+      !isLibrarySender(event.sender.id) ||
+      typeof entryId !== 'string' ||
+      typeof key !== 'string'
+    ) return { ok: false, error: 'Ação não autorizada.' };
+
+    const entryIndex = bossLibraryEntries.findIndex((item) => item.id === entryId);
+    if (entryIndex < 0) return { ok: false, error: 'Chefão salvo não encontrado.' };
+    const entry = bossLibraryEntries[entryIndex];
+    const missingFile = (await findMissingLibraryFiles(entry)).find(
+      (file) => file.key === key,
+    );
+    if (!missingFile) {
+      return { ok: false, error: 'Este arquivo não está mais ausente.' };
+    }
+
+    const isBackground = missingFile.kind === 'background';
+    const dialogOwner = libraryWindow;
+    const selection = await dialog.showOpenDialog(dialogOwner, {
+      title: `Localizar substituto para ${missingFile.label}`,
+      properties: ['openFile'],
+      filters: isBackground
+        ? [{ name: 'Imagens e GIFs', extensions: [...supportedBackgroundExtensions].map((extension) => extension.slice(1)) }]
+        : [{ name: 'Arquivos MP3', extensions: ['mp3'] }],
+    });
+    if (!dialogOwner.isDestroyed()) {
+      dialogOwner.show();
+      dialogOwner.focus();
+      dialogOwner.webContents.focus();
+    }
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+
+    const replacementPath = selection.filePaths[0];
+    try {
+      const fileInfo = await stat(replacementPath);
+      if (!fileInfo.isFile()) throw new Error('not-file');
+      if (isBackground && fileInfo.size > 25 * 1024 * 1024) {
+        return { ok: false, error: 'A imagem deve ter no máximo 25 MB.' };
+      }
+    } catch {
+      return { ok: false, error: 'Não foi possível ler o arquivo selecionado.' };
+    }
+    if (!(await fileIsAvailable(replacementPath, missingFile.kind))) {
+      return {
+        ok: false,
+        error: isBackground
+          ? 'Selecione uma imagem ou GIF compatível.'
+          : 'Selecione um arquivo MP3 compatível.',
+      };
+    }
+
+    let replacementDuration = 0;
+    if (!isBackground) {
+      try {
+        const metadata = await parseFile(replacementPath, { duration: true });
+        const container = metadata.format.container?.toLowerCase() ?? '';
+        const codec = metadata.format.codec?.toLowerCase() ?? '';
+        if (
+          !container.includes('mpeg') &&
+          !codec.includes('layer 3') &&
+          !codec.includes('mp3')
+        ) throw new Error('invalid-codec');
+        replacementDuration = Number.isFinite(metadata.format.duration)
+          ? metadata.format.duration ?? 0
+          : 0;
+      } catch {
+        return { ok: false, error: 'O arquivo MP3 não pôde ser decodificado.' };
+      }
+    }
+
+    let updatedEntry: BossLibraryEntry;
+    if (key === 'background') {
+      updatedEntry = {
+        ...entry,
+        background: {
+          filePath: replacementPath,
+          name: path.basename(replacementPath),
+        },
+        updatedAt: new Date().toISOString(),
+      };
+    } else if (key.startsWith('music:')) {
+      const trackIndex = Number(key.slice('music:'.length));
+      if (!Number.isInteger(trackIndex) || !entry.music.tracks[trackIndex]) {
+        return { ok: false, error: 'Faixa salva inválida.' };
+      }
+      const tracks = [...entry.music.tracks];
+      const previousTrackPath = tracks[trackIndex].filePath;
+      tracks[trackIndex] = {
+        filePath: replacementPath,
+        name: path.basename(replacementPath, path.extname(replacementPath)),
+        duration: replacementDuration,
+      };
+      updatedEntry = {
+        ...entry,
+        music: {
+          ...entry.music,
+          tracks,
+          currentTrackFilePath:
+            entry.music.currentTrackFilePath === previousTrackPath
+              ? replacementPath
+              : entry.music.currentTrackFilePath,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      const slotIndex = Number(key.slice('soundboard:'.length));
+      const slots = entry.soundboard.slots.map((slot) =>
+        slot.index === slotIndex ? { ...slot, filePath: replacementPath } : slot,
+      );
+      updatedEntry = {
+        ...entry,
+        soundboard: { ...entry.soundboard, slots },
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const previousEntry = bossLibraryEntries[entryIndex];
+    bossLibraryEntries = bossLibraryEntries.map((item, index) =>
+      index === entryIndex ? updatedEntry : item,
+    );
+    try {
+      await persistBossLibrary();
+    } catch {
+      bossLibraryEntries = bossLibraryEntries.map((item, index) =>
+        index === entryIndex ? previousEntry : item,
+      );
+      return { ok: false, error: 'Não foi possível atualizar a biblioteca.' };
+    }
+    notifyLibraryChanged();
+    return { ok: true };
+  },
+);
+
+ipcMain.on('library:close-window', (event) => {
+  if (isLibrarySender(event.sender.id)) libraryWindow?.close();
+});
+
 ipcMain.handle('music:get-state', (): MusicState => getMusicState());
 ipcMain.handle(
   'music:get-playback',
   (): MusicPlaybackState => musicPlaybackState,
 );
 ipcMain.handle('soundboard:get-state', (): SoundboardState => getSoundboardState());
+ipcMain.on('audio:set-universal-muted', (event, muted: unknown) => {
+  if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
+  if (musicState.universalMuted === muted) return;
+  musicState = {
+    ...musicState,
+    universalMuted: muted,
+    revision: musicState.revision + 1,
+  };
+  soundboardRevision += 1;
+  broadcastMusicState();
+  broadcastSoundboardState();
+});
 ipcMain.handle('music:set-soundboard-open', (event, open: unknown) => {
   if (!isMusicSender(event.sender.id) || typeof open !== 'boolean') return false;
   resizeMusicWindow(open);
@@ -1074,6 +1906,8 @@ const applyHealthMutation = (
       from: previousBoss.currentHealth,
       to: nextBoss.currentHealth,
       maximum: nextBoss.maxHealth,
+      shieldFrom: previousBoss.shield,
+      shieldTo: nextBoss.shield,
     };
     playerWindow.webContents.send('health:effect', effect);
   }
@@ -1169,6 +2003,10 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   battleState = applyBattleCommand(battleState, command);
   let backgroundChanged = false;
 
+  if (command.type === 'remove-boss') {
+    linkedLibraryEntries.delete(command.bossId);
+  }
+
   if (command.type === 'commit-background' && pendingBackgroundChange) {
     if (pendingBackgroundChange.type === 'set') {
       activeBackgroundFilePath = pendingBackgroundChange.filePath;
@@ -1187,6 +2025,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'reset-all') {
+    linkedLibraryEntries.clear();
     pendingHealthTimers.forEach(clearTimeout);
     pendingHealthTimers.clear();
     activeBackgroundFilePath = null;
@@ -1278,6 +2117,7 @@ const createAudioResponse = async (request: Request, filePath: string) => {
 };
 
 app.whenReady().then(async () => {
+  bossLibraryEntries = await loadBossLibrary();
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),

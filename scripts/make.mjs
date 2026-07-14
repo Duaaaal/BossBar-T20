@@ -92,6 +92,13 @@ const moveOutput = async (source, destination) => {
     await rename(destination, previousOutput);
     previousOutputExists = true;
   } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EBUSY') {
+      // O Explorer e antivírus podem manter um handle temporário na pasta `out`.
+      // Nesse caso, atualizamos seu conteúdo sem trocar o diretório raiz.
+      await cp(stagedOutput, destination, { recursive: true, force: true });
+      await rm(stagedOutput, { recursive: true, force: true });
+      return;
+    }
     if (error?.code !== 'ENOENT') throw error;
   }
 
