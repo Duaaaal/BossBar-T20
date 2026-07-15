@@ -9,6 +9,7 @@ import {
   session,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -138,8 +139,6 @@ let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let allowControlWindowClose = false;
-let dockedPresentationMaximized = false;
-let normalPlayerBounds: WindowBounds | null = null;
 let synchronizingDockedWindows = false;
 let synchronizingDockedFocus = false;
 const CONTROL_PANEL_MINIMIZED_HEIGHT = 32;
@@ -836,6 +835,43 @@ const getDockedControlBoundsForWindow = (
   return getDockedControlBounds(contentBounds, controlHeight);
 };
 
+const nativeWindowHandle = (window: BrowserWindow) => {
+  const nativeHandle = window.getNativeWindowHandle();
+  return nativeHandle.length >= 8
+    ? nativeHandle.readBigUInt64LE(0).toString()
+    : nativeHandle.readUInt32LE(0).toString();
+};
+
+const configureNativeDockedWindowChrome = () => {
+  if (
+    process.platform !== 'win32' ||
+    !playerWindow ||
+    playerWindow.isDestroyed() ||
+    !controlWindow ||
+    controlWindow.isDestroyed()
+  ) return;
+
+  const playerHandle = nativeWindowHandle(playerWindow);
+  const controlHandle = nativeWindowHandle(controlWindow);
+  const command = [
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class BossBarDwmChrome { [DllImport(\"dwmapi.dll\")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size); public static void Configure(IntPtr hwnd) { int cornerPreference = 1; int borderColor = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(hwnd, 33, ref cornerPreference, 4); DwmSetWindowAttribute(hwnd, 34, ref borderColor, 4); } }'",
+    `[BossBarDwmChrome]::Configure([IntPtr]::new([Int64]${playerHandle}))`,
+    `[BossBarDwmChrome]::Configure([IntPtr]::new([Int64]${controlHandle}))`,
+  ].join('; ');
+
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', command],
+    { stdio: 'ignore', timeout: 5000, windowsHide: true },
+  );
+  if (result.error || result.status !== 0) {
+    console.error(
+      'Não foi possível configurar a moldura DWM:',
+      result.error ?? `processo encerrado com código ${result.status}`,
+    );
+  }
+};
+
 const getInitialWindowLayout = (): {
   player: WindowBounds;
   control: WindowBounds;
@@ -882,43 +918,6 @@ const getInitialWindowLayout = (): {
   };
 };
 
-const getMaximizedDockedLayout = (display: Electron.Display) => {
-  const { workArea } = display;
-  const expandedControlHeight = Math.min(310, Math.max(250, Math.round(workArea.height * 0.28)));
-  const controlHeight = controlPanelMinimized
-    ? CONTROL_PANEL_MINIMIZED_HEIGHT
-    : expandedControlHeight;
-  const outerBounds = playerWindow?.getBounds();
-  const contentBounds = playerWindow?.getContentBounds();
-  const frameWidth = outerBounds && contentBounds
-    ? Math.max(0, outerBounds.width - contentBounds.width)
-    : 0;
-  const frameHeight = outerBounds && contentBounds
-    ? Math.max(0, outerBounds.height - contentBounds.height)
-    : 0;
-  const availableContentHeight = Math.max(
-    405,
-    workArea.height - controlHeight - frameHeight,
-  );
-  const contentWidth = Math.min(
-    workArea.width - frameWidth,
-    Math.floor(availableContentHeight * (16 / 9)),
-  );
-  const contentHeight = Math.round(contentWidth * (9 / 16));
-  const playerWidth = contentWidth + frameWidth;
-  const playerHeight = contentHeight + frameHeight;
-  const groupHeight = playerHeight + controlHeight;
-  const x = workArea.x + Math.round((workArea.width - playerWidth) / 2);
-  const y = workArea.y + Math.max(0, Math.round((workArea.height - groupHeight) / 2));
-  return {
-    player: { x, y, width: playerWidth, height: playerHeight },
-    control: getDockedControlBounds(
-      { x, y, width: playerWidth, height: playerHeight },
-      controlHeight,
-    ),
-  };
-};
-
 const syncControlWindow = () => {
   if (
     synchronizingDockedWindows ||
@@ -935,7 +934,7 @@ const syncControlWindow = () => {
   synchronizingDockedWindows = false;
 };
 
-const raiseDockedWindowGroup = (focusedWindow: 'player' | 'control') => {
+const focusDockedWindowGroup = () => {
   if (
     synchronizingDockedFocus ||
     !playerWindow ||
@@ -948,11 +947,11 @@ const raiseDockedWindowGroup = (focusedWindow: 'player' | 'control') => {
   playerWindow.moveTop();
   controlWindow.showInactive();
   controlWindow.moveTop();
-  if (focusedWindow === 'player') {
-    playerWindow.focus();
-  } else {
-    controlWindow.focus();
-  }
+  // Windows only supports one foreground HWND at a time. Keeping the owned
+  // control window focused makes both it and its player owner form the active
+  // native window group, regardless of which one the user clicked.
+  controlWindow.focus();
+  controlWindow.webContents.focus();
   setTimeout(() => {
     synchronizingDockedFocus = false;
   }, 0);
@@ -998,7 +997,8 @@ const createControlWindow = (bounds: WindowBounds) => {
   controlPanelExpandedHeight = bounds.height;
   window.setClosable(false);
   window.setContentProtection(true);
-  window.on('focus', () => raiseDockedWindowGroup('control'));
+  configureNativeDockedWindowChrome();
+  window.on('focus', focusDockedWindowGroup);
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
       window.webContents.send('battle:state-changed', battleState);
@@ -1040,6 +1040,7 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
     ...bounds,
     show: false,
     hasShadow: false,
+    maximizable: false,
     minWidth: 800,
     minHeight: 450,
     title: 'Apresentação do Chefão - BossBar T20',
@@ -1080,40 +1081,22 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
 
   loadRenderer(window, 'player');
 
-  window.on('focus', () => raiseDockedWindowGroup('player'));
+  window.on('focus', focusDockedWindowGroup);
   window.on('move', () => {
     syncControlWindow();
-    if (window.isFocused()) raiseDockedWindowGroup('player');
+    if (window.isFocused() && controlWindow && !controlWindow.isDestroyed()) {
+      controlWindow.showInactive();
+      controlWindow.moveTop();
+    }
   });
   window.on('resize', syncControlWindow);
   window.on('minimize', () => controlWindow?.hide());
+  window.on('hide', () => controlWindow?.hide());
   window.on('restore', () => {
     syncControlWindow();
     controlWindow?.showInactive();
   });
   window.on('show', () => controlWindow?.showInactive());
-  window.on('maximize', () => {
-    const restoreDock = dockedPresentationMaximized;
-    if (!restoreDock) normalPlayerBounds = window.getNormalBounds();
-    setTimeout(() => {
-      if (playerWindow !== window || window.isDestroyed()) return;
-      synchronizingDockedWindows = true;
-      if (window.isMaximized()) window.unmaximize();
-      if (restoreDock && normalPlayerBounds) {
-        window.setBounds(normalPlayerBounds);
-        dockedPresentationMaximized = false;
-      } else {
-        const layout = getMaximizedDockedLayout(
-          screen.getDisplayMatching(window.getBounds()),
-        );
-        window.setBounds(layout.player);
-        controlWindow?.setBounds(layout.control);
-        dockedPresentationMaximized = true;
-      }
-      synchronizingDockedWindows = false;
-      syncControlWindow();
-    }, 0);
-  });
 
   window.on('close', (event) => {
     if (!allowPlayerWindowClose && musicState.isPlaying) {
@@ -1152,8 +1135,6 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
         controlWindow.setClosable(true);
         controlWindow.close();
       }
-      dockedPresentationMaximized = false;
-      normalPlayerBounds = null;
       controlPanelMinimized = false;
       broadcastPresentationOpen();
     }
