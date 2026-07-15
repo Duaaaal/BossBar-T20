@@ -1,0 +1,14 @@
+.status-value {
+  font-weight: 900;
+  text-shadow: 0 0 7px currentColor;
+  white-space: nowrap;
+}
+
+.status-value.is-damage { color: #ff8f88; }
+.status-value.is-roll { color: #d9a4ff; }
+.status-value.is-mana { color: #79bdff; }
+.status-value.is-modifier { color: #8fe5a5; }
+.status-value.is-distance { color: #81dce9; }
+.status-value.is-difficulty { color: #c9a4ff; }
+.status-value.is-defense { color: #f2cc76; }
+.status-value.is-turns { color: #ffbd72; }

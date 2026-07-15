@@ -1,4 +1,5 @@
 import type { BossState } from './battle';
+import type { ActiveBossStatus } from './status';
 
 export type BossLibraryBossDraft = {
   bossId: string;
@@ -14,6 +15,8 @@ export type BossLibraryBossDraft = {
   damageReduction: number;
   description: string;
   actionSeverity: 'normal' | 'grave';
+  turnCount: number;
+  activeStatuses: ActiveBossStatus[];
 };
 
 export type BossLibraryDraft = {

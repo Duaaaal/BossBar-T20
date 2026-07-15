@@ -21,6 +21,8 @@ const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
     damageReduction: boss.damageReduction,
     description: boss.nextAction,
     actionSeverity: boss.actionSeverity,
+    turnCount: boss.turnCount,
+    activeStatuses: boss.activeStatuses,
   })),
 });
 

@@ -3,6 +3,8 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -18,6 +20,18 @@ import {
   type SoundboardState,
   volumeToGain,
 } from './shared/battle';
+import { statusIconUrl } from './shared/bundled-assets';
+import {
+  getDamageFormulaRange,
+  getActiveStatusDescription,
+  getActiveStatusName,
+  getStatusDefinition,
+} from './shared/status';
+import {
+  StatusDamageValue,
+  StatusRichText,
+  StatusTurnValue,
+} from './StatusRichText';
 import './player.css';
 import './scrollbars.css';
 
@@ -25,7 +39,12 @@ const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
 
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
+const shieldBreakParticles = Array.from({ length: 24 }, (_, index) => index);
 const noHealthEffects: HealthEffect[] = [];
+const splitStatusRows = <Item,>(items: Item[], rowSize = 10) =>
+  Array.from({ length: Math.ceil(items.length / rowSize) }, (_, rowIndex) =>
+    items.slice(rowIndex * rowSize, (rowIndex + 1) * rowSize),
+  );
 
 const HealthRuler = memo(function HealthRuler() {
   return (
@@ -48,6 +67,7 @@ const HealthRuler = memo(function HealthRuler() {
 });
 
 type AnimatedHealthBarProps = {
+  activeStatuses: BossState['activeStatuses'];
   current: number;
   maximum: number;
   shield: number;
@@ -55,13 +75,16 @@ type AnimatedHealthBarProps = {
 };
 
 const AnimatedHealthBar = ({
+  activeStatuses,
   current,
   maximum,
   shield,
   effects,
 }: AnimatedHealthBarProps) => {
   const initialPercent = healthPercent(current, maximum);
+  const statusTooltipPrefix = useId();
   const healthBarRef = useRef<HTMLDivElement>(null);
+  const shieldBadgeRef = useRef<HTMLDivElement>(null);
   const lastAnimatedEffectId = useRef(0);
   const previous = useRef({ current, maximum });
   const [displayPercent, setDisplayPercent] = useState(initialPercent);
@@ -70,6 +93,31 @@ const AnimatedHealthBar = ({
   const [healingPreviewPercent, setHealingPreviewPercent] = useState(0);
   const [healingPreviewActive, setHealingPreviewActive] = useState(false);
   const [healingPreviewPrimed, setHealingPreviewPrimed] = useState(false);
+  const {
+    damageEffects,
+    shieldBreakEffects,
+    shieldDamageEffects,
+  } = useMemo(() => {
+    const nextDamageEffects: HealthEffect[] = [];
+    const nextShieldBreakEffects: HealthEffect[] = [];
+    const nextShieldDamageEffects: HealthEffect[] = [];
+    for (const effect of effects) {
+      if (effect.type === 'damage' && effect.from > effect.to) {
+        nextDamageEffects.push(effect);
+      }
+      if (effect.type === 'damage' && effect.shieldFrom > effect.shieldTo) {
+        nextShieldDamageEffects.push(effect);
+      }
+      if (isShieldBreakEffect(effect)) nextShieldBreakEffects.push(effect);
+    }
+    return {
+      damageEffects: nextDamageEffects,
+      shieldBreakEffects: nextShieldBreakEffects,
+      shieldDamageEffects: nextShieldDamageEffects,
+    };
+  }, [effects]);
+  const statusRows = useMemo(() => splitStatusRows(activeStatuses), [activeStatuses]);
+  const showShieldBadge = shield > 0;
 
   useEffect(() => {
     const timers: Array<ReturnType<typeof setTimeout>> = [];
@@ -141,6 +189,19 @@ const AnimatedHealthBar = ({
     lastAnimatedEffectId.current = newEffects[newEffects.length - 1].id;
     newEffects.forEach((effect, index) => {
       const delay = index * 70;
+
+      if (effect.type === 'damage' && effect.shieldFrom > effect.shieldTo) {
+        shieldBadgeRef.current?.animate(
+          [
+            { filter: 'brightness(1) drop-shadow(0 3px 4px rgba(0,0,0,.82))', transform: 'translate(0, 0) scale(1)' },
+            { filter: 'brightness(1.9) drop-shadow(0 0 12px rgba(255,224,172,.95))', transform: 'translate(-3px, -2px) scale(1.12) rotate(-4deg)', offset: .2 },
+            { transform: 'translate(3px, 1px) scale(.96) rotate(3deg)', offset: .42 },
+            { transform: 'translate(-2px, 0) scale(1.04) rotate(-2deg)', offset: .65 },
+            { filter: 'brightness(1) drop-shadow(0 3px 4px rgba(0,0,0,.82))', transform: 'translate(0, 0) scale(1)' },
+          ],
+          { delay, duration: 620, easing: 'cubic-bezier(.2,.75,.25,1)' },
+        );
+      }
 
       if (effect.type === 'damage') {
         const heavyDamage = isHeavyDamageEffect(effect);
@@ -263,37 +324,123 @@ const AnimatedHealthBar = ({
           />
         ))}
       </div>
-      {shield > 0 && (
-        <div className="shield-badge" role="status" aria-label={`Escudo ${shield}`}>
+      {showShieldBadge && (
+        <div className="shield-badge" ref={shieldBadgeRef} role="status" aria-label={`Escudo ${shield}`}>
           <span>{shield}</span>
         </div>
       )}
-      {effects.filter(isShieldBreakEffect).map((effect) => (
+      {shieldDamageEffects.map((effect, index) => (
+        <b
+          className="shield-damage-number"
+          key={`shield-damage-${effect.id}`}
+          style={{ '--shield-damage-stack': `${index * 5}px` } as CSSProperties}
+        >
+          −{effect.shieldFrom - effect.shieldTo}
+        </b>
+      ))}
+      {activeStatuses.length > 0 && (
+        <div
+          className={`boss-status-tray ${showShieldBadge ? 'has-shield' : ''}`}
+          aria-label="Condições ativas"
+          role="list"
+        >
+          {statusRows.map((statusRow, rowIndex) => (
+            <div className="boss-status-row" key={`status-row-${rowIndex}`}>
+              {statusRow.map((activeStatus, statusIndex) => {
+                const definition = getStatusDefinition(activeStatus.statusId);
+                if (!definition) return null;
+
+                const statusName = getActiveStatusName(activeStatus);
+                const statusDescription = getActiveStatusDescription(activeStatus);
+                const damageFormula = (activeStatus.damageFormula ?? '').trim();
+                const damageRange = damageFormula
+                  ? getDamageFormulaRange(damageFormula)
+                  : null;
+                const turnLabel = activeStatus.turnsRemaining === 1
+                  ? '1 turno restante'
+                  : `${activeStatus.turnsRemaining} turnos restantes`;
+                const tooltipId = `${statusTooltipPrefix}-${activeStatus.statusId}`;
+                const damageLabel = damageFormula
+                  ? `. Dano por turno: ${damageFormula}`
+                  : '';
+
+                return (
+                  <span
+                    className="boss-status-icon"
+                    key={`${activeStatus.statusId}-${statusIndex}`}
+                    role="listitem"
+                    tabIndex={0}
+                    aria-describedby={tooltipId}
+                    aria-label={`${statusName}: ${statusDescription}${damageLabel}. ${turnLabel}`}
+                  >
+                    <img
+                      alt=""
+                      draggable={false}
+                      src={statusIconUrl(definition.iconFile)}
+                    />
+                    <span className="boss-status-tooltip" id={tooltipId} role="tooltip">
+                      <span className="boss-status-tooltip-header">
+                        <img
+                          alt=""
+                          draggable={false}
+                          src={statusIconUrl(definition.iconFile)}
+                        />
+                        <strong>{statusName}</strong>
+                      </span>
+                      <span><StatusRichText text={statusDescription} /></span>
+                      {damageFormula && (
+                        <span className="boss-status-tooltip-detail">
+                          <span>
+                            Dano: <StatusDamageValue>{damageFormula}</StatusDamageValue>
+                          </span>
+                          {damageRange && (
+                            <span className="boss-status-damage-range">
+                              (Min = <StatusDamageValue>
+                                {String(damageRange.minimum)}
+                              </StatusDamageValue>, Max = <StatusDamageValue>
+                                {String(damageRange.maximum)}
+                              </StatusDamageValue>)
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      <span className="boss-status-tooltip-detail">
+                        Duração: <StatusTurnValue>{turnLabel}</StatusTurnValue>
+                      </span>
+                    </span>
+                  </span>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+      {shieldBreakEffects.map((effect) => (
         <div className="shield-break-effect" key={`shield-break-${effect.id}`} aria-hidden="true">
-          {Array.from({ length: 24 }, (_, index) => <span key={index} />)}
+          {shieldBreakParticles.map((index) => <span key={index} />)}
         </div>
       ))}
-      {effects
-        .filter((effect) => effect.type === 'damage' && effect.from > effect.to)
-        .map((effect, index) => {
-          const damage = Math.round(effect.from - effect.to);
-          const impactPosition = Math.max(
-            3,
-            Math.min(97, healthPercent(effect.to, effect.maximum)),
-          );
-          return (
-            <span
-              className={`damage-number ${isHeavyDamageEffect(effect) ? 'is-heavy' : ''}`}
-              key={`damage-${effect.id}`}
-              style={{
-                '--damage-position': `${impactPosition}%`,
-                '--damage-stack': `${index * 5}px`,
-              } as CSSProperties}
-            >
-              −{damage}
-            </span>
-          );
-        })}
+      {damageEffects.map((effect, index) => {
+        const damage = Math.round(effect.from - effect.to);
+        const impactPosition = Math.max(
+          3,
+          Math.min(97, healthPercent(effect.to, effect.maximum)),
+        );
+        return (
+          <span
+            className={`damage-number ${isHeavyDamageEffect(effect) ? 'is-heavy' : ''} ${effect.source?.kind === 'status' ? 'is-status' : ''}`}
+            key={`damage-${effect.id}`}
+            style={{
+              '--damage-position': `${impactPosition}%`,
+              '--damage-stack': `${index * 5}px`,
+            } as CSSProperties}
+          >
+            {effect.source?.kind === 'status'
+              ? `${effect.source.name} −${damage}`
+              : `−${damage}`}
+          </span>
+        );
+      })}
     </div>
   );
 };
@@ -690,6 +837,7 @@ const BossHud = memo(function BossHud({
     >
       <h1 className="boss-name">{boss.bossName}</h1>
       <AnimatedHealthBar
+        activeStatuses={boss.activeStatuses}
         current={boss.currentHealth}
         effects={effects}
         maximum={boss.maxHealth}

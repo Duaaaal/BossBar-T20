@@ -8,7 +8,7 @@ import {
   screen,
   session,
 } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -21,6 +21,7 @@ import started from 'electron-squirrel-startup';
 import { parseFile } from 'music-metadata';
 import {
   applyBattleCommand,
+  advanceBossTurn,
   calculateHealthSequence,
   createInitialBoss,
   initialBattleState,
@@ -58,10 +59,28 @@ import {
   backgroundVideoMimeTypeForFile,
   resolveByteRange,
 } from './shared/media';
+import {
+  normalizeActiveStatuses,
+  type ActiveBossStatus,
+} from './shared/status';
+import {
+  calculateInitialDockedPresentationSize,
+  calculateProportionalDockedSize,
+} from './shared/window-layout';
 
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'boss-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      corsEnabled: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+  {
+    scheme: 'boss-asset',
     privileges: {
       standard: true,
       secure: true,
@@ -138,13 +157,23 @@ let allowAppClose = false;
 let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let dockedMoveFitTimer: ReturnType<typeof setTimeout> | null = null;
 let allowControlWindowClose = false;
 let synchronizingDockedWindows = false;
 let synchronizingDockedFocus = false;
 const CONTROL_PANEL_MINIMIZED_HEIGHT = 32;
 const CONTROL_PANEL_DOCK_OVERLAP = 1;
+const CONTROL_PANEL_MIN_EXPANDED_HEIGHT = 350;
+const CONTROL_PANEL_PREFERRED_HEIGHT = 360;
+const CONTROL_PANEL_MAX_EXPANDED_HEIGHT = 430;
+const PLAYER_MIN_CONTENT_WIDTH = 960;
+const PLAYER_PREFERRED_CONTENT_WIDTH = 1280;
+const PLAYER_MAX_OUTER_WIDTH = 1920;
+const PLAYER_MAX_OUTER_HEIGHT = 1040;
+const PLAYER_NATIVE_FRAME_BUDGET = 48;
+const DOCKED_WINDOW_GAP = 12;
 let controlPanelMinimized = false;
-let controlPanelExpandedHeight = 300;
+let controlPanelExpandedHeight = 390;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -155,13 +184,18 @@ type StoredMediaFile = {
   filePath: string;
 };
 
-type StoredLibraryBoss = Omit<
-  BossLibraryBossDraft,
-  'bossId' | 'shield'
-> & { shield?: number };
+type StoredLibraryBoss = Omit<BossLibraryBossDraft, 'bossId'>;
+type LegacyStoredLibraryBoss = Omit<
+  StoredLibraryBoss,
+  'shield' | 'turnCount' | 'activeStatuses'
+> & {
+  shield?: number;
+  turnCount?: number;
+  activeStatuses?: ActiveBossStatus[];
+};
 
 type BossLibraryEntry = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   id: string;
   isAutosave: boolean;
   createdAt: string;
@@ -216,9 +250,35 @@ const rendererFile = (page: RendererPage) =>
     `../renderer/${MAIN_WINDOW_VITE_NAME}/${page}.html`,
   );
 
-const applicationIcon = () => app.isPackaged
-  ? path.join(process.resourcesPath, 'assets', 'bossbar-icon.ico')
-  : path.join(app.getAppPath(), 'assets', 'bossbar-icon.ico');
+const bundledAssetsDirectory = () => app.isPackaged
+  ? path.join(process.resourcesPath, 'assets')
+  : path.join(app.getAppPath(), 'assets');
+
+const applicationIcon = () =>
+  path.join(bundledAssetsDirectory(), 'bossbar-icon.ico');
+
+const resolveBundledAssetPath = (requestUrl: URL): string | null => {
+  if (requestUrl.hostname !== 'local') return null;
+
+  let relativePath: string;
+  try {
+    relativePath = decodeURIComponent(requestUrl.pathname).replace(/^\/+/, '');
+  } catch {
+    return null;
+  }
+  if (!relativePath || relativePath.includes('\0')) return null;
+
+  const root = path.resolve(bundledAssetsDirectory());
+  const resolvedPath = path.resolve(root, relativePath);
+  const containedPath = path.relative(root, resolvedPath);
+  if (
+    !containedPath ||
+    containedPath === '..' ||
+    containedPath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(containedPath)
+  ) return null;
+  return resolvedPath;
+};
 
 const defaultMediaDirectory = (
   projectFolder: 'Imagens' | 'Musica' | 'SFX',
@@ -352,7 +412,7 @@ const isStoredLibraryEnvelope = (
   );
 };
 
-const isStoredLibraryBoss = (value: unknown): value is StoredLibraryBoss =>
+const isStoredLibraryBoss = (value: unknown): value is LegacyStoredLibraryBoss =>
   isRecord(value) &&
   typeof value.bossName === 'string' &&
   typeof value.amount === 'string' &&
@@ -367,28 +427,65 @@ const isStoredLibraryBoss = (value: unknown): value is StoredLibraryBoss =>
   typeof value.description === 'string' &&
   (value.actionSeverity === 'normal' || value.actionSeverity === 'grave');
 
+const normalizeStoredLibraryBoss = (
+  value: unknown,
+  includesStatusState: boolean,
+): StoredLibraryBoss | null => {
+  if (!isStoredLibraryBoss(value)) return null;
+  if (
+    includesStatusState && (
+      !isFiniteStoredNumber(value.turnCount) ||
+      !Array.isArray(value.activeStatuses)
+    )
+  ) return null;
+
+  return {
+    bossName: value.bossName,
+    amount: value.amount,
+    maxHealth: value.maxHealth,
+    currentHealth: value.currentHealth,
+    attack: value.attack,
+    rangedAttack: value.rangedAttack,
+    defense: value.defense,
+    shield: value.shield ?? 0,
+    skills: value.skills,
+    damageReduction: value.damageReduction,
+    description: value.description,
+    actionSeverity: value.actionSeverity,
+    turnCount: includesStatusState
+      ? clampInteger(value.turnCount ?? 0, 0, 1_000_000)
+      : 0,
+    activeStatuses: includesStatusState
+      ? normalizeActiveStatuses(value.activeStatuses)
+      : [],
+  };
+};
+
 const normalizeStoredLibraryEntry = (
   value: unknown,
 ): BossLibraryEntry | null => {
   if (!isStoredLibraryEnvelope(value)) return null;
 
   if (
-    value.schemaVersion === 2 &&
+    (value.schemaVersion === 3 || value.schemaVersion === 2) &&
     Array.isArray(value.bosses) &&
     value.bosses.length >= 1 &&
     value.bosses.length <= 3 &&
-    value.bosses.every(isStoredLibraryBoss) &&
     Number.isInteger(value.activeBossIndex) &&
     (value.activeBossIndex as number) >= 0 &&
     (value.activeBossIndex as number) < value.bosses.length
   ) {
+    const bosses = value.bosses.map((boss) =>
+      normalizeStoredLibraryBoss(boss, value.schemaVersion === 3),
+    );
+    if (bosses.some((boss) => boss === null)) return null;
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
       updatedAt: value.updatedAt,
-      bosses: value.bosses,
+      bosses: bosses as StoredLibraryBoss[],
       activeBossIndex: value.activeBossIndex as number,
       background: value.background,
       music: value.music,
@@ -396,14 +493,16 @@ const normalizeStoredLibraryEntry = (
     };
   }
 
-  if (value.schemaVersion === 1 && isStoredLibraryBoss(value.boss)) {
+  if (value.schemaVersion === 1) {
+    const boss = normalizeStoredLibraryBoss(value.boss, false);
+    if (!boss) return null;
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
       updatedAt: value.updatedAt,
-      bosses: [value.boss],
+      bosses: [boss],
       activeBossIndex: 0,
       background: value.background,
       music: value.music,
@@ -435,7 +534,7 @@ const persistBossLibrary = () => {
   const filePath = bossLibraryPath();
   const temporaryPath = `${filePath}.tmp`;
   const contents = JSON.stringify(
-    { schemaVersion: 2, entries: bossLibraryEntries },
+    { schemaVersion: 3, entries: bossLibraryEntries },
     null,
     2,
   );
@@ -489,12 +588,14 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
     'shield',
     'skills',
     'damageReduction',
+    'turnCount',
   ] as const;
     if (numericFields.some((field) => !Number.isFinite(rawBoss[field]))) return [];
   if (
       typeof rawBoss.bossName !== 'string' ||
       typeof rawBoss.amount !== 'string' ||
       typeof rawBoss.description !== 'string' ||
+      !Array.isArray(rawBoss.activeStatuses) ||
       (rawBoss.actionSeverity !== 'normal' && rawBoss.actionSeverity !== 'grave')
     ) return [];
 
@@ -516,6 +617,8 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
       description: rawBoss.description.trim().slice(0, 100),
       actionSeverity: rawBoss.actionSeverity,
+      turnCount: clampInteger(rawBoss.turnCount as number, 0, 1_000_000),
+      activeStatuses: normalizeActiveStatuses(rawBoss.activeStatuses),
     }];
   });
 
@@ -551,9 +654,11 @@ const captureLibraryEntry = (
     damageReduction: boss.damageReduction,
     description: boss.description,
     actionSeverity: boss.actionSeverity,
+    turnCount: boss.turnCount,
+    activeStatuses: boss.activeStatuses,
   }));
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: existingEntry?.id ?? (isAutosave ? 'autosave' : randomUUID()),
     isAutosave,
     createdAt: existingEntry?.createdAt ?? now,
@@ -835,6 +940,218 @@ const getDockedControlBoundsForWindow = (
   return getDockedControlBounds(contentBounds, controlHeight);
 };
 
+const getMasterWidthForWorkArea = (workArea: Electron.Rectangle) =>
+  Math.min(430, Math.max(390, Math.round(workArea.width * 0.25)));
+
+const getPlayerAreaForDisplay = (
+  display: Electron.Display,
+): Electron.Rectangle => {
+  const { workArea } = display;
+  const primaryDisplay = screen.getPrimaryDisplay();
+  if (display.id !== primaryDisplay.id) return { ...workArea };
+
+  const masterWidth = getMasterWidthForWorkArea(workArea);
+  return {
+    x: workArea.x,
+    y: workArea.y,
+    width: Math.max(1, workArea.width - masterWidth - DOCKED_WINDOW_GAP),
+    height: workArea.height,
+  };
+};
+
+const diagonalResizeEdges = new Set<Electron.WillResizeDetails['edge']>([
+  'top-left',
+  'top-right',
+  'bottom-left',
+  'bottom-right',
+]);
+
+const isDiagonalResize = (details: Electron.WillResizeDetails) =>
+  diagonalResizeEdges.has(details.edge);
+
+type DockedResizeSource = 'player' | 'control';
+
+const applyDockedGroupGeometry = (
+  window: BrowserWindow,
+  requestedContentWidth: number,
+  requestedControlHeight: number,
+  display: Electron.Display,
+  edge: Electron.WillResizeDetails['edge'],
+  source: DockedResizeSource,
+  scaleControlHeight: boolean,
+) => {
+  const playerArea = getPlayerAreaForDisplay(display);
+  const { workArea } = display;
+  const outerBounds = window.getBounds();
+  const contentBounds = window.getContentBounds();
+  const frameWidth = Math.max(0, outerBounds.width - contentBounds.width);
+  const frameHeight = Math.max(0, outerBounds.height - contentBounds.height);
+  const topInset = Math.max(0, contentBounds.y - outerBounds.y);
+  const maximumContentWidthFromOuterHeight = Math.max(
+    1,
+    Math.floor(
+      Math.max(1, PLAYER_MAX_OUTER_HEIGHT - frameHeight) * (16 / 9),
+    ),
+  );
+  const size = calculateProportionalDockedSize({
+    requestedContentWidth,
+    currentContentWidth: contentBounds.width,
+    currentControlHeight: requestedControlHeight,
+    availableContentWidth: Math.max(
+      1,
+      Math.min(
+        playerArea.width - frameWidth,
+        PLAYER_MAX_OUTER_WIDTH - frameWidth,
+        maximumContentWidthFromOuterHeight,
+      ),
+    ),
+    workAreaHeight: workArea.height,
+    frameHeight,
+    topInset,
+    dockOverlap: CONTROL_PANEL_DOCK_OVERLAP,
+    minimumContentWidth: PLAYER_MIN_CONTENT_WIDTH,
+    minimumControlHeight: CONTROL_PANEL_MIN_EXPANDED_HEIGHT,
+    maximumControlHeight: CONTROL_PANEL_MAX_EXPANDED_HEIGHT,
+    scaleControlHeight,
+  });
+  const targetContentX = edge.includes('left')
+    ? contentBounds.x + contentBounds.width - size.contentWidth
+    : contentBounds.x;
+  const targetContentY = source === 'player' && edge.startsWith('top')
+    ? contentBounds.y + contentBounds.height - size.contentHeight
+    : contentBounds.y;
+
+  synchronizingDockedWindows = true;
+  // Release the constraints from the previous display before applying the
+  // dimensions calculated for the display currently under the window.
+  window.setMinimumSize(100, 100);
+  window.setMaximumSize(100_000, 100_000);
+  window.setContentBounds({
+    x: targetContentX,
+    y: targetContentY,
+    width: size.contentWidth,
+    height: size.contentHeight,
+  });
+
+  let adjustedOuterBounds = window.getBounds();
+  let adjustedContentBounds = window.getContentBounds();
+  let controlBounds = getDockedControlBounds(
+    adjustedContentBounds,
+    size.controlHeight,
+  );
+  const groupLeft = Math.min(adjustedOuterBounds.x, controlBounds.x);
+  const groupTop = Math.min(adjustedOuterBounds.y, controlBounds.y);
+  const groupRight = Math.max(
+    adjustedOuterBounds.x + adjustedOuterBounds.width,
+    controlBounds.x + controlBounds.width,
+  );
+  const groupBottom = Math.max(
+    adjustedOuterBounds.y + adjustedOuterBounds.height,
+    controlBounds.y + controlBounds.height,
+  );
+  let offsetX = 0;
+  let offsetY = 0;
+  if (groupLeft < playerArea.x) offsetX = playerArea.x - groupLeft;
+  if (groupRight + offsetX > playerArea.x + playerArea.width) {
+    offsetX += playerArea.x + playerArea.width - (groupRight + offsetX);
+  }
+  if (groupTop < workArea.y) offsetY = workArea.y - groupTop;
+  if (groupBottom + offsetY > workArea.y + workArea.height) {
+    offsetY += workArea.y + workArea.height - (groupBottom + offsetY);
+  }
+  if (offsetX !== 0 || offsetY !== 0) {
+    window.setPosition(
+      adjustedOuterBounds.x + offsetX,
+      adjustedOuterBounds.y + offsetY,
+    );
+    adjustedOuterBounds = window.getBounds();
+    adjustedContentBounds = window.getContentBounds();
+    controlBounds = getDockedControlBounds(
+      adjustedContentBounds,
+      size.controlHeight,
+    );
+  }
+
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.setBounds(controlBounds);
+  }
+
+  const adjustedFrameWidth = Math.max(
+    0,
+    adjustedOuterBounds.width - adjustedContentBounds.width,
+  );
+  const adjustedFrameHeight = Math.max(
+    0,
+    adjustedOuterBounds.height - adjustedContentBounds.height,
+  );
+  const minimumOuterWidth = size.minimumContentWidth + adjustedFrameWidth;
+  const minimumOuterHeight =
+    Math.round(size.minimumContentWidth * (9 / 16)) + adjustedFrameHeight;
+  const maximumOuterWidth = size.maximumContentWidth + adjustedFrameWidth;
+  const maximumOuterHeight =
+    Math.round(size.maximumContentWidth * (9 / 16)) + adjustedFrameHeight;
+  window.setMinimumSize(minimumOuterWidth, minimumOuterHeight);
+  window.setMaximumSize(maximumOuterWidth, maximumOuterHeight);
+  synchronizingDockedWindows = false;
+
+  if (!controlPanelMinimized) {
+    controlPanelExpandedHeight = size.controlHeight;
+  }
+  return size;
+};
+
+const constrainPlayerForControl = (
+  window: BrowserWindow,
+  controlHeight: number,
+  display = screen.getDisplayMatching(window.getBounds()),
+) => {
+  const contentBounds = window.getContentBounds();
+  applyDockedGroupGeometry(
+    window,
+    contentBounds.width,
+    controlHeight,
+    display,
+    'bottom-right',
+    'player',
+    !controlPanelMinimized,
+  );
+};
+
+const resizeDockedGroup = (
+  requestedBounds: Electron.Rectangle,
+  details: Electron.WillResizeDetails,
+  source: DockedResizeSource,
+) => {
+  if (
+    !playerWindow ||
+    playerWindow.isDestroyed() ||
+    !controlWindow ||
+    controlWindow.isDestroyed()
+  ) return;
+
+  const playerOuterBounds = playerWindow.getBounds();
+  const playerContentBounds = playerWindow.getContentBounds();
+  const frameWidth = Math.max(
+    0,
+    playerOuterBounds.width - playerContentBounds.width,
+  );
+  const requestedContentWidth = source === 'player'
+    ? Math.max(1, requestedBounds.width - frameWidth)
+    : Math.max(1, requestedBounds.width);
+  const display = screen.getDisplayMatching(requestedBounds);
+  applyDockedGroupGeometry(
+    playerWindow,
+    requestedContentWidth,
+    controlPanelMinimized
+      ? CONTROL_PANEL_MINIMIZED_HEIGHT
+      : controlPanelExpandedHeight,
+    display,
+    details.edge,
+    source,
+    !controlPanelMinimized,
+  );
+};
+
 const nativeWindowHandle = (window: BrowserWindow) => {
   const nativeHandle = window.getNativeWindowHandle();
   return nativeHandle.length >= 8
@@ -878,19 +1195,24 @@ const getInitialWindowLayout = (): {
   master: WindowBounds;
 } => {
   const { workArea } = screen.getPrimaryDisplay();
-  const gap = 12;
-  const masterWidth = Math.min(430, Math.max(390, Math.round(workArea.width * 0.25)));
+  const masterWidth = getMasterWidthForWorkArea(workArea);
   const masterHeight = Math.min(660, workArea.height);
-  const controlHeight = Math.min(300, Math.max(250, Math.round(workArea.height * 0.28)));
-  const playerAreaWidth = Math.max(720, workArea.width - masterWidth - gap);
-  const maximumPlayerHeight = Math.max(405, workArea.height - controlHeight);
-  let playerWidth = Math.min(1180, playerAreaWidth, Math.floor(maximumPlayerHeight * (16 / 9)));
-  let playerHeight = Math.round(playerWidth * (9 / 16));
-
-  if (playerHeight > maximumPlayerHeight) {
-    playerHeight = maximumPlayerHeight;
-    playerWidth = Math.max(720, Math.round(playerHeight * (16 / 9)));
-  }
+  const controlHeight = Math.min(
+    CONTROL_PANEL_PREFERRED_HEIGHT,
+    Math.max(CONTROL_PANEL_MIN_EXPANDED_HEIGHT, workArea.height - 450),
+  );
+  const presentationSize = calculateInitialDockedPresentationSize({
+    workAreaWidth: workArea.width,
+    workAreaHeight: workArea.height,
+    masterWidth,
+    gap: DOCKED_WINDOW_GAP,
+    controlHeight,
+    nativeFrameBudget: PLAYER_NATIVE_FRAME_BUDGET,
+    preferredContentWidth: PLAYER_PREFERRED_CONTENT_WIDTH,
+  });
+  const playerAreaWidth = presentationSize.playerAreaWidth;
+  const playerWidth = presentationSize.contentWidth;
+  const playerHeight = presentationSize.estimatedOuterHeight;
 
   const playerX =
     workArea.x + Math.round((playerAreaWidth - playerWidth) / 2);
@@ -934,6 +1256,23 @@ const syncControlWindow = () => {
   synchronizingDockedWindows = false;
 };
 
+const scheduleDockedGroupFit = () => {
+  if (dockedMoveFitTimer) clearTimeout(dockedMoveFitTimer);
+  dockedMoveFitTimer = setTimeout(() => {
+    dockedMoveFitTimer = null;
+    if (!playerWindow || playerWindow.isDestroyed()) return;
+    const display = screen.getDisplayMatching(playerWindow.getBounds());
+    constrainPlayerForControl(
+      playerWindow,
+      controlPanelMinimized
+        ? CONTROL_PANEL_MINIMIZED_HEIGHT
+        : controlPanelExpandedHeight,
+      display,
+    );
+    syncControlWindow();
+  }, 120);
+};
+
 const focusDockedWindowGroup = () => {
   if (
     synchronizingDockedFocus ||
@@ -971,10 +1310,10 @@ const createControlWindow = (bounds: WindowBounds) => {
     show: false,
     frame: false,
     hasShadow: false,
-    minWidth: 720,
+    minWidth: Math.min(PLAYER_MIN_CONTENT_WIDTH, bounds.width),
     minHeight: CONTROL_PANEL_MINIMIZED_HEIGHT,
-    maxHeight: 340,
-    resizable: false,
+    maxHeight: CONTROL_PANEL_MAX_EXPANDED_HEIGHT,
+    resizable: true,
     movable: false,
     minimizable: false,
     maximizable: false,
@@ -999,6 +1338,16 @@ const createControlWindow = (bounds: WindowBounds) => {
   window.setContentProtection(true);
   configureNativeDockedWindowChrome();
   window.on('focus', focusDockedWindowGroup);
+  window.on('will-resize', (event, newBounds, details) => {
+    event.preventDefault();
+    if (
+      !synchronizingDockedWindows &&
+      !controlPanelMinimized &&
+      isDiagonalResize(details)
+    ) {
+      resizeDockedGroup(newBounds, details, 'control');
+    }
+  });
   window.webContents.on('did-finish-load', () => {
     if (!window.isDestroyed()) {
       window.webContents.send('battle:state-changed', battleState);
@@ -1040,9 +1389,10 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
     ...bounds,
     show: false,
     hasShadow: false,
+    resizable: true,
     maximizable: false,
-    minWidth: 800,
-    minHeight: 450,
+    minWidth: Math.min(800, bounds.width),
+    minHeight: Math.min(450, bounds.height),
     title: 'Apresentação do Chefão - BossBar T20',
     backgroundColor: '#050408',
     autoHideMenuBar: true,
@@ -1060,15 +1410,13 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   allowPlayerWindowClose = false;
   playerWindowClosePending = false;
   window.setAspectRatio(16 / 9);
-  const outerBounds = window.getBounds();
-  const contentBounds = window.getContentBounds();
-  const frameWidth = Math.max(0, outerBounds.width - contentBounds.width);
-  const contentWidth = Math.max(1, bounds.width - frameWidth);
+  const contentWidth = Math.max(1, bounds.width);
   window.setContentSize(contentWidth, Math.round(contentWidth * (9 / 16)));
 
   const initialControlBounds = getInitialWindowLayout().control;
+  constrainPlayerForControl(window, initialControlBounds.height);
   createControlWindow(
-    getDockedControlBoundsForWindow(window, initialControlBounds.height),
+    getDockedControlBoundsForWindow(window, controlPanelExpandedHeight),
   );
 
   window.webContents.on('did-finish-load', () => {
@@ -1082,14 +1430,41 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   loadRenderer(window, 'player');
 
   window.on('focus', focusDockedWindowGroup);
+  window.on('will-resize', (event, newBounds, details) => {
+    event.preventDefault();
+    if (!synchronizingDockedWindows && isDiagonalResize(details)) {
+      resizeDockedGroup(newBounds, details, 'player');
+    }
+  });
   window.on('move', () => {
     syncControlWindow();
+    scheduleDockedGroupFit();
     if (window.isFocused() && controlWindow && !controlWindow.isDestroyed()) {
       controlWindow.showInactive();
       controlWindow.moveTop();
     }
   });
   window.on('resize', syncControlWindow);
+  window.on('resized', () => {
+    constrainPlayerForControl(
+      window,
+      controlPanelMinimized
+        ? CONTROL_PANEL_MINIMIZED_HEIGHT
+        : controlPanelExpandedHeight,
+    );
+    syncControlWindow();
+  });
+  window.on('moved', () => {
+    const display = screen.getDisplayMatching(window.getBounds());
+    constrainPlayerForControl(
+      window,
+      controlPanelMinimized
+        ? CONTROL_PANEL_MINIMIZED_HEIGHT
+        : controlPanelExpandedHeight,
+      display,
+    );
+    syncControlWindow();
+  });
   window.on('minimize', () => controlWindow?.hide());
   window.on('hide', () => controlWindow?.hide());
   window.on('restore', () => {
@@ -1130,6 +1505,8 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
       soundEffectSources.clear();
       if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
       playerWindowCloseTimer = null;
+      if (dockedMoveFitTimer) clearTimeout(dockedMoveFitTimer);
+      dockedMoveFitTimer = null;
       if (controlWindow && !controlWindow.isDestroyed()) {
         allowControlWindowClose = true;
         controlWindow.setClosable(true);
@@ -1314,12 +1691,21 @@ ipcMain.handle('control:set-minimized', (event, minimized: unknown) => {
 
   const controlBounds = controlWindow.getBounds();
   if (!controlPanelMinimized) {
-    controlPanelExpandedHeight = Math.max(240, controlBounds.height);
+    controlPanelExpandedHeight = Math.max(
+      CONTROL_PANEL_MIN_EXPANDED_HEIGHT,
+      controlBounds.height,
+    );
   }
   controlPanelMinimized = minimized;
+  const targetControlHeight = minimized
+    ? CONTROL_PANEL_MINIMIZED_HEIGHT
+    : controlPanelExpandedHeight;
+  constrainPlayerForControl(playerWindow, targetControlHeight);
   controlWindow.setBounds(getDockedControlBoundsForWindow(
     playerWindow,
-    minimized ? CONTROL_PANEL_MINIMIZED_HEIGHT : controlPanelExpandedHeight,
+    controlPanelMinimized
+      ? CONTROL_PANEL_MINIMIZED_HEIGHT
+      : controlPanelExpandedHeight,
   ));
   return true;
 });
@@ -1586,6 +1972,8 @@ const restoreLibraryEntry = (
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
       nextAction: storedBoss.description.trim().slice(0, 100),
       actionSeverity: storedBoss.actionSeverity,
+      turnCount: clampInteger(storedBoss.turnCount, 0, 1_000_000),
+      activeStatuses: normalizeActiveStatuses(storedBoss.activeStatuses),
     };
   });
   const activeBossIndex = Math.min(
@@ -2440,6 +2828,51 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     return;
   }
 
+  if (command.type === 'start-turn') {
+    if (!battleState.battleStarted) return;
+    const previousBoss = battleState.bosses.find(
+      (boss) => boss.id === command.bossId,
+    );
+    if (
+      !previousBoss ||
+      previousBoss.setupStatus !== 'ready' ||
+      previousBoss.currentHealth <= 0
+    ) return;
+
+    const advancedTurn = advanceBossTurn(
+      battleState,
+      command.bossId,
+      randomInt,
+    );
+    battleState = advancedTurn.state;
+    broadcastBattleState();
+
+    if (playerWindow && !playerWindow.isDestroyed()) {
+      for (const tick of advancedTurn.ticks) {
+        healthEffectSequence += 1;
+        const effect: HealthEffect = {
+          id: healthEffectSequence,
+          bossId: command.bossId,
+          type: 'damage',
+          intensity: 'normal',
+          from: tick.from,
+          to: tick.to,
+          maximum: previousBoss.maxHealth,
+          shieldFrom: previousBoss.shield,
+          shieldTo: previousBoss.shield,
+          source: {
+            kind: 'status',
+            statusId: tick.statusId,
+            name: tick.statusName,
+            formula: tick.formula,
+          },
+        };
+        playerWindow.webContents.send('health:effect', effect);
+      }
+    }
+    return;
+  }
+
   if (
     command.type === 'damage' ||
     command.type === 'heal' ||
@@ -2576,6 +3009,19 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
   );
+
+  await protocol.handle('boss-asset', async (request) => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('MÃ©todo nÃ£o permitido.', { status: 405 });
+    }
+    const assetPath = resolveBundledAssetPath(new URL(request.url));
+    if (!assetPath) {
+      return new Response('Asset nÃ£o encontrado.', { status: 404 });
+    }
+    return net.fetch(pathToFileURL(assetPath).toString(), {
+      method: request.method,
+    });
+  });
 
   await protocol.handle('boss-media', async (request) => {
     try {

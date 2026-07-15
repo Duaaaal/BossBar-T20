@@ -10,3 +10,8 @@ As pastas `Imagens`, `Icones`, `Musica` e `SFX` na raiz são bibliotecas pessoai
 usuário e não entram no instalador. Não substitua os ícones processados daqui por
 seus originais sem antes gerar novamente as versões transparentes e o arquivo
 `.ico` do Windows.
+
+Os 36 arquivos em `status-icons` são recortes transparentes derivados de
+`Icones/Status.png` e `Icones/Status_Coringa.png`. Para recriá-los depois de
+substituir qualquer uma das fontes originais, execute
+`npm.cmd run assets:status` a partir da raiz do projeto.

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   applyBattleCommand,
+  advanceBossTurn,
   calculateHealthSequence,
   createInitialBoss,
   initialBattleState,
+  isBattleCommand,
   isHeavyDamageEffect,
   isShieldBreakEffect,
   isMusicCommand,
@@ -295,4 +297,192 @@ test('consome um ponto de escudo por golpe antes de atingir a vida', () => {
     shieldTo: 0,
   };
   assert.equal(isShieldBreakEffect(breakEffect), true);
+});
+
+test('aplica, renova e remove uma condição sem duplicar seu ícone', () => {
+  let state = freshBattle();
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+    damageFormula: '2d6 + 3',
+    turns: 3,
+  });
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+    damageFormula: '4',
+    turns: 5,
+  });
+
+  assert.deepEqual(state.bosses[0].activeStatuses, [{
+    statusId: 'em-chamas',
+    damageFormula: '4',
+    turnsRemaining: 5,
+  }]);
+
+  state = applyBattleCommand(state, {
+    type: 'remove-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+  });
+  assert.deepEqual(state.bosses[0].activeStatuses, []);
+});
+
+test('dano de status ignora escudo e RD e expira após o último efeito', () => {
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Guardião Incandescente',
+    maxHealth: 500,
+    attack: 10,
+    rangedAttack: 10,
+    defense: 10,
+    shield: 4,
+    skills: 10,
+    damageReduction: 999,
+  });
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+    damageFormula: '2d6 + 3',
+    turns: 1,
+  });
+
+  const rolls = [4, 5];
+  const advanced = advanceBossTurn(state, 'boss-1', () => rolls.shift());
+  const boss = advanced.state.bosses[0];
+
+  assert.equal(boss.turnCount, 1);
+  assert.equal(boss.shield, 4);
+  assert.equal(boss.currentHealth, 488);
+  assert.deepEqual(boss.activeStatuses, []);
+  assert.deepEqual(advanced.ticks, [{
+    statusId: 'em-chamas',
+    statusName: 'Em chamas',
+    formula: '2d6 + 3',
+    damage: 12,
+    from: 500,
+    to: 488,
+  }]);
+});
+
+test('dano de status pode ignorar RD sem consumir o escudo', () => {
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Guardião Incandescente',
+    maxHealth: 500,
+    attack: 10,
+    rangedAttack: 10,
+    defense: 10,
+    shield: 4,
+    skills: 10,
+    damageReduction: 999,
+    applyDamageReduction: false,
+  });
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+    damageFormula: '12',
+    turns: 1,
+  });
+
+  const advanced = advanceBossTurn(state, 'boss-1', () => 1);
+  assert.equal(advanced.state.bosses[0].currentHealth, 488);
+  assert.equal(advanced.state.bosses[0].shield, 4);
+  assert.equal(advanced.ticks[0].damage, 12);
+});
+
+test('condições sem dano apenas reduzem sua duração por chefão', () => {
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'vulneravel',
+    damageFormula: null,
+    turns: 2,
+  });
+
+  let advanced = advanceBossTurn(state, 'boss-1', () => 1);
+  assert.equal(advanced.state.bosses[0].currentHealth, 500);
+  assert.equal(advanced.state.bosses[0].turnCount, 1);
+  assert.equal(advanced.state.bosses[0].activeStatuses[0].turnsRemaining, 1);
+  assert.deepEqual(advanced.ticks, []);
+
+  advanced = advanceBossTurn(advanced.state, 'boss-1', () => 1);
+  assert.equal(advanced.state.bosses[0].turnCount, 2);
+  assert.deepEqual(advanced.state.bosses[0].activeStatuses, []);
+});
+
+test('exige fórmula para condições de dano sem valor padrão', () => {
+  assert.equal(isBattleCommand({
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'envenenado',
+    damageFormula: null,
+    turns: 2,
+  }), false);
+  assert.equal(isBattleCommand({
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'envenenado',
+    damageFormula: '2d8 + 4',
+    turns: 2,
+  }), true);
+  assert.equal(isBattleCommand({
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'em-chamas',
+    damageFormula: null,
+    turns: 2,
+  }), true);
+});
+
+test('valida, persiste e executa um status Coringa personalizado', () => {
+  const command = {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'coringa',
+    damageFormula: '1d6 + 2d8 + 10',
+    turns: 2,
+    customName: 'Marca Rubra',
+    customDescription: 'Sofre dano enquanto a marca permanecer ativa.',
+  };
+  assert.equal(isBattleCommand(command), true);
+  assert.equal(isBattleCommand({ ...command, customName: '' }), false);
+  assert.equal(isBattleCommand({ ...command, customDescription: '' }), false);
+  assert.equal(isBattleCommand({ ...command, damageFormula: '2d6 * 4' }), false);
+
+  const state = applyBattleCommand(freshBattle(), command);
+  assert.deepEqual(state.bosses[0].activeStatuses, [{
+    statusId: 'coringa',
+    damageFormula: '1d6 + 2d8 + 10',
+    turnsRemaining: 2,
+    customName: 'Marca Rubra',
+    customDescription: 'Sofre dano enquanto a marca permanecer ativa.',
+  }]);
+
+  const results = [3, 4, 5];
+  const advanced = advanceBossTurn(state, 'boss-1', () => results.shift());
+  assert.equal(advanced.state.bosses[0].currentHealth, 478);
+  assert.equal(advanced.ticks[0].statusName, 'Marca Rubra');
+  assert.equal(advanced.ticks[0].damage, 22);
+});
+
+test('aceita um status Coringa sem dano recorrente', () => {
+  const command = {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'coringa',
+    damageFormula: null,
+    turns: 3,
+    customName: 'Sem voz',
+    customDescription: 'Não pode falar nem conjurar magias com componente verbal.',
+  };
+  assert.equal(isBattleCommand(command), true);
+  const state = applyBattleCommand(freshBattle(), command);
+  assert.equal(state.bosses[0].activeStatuses[0].damageFormula, null);
 });

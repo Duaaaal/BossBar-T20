@@ -1,3 +1,14 @@
+import {
+  getActiveStatusName,
+  getStatusDefinition,
+  isStatusId,
+  normalizeDamageFormula,
+  parseDamageFormula,
+  rollDamageFormula,
+  type ActiveBossStatus,
+  type StatusId,
+} from './status.ts';
+
 export type BossState = {
   id: string;
   setupStatus: 'initial' | 'pending' | 'ready';
@@ -16,6 +27,8 @@ export type BossState = {
   damageReduction: number;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
+  turnCount: number;
+  activeStatuses: ActiveBossStatus[];
 };
 
 export type BattleState = {
@@ -50,7 +63,27 @@ export type HealthEffect = {
   maximum: number;
   shieldFrom: number;
   shieldTo: number;
+  source?: {
+    kind: 'status';
+    statusId: StatusId;
+    name: string;
+    formula: string;
+  };
 };
+
+export type StatusDamageTick = {
+  statusId: StatusId;
+  statusName: string;
+  formula: string;
+  damage: number;
+  from: number;
+  to: number;
+};
+
+export type RandomIntGenerator = (
+  minimumInclusive: number,
+  maximumExclusive: number,
+) => number;
 
 export const isHeavyDamageEffect = (effect: HealthEffect) =>
   effect.type === 'damage' &&
@@ -272,6 +305,17 @@ export type BattleCommand =
   | { type: 'select-boss'; bossId: string }
   | { type: 'mark-identity-unprepared'; bossId: string }
   | { type: 'mark-action-unprepared'; bossId: string }
+  | {
+      type: 'apply-status';
+      bossId: string;
+      statusId: StatusId;
+      damageFormula: string | null;
+      turns: number;
+      customName?: string;
+      customDescription?: string;
+    }
+  | { type: 'remove-status'; bossId: string; statusId: StatusId }
+  | { type: 'start-turn'; bossId: string }
   | { type: 'add-boss' }
   | { type: 'remove-boss'; bossId: string }
   | { type: 'start-battle' }
@@ -299,6 +343,8 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   damageReduction: 10,
   nextAction: '',
   actionSeverity: 'normal',
+  turnCount: 0,
+  activeStatuses: [],
 });
 
 export const initialBattleState: BattleState = {
@@ -352,6 +398,50 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
     case 'mark-action-unprepared':
     case 'remove-boss':
     case 'reset-health':
+      return hasBossId(command);
+    case 'apply-status': {
+      if (
+        !hasBossId(command) ||
+        !isStatusId(command.statusId) ||
+        !Number.isInteger(command.turns) ||
+        (command.turns as number) < 1 ||
+        (command.turns as number) > 999
+      ) return false;
+      const definition = getStatusDefinition(command.statusId);
+      if (!definition) return false;
+      if (definition.customizable) {
+        const customName = typeof command.customName === 'string'
+          ? command.customName.trim()
+          : '';
+        const customDescription = typeof command.customDescription === 'string'
+          ? command.customDescription.trim()
+          : '';
+        return (
+          customName.length >= 1 &&
+          customName.length <= 60 &&
+          customDescription.length >= 1 &&
+          customDescription.length <= 300 &&
+          (
+            command.damageFormula === null ||
+            (
+              typeof command.damageFormula === 'string' &&
+              normalizeDamageFormula(command.damageFormula) !== null
+            )
+          )
+        );
+      }
+      if (!definition.damageCapable) return command.damageFormula === null;
+      if (command.damageFormula === null) {
+        return definition.defaultDamageFormula !== null;
+      }
+      return (
+        typeof command.damageFormula === 'string' &&
+        normalizeDamageFormula(command.damageFormula) !== null
+      );
+    }
+    case 'remove-status':
+      return hasBossId(command) && isStatusId(command.statusId);
+    case 'start-turn':
       return hasBossId(command);
     case 'set-hud-visible':
       return typeof command.visible === 'boolean';
@@ -452,6 +542,51 @@ export const applyBattleCommand = (
         ...boss,
         actionPrepared: false,
       }));
+    case 'apply-status':
+      return updateBoss(state, command.bossId, (boss) => {
+        const definition = getStatusDefinition(command.statusId);
+        if (!definition) return boss;
+        const customName = definition.customizable
+          ? command.customName?.trim().slice(0, 60)
+          : undefined;
+        const customDescription = definition.customizable
+          ? command.customDescription?.trim().slice(0, 300)
+          : undefined;
+        if (definition.customizable && (!customName || !customDescription)) return boss;
+        const normalizedDamage = definition?.damageCapable
+          ? command.damageFormula
+            ? normalizeDamageFormula(command.damageFormula)
+            : definition.defaultDamageFormula
+          : null;
+        if (definition.damageCapable && !definition.customizable && normalizedDamage === null) return boss;
+        const status: ActiveBossStatus = {
+          statusId: command.statusId,
+          damageFormula: normalizedDamage,
+          turnsRemaining: clampInteger(command.turns, 1, 999),
+          ...(customName ? { customName } : {}),
+          ...(customDescription ? { customDescription } : {}),
+        };
+        return {
+          ...boss,
+          activeStatuses: [
+            ...boss.activeStatuses.filter(
+              (activeStatus) => activeStatus.statusId !== command.statusId,
+            ),
+            status,
+          ],
+        };
+      });
+    case 'remove-status':
+      return updateBoss(state, command.bossId, (boss) => ({
+        ...boss,
+        activeStatuses: boss.activeStatuses.filter(
+          (status) => status.statusId !== command.statusId,
+        ),
+      }));
+    case 'start-turn':
+      // O processo principal usa advanceBossTurn para aplicar aleatoriedade
+      // autoritativa e emitir os efeitos visuais de cada dano recorrente.
+      return state;
     case 'select-boss':
       return state.bosses.some((boss) => boss.id === command.bossId)
         ? { ...state, activeBossId: command.bossId, revision: nextRevision }
@@ -509,4 +644,60 @@ export const applyBattleCommand = (
     case 'reset-all':
       return { ...initialBattleState, bosses: [createInitialBoss('boss-1')], revision: nextRevision };
   }
+};
+
+export const advanceBossTurn = (
+  state: BattleState,
+  bossId: string,
+  randomInt: RandomIntGenerator,
+): { state: BattleState; ticks: StatusDamageTick[] } => {
+  const boss = state.bosses.find((item) => item.id === bossId);
+  if (!boss) return { state, ticks: [] };
+
+  let currentHealth = boss.currentHealth;
+  const ticks: StatusDamageTick[] = [];
+  const activeStatuses = boss.activeStatuses.flatMap(
+    (status): ActiveBossStatus[] => {
+      const definition = getStatusDefinition(status.statusId);
+      const parsedFormula = status.damageFormula
+        ? parseDamageFormula(status.damageFormula)
+        : null;
+
+      if (definition && parsedFormula) {
+        const damage = rollDamageFormula(parsedFormula, randomInt);
+        const from = currentHealth;
+        currentHealth = Math.max(0, currentHealth - damage);
+        if (damage > 0 && from > currentHealth) {
+          ticks.push({
+            statusId: status.statusId,
+            statusName: getActiveStatusName(status),
+            formula: status.damageFormula ?? '',
+            damage: from - currentHealth,
+            from,
+            to: currentHealth,
+          });
+        }
+      }
+
+      const turnsRemaining = status.turnsRemaining - 1;
+      return turnsRemaining > 0
+        ? [{ ...status, turnsRemaining }]
+        : [];
+    },
+  );
+
+  const nextBoss: BossState = {
+    ...boss,
+    currentHealth,
+    turnCount: boss.turnCount + 1,
+    activeStatuses,
+  };
+  return {
+    state: {
+      ...state,
+      bosses: state.bosses.map((item) => item.id === bossId ? nextBoss : item),
+      revision: state.revision + 1,
+    },
+    ticks,
+  };
 };

@@ -1,9 +1,32 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type FocusEvent,
+  type FormEvent,
+  type MouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   calculateHealthSequence,
   type BattleState,
 } from './shared/battle';
+import { statusIconUrl } from './shared/bundled-assets';
+import {
+  getActiveStatusDescription,
+  getActiveStatusName,
+  getStatusDefinition,
+  normalizeDamageFormula,
+  STATUS_DEFINITIONS,
+  type StatusId,
+} from './shared/status';
+import {
+  StatusDamageValue,
+  StatusRichText,
+  StatusTurnValue,
+} from './StatusRichText';
 import './control.css';
 import './scrollbars.css';
 
@@ -28,6 +51,13 @@ const RequiredStar = ({ visible }: { visible: boolean }) =>
 const healthButtonFontSize = (label: string, value: number) => {
   const overflowCharacters = Math.max(0, `${label} (${value})`.length - 17);
   return `${Math.max(0.52, 0.76 - overflowCharacters * 0.035)}rem`;
+};
+
+type StatusTooltipState = {
+  statusId: StatusId;
+  left: number;
+  top: number;
+  placement: 'above' | 'below';
 };
 
 type NumericFieldProps = {
@@ -66,6 +96,16 @@ const ControlApp = () => {
   const [damageReduction, setDamageReduction] = useState('10');
   const [shield, setShield] = useState('0');
   const [actionDraft, setActionDraft] = useState('');
+  const [selectedStatusId, setSelectedStatusId] = useState<StatusId | null>(null);
+  const [statusDamage, setStatusDamage] = useState('');
+  const [statusTurns, setStatusTurns] = useState('1');
+  const [statusTooltip, setStatusTooltip] = useState<StatusTooltipState | null>(null);
+  const [customStatusOpen, setCustomStatusOpen] = useState(false);
+  const [customStatusName, setCustomStatusName] = useState('');
+  const [customStatusDescription, setCustomStatusDescription] = useState('');
+  const [customStatusDamage, setCustomStatusDamage] = useState('');
+  const [customStatusTurns, setCustomStatusTurns] = useState('1');
+  const [customStatusError, setCustomStatusError] = useState('');
   const [formError, setFormError] = useState('');
   const [panelMinimized, setPanelMinimized] = useState(false);
   const [panelTransitioning, setPanelTransitioning] = useState(false);
@@ -84,6 +124,12 @@ const ControlApp = () => {
   }, []);
 
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
+  const activeStatusesById = useMemo(
+    () => new Map(
+      (activeBoss?.activeStatuses ?? []).map((status) => [status.statusId, status]),
+    ),
+    [activeBoss?.activeStatuses],
+  );
   const bossSource = activeBoss
     ? [
         activeBoss.id,
@@ -117,6 +163,183 @@ const ControlApp = () => {
     setActionDraft(activeBoss.nextAction);
     setFormError('');
   }, [activeBoss, bossSource]);
+
+  useEffect(() => {
+    setSelectedStatusId(null);
+    setStatusDamage('');
+    setStatusTurns('1');
+    setStatusTooltip(null);
+    setCustomStatusOpen(false);
+    setCustomStatusError('');
+  }, [activeBoss?.id]);
+
+  const selectedStatusDefinition = selectedStatusId
+    ? getStatusDefinition(selectedStatusId)
+    : null;
+  const selectedActiveStatus = selectedStatusId
+    ? activeStatusesById.get(selectedStatusId)
+    : undefined;
+  const canAdvanceTurn = Boolean(
+    state?.battleStarted &&
+    activeBoss?.setupStatus === 'ready' &&
+    activeBoss.currentHealth > 0,
+  );
+
+  useEffect(() => {
+    if (!selectedStatusId || !activeBoss) return;
+    const definition = getStatusDefinition(selectedStatusId);
+    const activeStatus = activeStatusesById.get(selectedStatusId);
+    setStatusDamage(
+      activeStatus?.damageFormula ?? definition.defaultDamageFormula ?? '',
+    );
+    setStatusTurns(String(activeStatus?.turnsRemaining ?? 1));
+  }, [activeBoss?.id, activeStatusesById, selectedStatusId]);
+
+  const positionStatusTooltip = (
+    statusId: StatusId,
+    target: HTMLButtonElement,
+  ) => {
+    const bounds = target.getBoundingClientRect();
+    const tooltipWidth = Math.min(330, window.innerWidth - 16);
+    const left = Math.max(
+      8,
+      Math.min(
+        window.innerWidth - tooltipWidth - 8,
+        bounds.left + bounds.width / 2 - tooltipWidth / 2,
+      ),
+    );
+    const placement = bounds.top > 150 ? 'above' : 'below';
+    setStatusTooltip({
+      statusId,
+      left,
+      top: placement === 'above' ? bounds.top - 8 : bounds.bottom + 8,
+      placement,
+    });
+  };
+
+  const showStatusTooltipFromMouse = (
+    statusId: StatusId,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => positionStatusTooltip(statusId, event.currentTarget);
+
+  const showStatusTooltipFromFocus = (
+    statusId: StatusId,
+    event: FocusEvent<HTMLButtonElement>,
+  ) => positionStatusTooltip(statusId, event.currentTarget);
+
+  const selectStatus = (statusId: StatusId) => {
+    const definition = getStatusDefinition(statusId);
+    const activeStatus = activeStatusesById.get(statusId);
+    setSelectedStatusId(statusId);
+    setStatusDamage(
+      activeStatus?.damageFormula ?? definition?.defaultDamageFormula ?? '',
+    );
+    setStatusTurns(String(activeStatus?.turnsRemaining ?? 1));
+    setFormError('');
+    if (definition.customizable) {
+      setCustomStatusName(activeStatus?.customName ?? '');
+      setCustomStatusDescription(activeStatus?.customDescription ?? '');
+      setCustomStatusDamage(activeStatus?.damageFormula ?? '');
+      setCustomStatusTurns(String(activeStatus?.turnsRemaining ?? 1));
+      setCustomStatusError('');
+      setCustomStatusOpen(true);
+    }
+  };
+
+  const applyStatus = () => {
+    if (!activeBoss || !selectedStatusDefinition || !selectedStatusId) {
+      setFormError('Selecione uma condição antes de aplicar.');
+      return;
+    }
+    if (selectedStatusDefinition.customizable) {
+      setCustomStatusOpen(true);
+      return;
+    }
+
+    const turns = Number(statusTurns);
+    if (!Number.isInteger(turns) || turns < 1 || turns > 999) {
+      setFormError('Informe uma duração entre 1 e 999 turnos.');
+      return;
+    }
+
+    const damageFormula = selectedStatusDefinition.damageCapable
+      ? normalizeDamageFormula(statusDamage)
+      : null;
+    if (selectedStatusDefinition.damageCapable && !damageFormula) {
+      setFormError('Use um dano inteiro ou uma expressão como 1d6 + 2d8 + 10.');
+      return;
+    }
+
+    setFormError('');
+    if (damageFormula) setStatusDamage(damageFormula);
+    setStatusTurns(String(turns));
+    window.bossAPI.dispatch({
+      type: 'apply-status',
+      bossId: activeBoss.id,
+      statusId: selectedStatusId,
+      damageFormula,
+      turns,
+    });
+  };
+
+  const applyCustomStatus = () => {
+    if (!activeBoss) return;
+    const name = customStatusName.trim();
+    const description = customStatusDescription.trim();
+    const turns = Number(customStatusTurns);
+    if (!name || name.length > 60) {
+      setCustomStatusError('Informe um nome de atÃ© 60 caracteres.');
+      return;
+    }
+    if (!description || description.length > 300) {
+      setCustomStatusError('Descreva o efeito em atÃ© 300 caracteres.');
+      return;
+    }
+    if (!Number.isInteger(turns) || turns < 1 || turns > 999) {
+      setCustomStatusError('Informe uma duraÃ§Ã£o entre 1 e 999 turnos.');
+      return;
+    }
+    const damageFormula = customStatusDamage.trim()
+      ? normalizeDamageFormula(customStatusDamage)
+      : null;
+    if (customStatusDamage.trim() && !damageFormula) {
+      setCustomStatusError('Use um dano inteiro ou uma expressão como 1d6 + 2d8 + 10.');
+      return;
+    }
+
+    setCustomStatusError('');
+    setCustomStatusDamage(damageFormula ?? '');
+    setCustomStatusTurns(String(turns));
+    window.bossAPI.dispatch({
+      type: 'apply-status',
+      bossId: activeBoss.id,
+      statusId: 'coringa',
+      damageFormula,
+      turns,
+      customName: name,
+      customDescription: description,
+    });
+    setCustomStatusOpen(false);
+  };
+
+  const removeStatus = () => {
+    if (!activeBoss || !selectedStatusId || !selectedActiveStatus) {
+      setFormError('Selecione uma condição ativa para remover.');
+      return;
+    }
+    setFormError('');
+    window.bossAPI.dispatch({
+      type: 'remove-status',
+      bossId: activeBoss.id,
+      statusId: selectedStatusId,
+    });
+  };
+
+  const startTurn = () => {
+    if (!activeBoss) return;
+    setFormError('');
+    window.bossAPI.dispatch({ type: 'start-turn', bossId: activeBoss.id });
+  };
 
   const markIdentityUnprepared = () => {
     if (activeBoss?.identityPrepared) {
@@ -251,8 +474,12 @@ const ControlApp = () => {
             <button className="control-add-boss" type="button" onClick={() => window.bossAPI.dispatch({ type: 'add-boss' })}>+ Chefão</button>
           )}
         </nav>
-        <div className="health-difference" title="Diferença entre a vida atual e a vida máxima">
-          <span>PV</span><strong>{activeBoss.currentHealth}/{activeBoss.maxHealth}</strong><small>−{missingHealth}</small>
+        <div className="control-vitals">
+          <div className="health-difference" title="Diferença entre a vida atual e a vida máxima">
+            <span>PV</span><strong>{activeBoss.currentHealth}/{activeBoss.maxHealth}</strong><small>−{missingHealth}</small>
+          </div>
+          <span className="control-vitals-divider" aria-hidden="true" />
+          <span className="control-turn-meter">Turno <strong>{activeBoss.turnCount}</strong></span>
         </div>
         <button
           className="control-minimize-button"
@@ -303,6 +530,102 @@ const ControlApp = () => {
           <button className="control-apply" type="submit">Aplicar</button>
         </div>
 
+        <div className="control-status-row">
+          <div className="control-status-picker" role="group" aria-label="Condições do chefão">
+            {STATUS_DEFINITIONS.map((definition) => {
+              const activeStatus = activeStatusesById.get(definition.id);
+              const statusName = activeStatus
+                ? getActiveStatusName(activeStatus)
+                : definition.name;
+              const selected = selectedStatusId === definition.id;
+              return (
+                <button
+                  className={`control-status-icon ${selected ? 'is-selected' : ''} ${activeStatus ? 'is-active' : ''}`}
+                  type="button"
+                  aria-label={`${statusName}${activeStatus ? `, ativo por ${activeStatus.turnsRemaining} turnos` : ''}`}
+                  aria-pressed={selected}
+                  aria-describedby={statusTooltip?.statusId === definition.id ? 'control-status-tooltip' : undefined}
+                  key={definition.id}
+                  onBlur={() => setStatusTooltip(null)}
+                  onClick={() => selectStatus(definition.id)}
+                  onFocus={(event) => showStatusTooltipFromFocus(definition.id, event)}
+                  onMouseEnter={(event) => showStatusTooltipFromMouse(definition.id, event)}
+                  onMouseLeave={() => setStatusTooltip(null)}
+                >
+                  <img
+                    src={statusIconUrl(definition.iconFile)}
+                    alt=""
+                    draggable={false}
+                  />
+                  {activeStatus && <span className="control-status-active-mark" aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="control-status-settings">
+            <label className="control-status-damage">
+              <span>Dano</span>
+              <input
+                aria-label="Dano da condição"
+                disabled={!selectedStatusDefinition?.damageCapable || selectedStatusDefinition.customizable}
+                maxLength={128}
+                placeholder={selectedStatusDefinition?.damageCapable && !selectedStatusDefinition.customizable ? '1d6' : '—'}
+                value={statusDamage}
+                onChange={(event) => setStatusDamage(event.target.value)}
+              />
+            </label>
+            <label className="control-status-turns">
+              <span>Turnos</span>
+              <input
+                aria-label="Duração da condição em turnos"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={999}
+                value={statusTurns}
+                onChange={(event) => setStatusTurns(event.target.value)}
+              />
+            </label>
+            <button
+              className="control-status-apply"
+              type="button"
+              disabled={!selectedStatusDefinition || selectedStatusDefinition.customizable}
+              onClick={applyStatus}
+            >
+              Aplicar
+            </button>
+            <button
+              className="control-status-remove"
+              type="button"
+              disabled={!selectedActiveStatus}
+              onClick={removeStatus}
+            >
+              Remover
+            </button>
+          </div>
+
+          <div className="control-turn-controls">
+            <button
+              className="control-start-turn"
+              type="button"
+              disabled={!canAdvanceTurn}
+              title={
+                !state.battleStarted
+                  ? 'Inicie a batalha para avançar os turnos.'
+                  : activeBoss.setupStatus !== 'ready'
+                    ? 'Salve os dados deste chefão antes de incluí-lo na luta.'
+                    : activeBoss.currentHealth <= 0
+                      ? 'Um chefão derrotado não pode iniciar um turno.'
+                      : undefined
+              }
+              onClick={startTurn}
+            >
+              Iniciar turno
+            </button>
+          </div>
+        </div>
+
         <div className="control-action-row">
           <label className="control-action-field">
             <span>Próxima ação<RequiredStar visible={actionRequired} /></span>
@@ -312,7 +635,85 @@ const ControlApp = () => {
           <button className="control-publish-danger" type="button" onClick={() => publishAction('grave')}>Ação grave</button>
         </div>
       </form>
-      {formError && <p className="control-error">{formError}</p>}
+      {statusTooltip && (() => {
+        const definition = getStatusDefinition(statusTooltip.statusId);
+        if (!definition) return null;
+        const activeStatus = activeStatusesById.get(statusTooltip.statusId);
+        const tooltipName = activeStatus
+          ? getActiveStatusName(activeStatus)
+          : definition.name;
+        const tooltipDescription = activeStatus
+          ? getActiveStatusDescription(activeStatus)
+          : definition.description;
+        const turnLabel = activeStatus
+          ? activeStatus.turnsRemaining === 1
+            ? '1 turno restante'
+            : `${activeStatus.turnsRemaining} turnos restantes`
+          : null;
+        return (
+          <div
+            className={`control-status-tooltip is-${statusTooltip.placement}`}
+            id="control-status-tooltip"
+            role="tooltip"
+            style={{
+              '--status-tooltip-left': `${statusTooltip.left}px`,
+              '--status-tooltip-top': `${statusTooltip.top}px`,
+            } as CSSProperties}
+          >
+            <span className="control-status-tooltip-header">
+              <img src={statusIconUrl(definition.iconFile)} alt="" />
+              <strong>{tooltipName}</strong>
+            </span>
+            <p><StatusRichText text={tooltipDescription} /></p>
+            {activeStatus?.damageFormula && (
+              <span className="control-status-tooltip-detail">
+                Dano: <StatusDamageValue>{activeStatus.damageFormula}</StatusDamageValue>
+              </span>
+            )}
+            {turnLabel && (
+              <span className="control-status-tooltip-detail">
+                Duração: <StatusTurnValue>{turnLabel}</StatusTurnValue>
+              </span>
+            )}
+          </div>
+        );
+      })()}
+      {customStatusOpen && (
+        <div className="control-modal-backdrop" role="presentation">
+          <section className="control-status-modal" role="dialog" aria-modal="true" aria-labelledby="custom-status-title">
+            <header>
+              <img src={statusIconUrl('status-36-coringa.png')} alt="" />
+              <div>
+                <h2 id="custom-status-title">Status personalizado</h2>
+              </div>
+            </header>
+            <label>
+              <span>Nome do status</span>
+              <input autoFocus maxLength={60} value={customStatusName} onChange={(event) => setCustomStatusName(event.target.value)} placeholder="Ex.: Marcado pela tormenta" />
+            </label>
+            <label>
+              <span>Descrição do efeito</span>
+              <textarea maxLength={300} rows={3} value={customStatusDescription} onChange={(event) => setCustomStatusDescription(event.target.value)} placeholder="Explique brevemente o que esta condição faz." />
+            </label>
+            <div className="control-status-modal-values">
+              <label>
+                <span>Dano por turno <small>(opcional)</small></span>
+                <input maxLength={128} value={customStatusDamage} onChange={(event) => setCustomStatusDamage(event.target.value)} placeholder="Ex.: 1d6 + 2d8 + 10" />
+              </label>
+              <label>
+                <span>Turnos</span>
+                <input type="number" min={1} max={999} value={customStatusTurns} onChange={(event) => setCustomStatusTurns(event.target.value)} />
+              </label>
+            </div>
+            {customStatusError && <p className="control-status-modal-error" role="alert">{customStatusError}</p>}
+            <footer>
+              <button type="button" className="control-status-modal-cancel" onClick={() => setCustomStatusOpen(false)}>Cancelar</button>
+              <button type="button" className="control-status-modal-apply" onClick={applyCustomStatus}>Aplicar</button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {formError && <p className="control-error" role="alert">{formError}</p>}
     </main>
   );
 };
