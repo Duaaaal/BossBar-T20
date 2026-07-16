@@ -14,8 +14,12 @@ import {
   type BattleState,
   type BossState,
   type EncounterEffectsState,
+  type EncounterSoundEffectKind,
+  type EncounterVisualEffectSettings,
   type HealthEffect,
+  initialEncounterEffectsState,
   isHeavyDamageEffect,
+  isEncounterSoundEnabled,
   isShieldBreakEffect,
   type MusicState,
   type SoundboardState,
@@ -47,50 +51,68 @@ const splitStatusRows = <Item,>(items: Item[], rowSize = 10) =>
     items.slice(rowIndex * rowSize, (rowIndex + 1) * rowSize),
   );
 
-const playHeavyScreenImpact = () => {
+const playHeavyScreenImpact = (visuals: EncounterVisualEffectSettings) => {
   if (!document.querySelector('.waiting-screen.is-hidden')) return;
   const stage = document.querySelector<HTMLElement>('.player-stage');
   const hud = document.querySelector<HTMLElement>('.boss-hud.is-active');
   const flash = document.querySelector<HTMLElement>('.critical-screen-flash');
-  stage?.animate(
-    [
-      { transform: 'scale(1.02) translate3d(0, 0, 0) rotate(0)' },
-      { transform: 'scale(1.025) translate3d(-9px, 5px, 0) rotate(-.12deg)', offset: 0.08 },
-      { transform: 'scale(1.025) translate3d(8px, -5px, 0) rotate(.11deg)', offset: 0.17 },
-      { transform: 'scale(1.023) translate3d(-7px, -3px, 0) rotate(-.08deg)', offset: 0.28 },
-      { transform: 'scale(1.021) translate3d(6px, 4px, 0) rotate(.07deg)', offset: 0.4 },
-      { transform: 'scale(1.017) translate3d(-4px, 2px, 0) rotate(-.04deg)', offset: 0.54 },
-      { transform: 'scale(1.011) translate3d(3px, -2px, 0) rotate(.02deg)', offset: 0.7 },
-      { transform: 'scale(1.005) translate3d(-1px, 1px, 0) rotate(0)', offset: 0.86 },
-      { transform: 'scale(1) translate3d(0, 0, 0)' },
-    ],
-    { duration: 1050, easing: 'cubic-bezier(.16,.82,.2,1)' },
-  );
-  hud?.animate(
-    [
-      { filter: 'brightness(1)', transform: 'translate3d(0, 0, 0) scale(1)' },
-      { filter: 'brightness(1.4) saturate(1.28)', transform: 'translate3d(-16px, 7px, 0) scale(1.03) rotate(-.35deg)', offset: 0.07 },
-      { filter: 'brightness(1.18) saturate(1.18)', transform: 'translate3d(14px, -8px, 0) scale(1.025) rotate(.3deg)', offset: 0.16 },
-      { filter: 'brightness(1.12)', transform: 'translate3d(-12px, -4px, 0) scale(1.02) rotate(-.22deg)', offset: 0.27 },
-      { filter: 'brightness(1.08)', transform: 'translate3d(10px, 5px, 0) scale(1.016) rotate(.18deg)', offset: 0.39 },
-      { filter: 'brightness(1.04)', transform: 'translate3d(-7px, 2px, 0) scale(1.012) rotate(-.1deg)', offset: 0.54 },
-      { filter: 'brightness(1.02)', transform: 'translate3d(5px, -2px, 0) scale(1.008) rotate(.06deg)', offset: 0.7 },
-      { filter: 'brightness(1)', transform: 'translate3d(-2px, 1px, 0) scale(1.003)', offset: 0.86 },
-      { filter: 'brightness(1)', transform: 'translate3d(0, 0, 0) scale(1)' },
-    ],
-    { duration: 1120, easing: 'cubic-bezier(.15,.8,.2,1)' },
-  );
-  flash?.animate(
-    [
-      { opacity: 0 },
-      { opacity: 0.42, offset: 0.07 },
-      { opacity: 0.12, offset: 0.25 },
-      { opacity: 0.3, offset: 0.39 },
-      { opacity: 0.08, offset: 0.62 },
-      { opacity: 0, offset: 1 },
-    ],
-    { duration: 980, easing: 'ease-out' },
-  );
+  if (visuals.screenShake) {
+    stage?.animate(
+      [
+        { transform: 'scale(1.02) translate3d(0, 0, 0) rotate(0)' },
+        { transform: 'scale(1.025) translate3d(-9px, 5px, 0) rotate(-.12deg)', offset: 0.08 },
+        { transform: 'scale(1.025) translate3d(8px, -5px, 0) rotate(.11deg)', offset: 0.17 },
+        { transform: 'scale(1.023) translate3d(-7px, -3px, 0) rotate(-.08deg)', offset: 0.28 },
+        { transform: 'scale(1.021) translate3d(6px, 4px, 0) rotate(.07deg)', offset: 0.4 },
+        { transform: 'scale(1.017) translate3d(-4px, 2px, 0) rotate(-.04deg)', offset: 0.54 },
+        { transform: 'scale(1.011) translate3d(3px, -2px, 0) rotate(.02deg)', offset: 0.7 },
+        { transform: 'scale(1.005) translate3d(-1px, 1px, 0) rotate(0)', offset: 0.86 },
+        { transform: 'scale(1) translate3d(0, 0, 0)' },
+      ],
+      { duration: 1050, easing: 'cubic-bezier(.16,.82,.2,1)' },
+    );
+    hud?.animate(
+      [
+        { transform: 'translate3d(0, 0, 0) scale(1)' },
+        { transform: 'translate3d(-16px, 7px, 0) scale(1.03) rotate(-.35deg)', offset: 0.07 },
+        { transform: 'translate3d(14px, -8px, 0) scale(1.025) rotate(.3deg)', offset: 0.16 },
+        { transform: 'translate3d(-12px, -4px, 0) scale(1.02) rotate(-.22deg)', offset: 0.27 },
+        { transform: 'translate3d(10px, 5px, 0) scale(1.016) rotate(.18deg)', offset: 0.39 },
+        { transform: 'translate3d(-7px, 2px, 0) scale(1.012) rotate(-.1deg)', offset: 0.54 },
+        { transform: 'translate3d(5px, -2px, 0) scale(1.008) rotate(.06deg)', offset: 0.7 },
+        { transform: 'translate3d(-2px, 1px, 0) scale(1.003)', offset: 0.86 },
+        { transform: 'translate3d(0, 0, 0) scale(1)' },
+      ],
+      { duration: 1120, easing: 'cubic-bezier(.15,.8,.2,1)' },
+    );
+  }
+  if (visuals.damageEffect) {
+    hud?.animate(
+      [
+        { filter: 'brightness(1)' },
+        { filter: 'brightness(1.4) saturate(1.28)', offset: 0.07 },
+        { filter: 'brightness(1.18) saturate(1.18)', offset: 0.16 },
+        { filter: 'brightness(1.12)', offset: 0.27 },
+        { filter: 'brightness(1.08)', offset: 0.39 },
+        { filter: 'brightness(1.04)', offset: 0.54 },
+        { filter: 'brightness(1.02)', offset: 0.7 },
+        { filter: 'brightness(1)', offset: 0.86 },
+        { filter: 'brightness(1)' },
+      ],
+      { duration: 1120, easing: 'cubic-bezier(.15,.8,.2,1)' },
+    );
+    flash?.animate(
+      [
+        { opacity: 0 },
+        { opacity: 0.42, offset: 0.07 },
+        { opacity: 0.12, offset: 0.25 },
+        { opacity: 0.3, offset: 0.39 },
+        { opacity: 0.08, offset: 0.62 },
+        { opacity: 0, offset: 1 },
+      ],
+      { duration: 980, easing: 'ease-out' },
+    );
+  }
 };
 
 const HealthRuler = memo(function HealthRuler() {
@@ -119,6 +141,7 @@ type AnimatedHealthBarProps = {
   maximum: number;
   shield: number;
   effects: HealthEffect[];
+  visuals: EncounterVisualEffectSettings;
 };
 
 const AnimatedHealthBar = ({
@@ -127,6 +150,7 @@ const AnimatedHealthBar = ({
   maximum,
   shield,
   effects,
+  visuals,
 }: AnimatedHealthBarProps) => {
   const initialPercent = healthPercent(current, maximum);
   const statusTooltipPrefix = useId();
@@ -152,7 +176,10 @@ const AnimatedHealthBar = ({
       if (effect.type === 'damage' && effect.from > effect.to) {
         nextDamageEffects.push(effect);
       }
-      if (effect.type === 'damage' && effect.shieldFrom > effect.shieldTo) {
+      if (
+        effect.type === 'damage' &&
+        effect.shieldFrom > effect.shieldTo
+      ) {
         nextShieldDamageEffects.push(effect);
       }
       if (isShieldBreakEffect(effect)) nextShieldBreakEffects.push(effect);
@@ -237,7 +264,11 @@ const AnimatedHealthBar = ({
     newEffects.forEach((effect, index) => {
       const delay = index * 70;
 
-      if (effect.type === 'damage' && effect.shieldFrom > effect.shieldTo) {
+      if (
+        visuals.damageEffect &&
+        effect.type === 'damage' &&
+        effect.shieldFrom > effect.shieldTo
+      ) {
         shieldBadgeRef.current?.animate(
           [
             { filter: 'brightness(1) drop-shadow(0 3px 4px rgba(0,0,0,.82))', transform: 'translate(0, 0) scale(1)' },
@@ -252,48 +283,54 @@ const AnimatedHealthBar = ({
 
       if (effect.type === 'damage') {
         const heavyDamage = isHeavyDamageEffect(effect);
-        bar.animate(
-          heavyDamage
-            ? [
-                {
-                  filter: 'brightness(1) saturate(1)',
-                  transform: 'translateX(0) scaleY(1)',
-                },
-                {
-                  filter: 'brightness(2.4) saturate(1.8)',
-                  transform: 'translateX(-12px) scaleY(1.18) rotate(-0.35deg)',
-                  offset: 0.12,
-                },
-                { transform: 'translateX(11px) scaleY(.9) rotate(.3deg)', offset: 0.24 },
-                { transform: 'translateX(-9px) scaleY(1.1)', offset: 0.37 },
-                { transform: 'translateX(8px) scaleY(.94)', offset: 0.5 },
-                { transform: 'translateX(-6px) scaleY(1.06)', offset: 0.63 },
-                { transform: 'translateX(4px) scaleY(.98)', offset: 0.76 },
-                {
-                  filter: 'brightness(1) saturate(1)',
-                  transform: 'translateX(0) scaleY(1)',
-                },
-              ]
-            : [
-                { filter: 'brightness(1)', transform: 'translateX(0)' },
-                {
-                  filter: 'brightness(1.65)',
-                  transform: 'translateX(-4px)',
-                  offset: 0.22,
-                },
-                { transform: 'translateX(4px)', offset: 0.44 },
-                { transform: 'translateX(-3px)', offset: 0.64 },
-                { filter: 'brightness(1)', transform: 'translateX(0)' },
-              ],
-          {
-            delay,
-            duration: heavyDamage ? 2000 : 480,
-            easing: heavyDamage
-              ? 'cubic-bezier(.16,.84,.24,1)'
-              : 'ease-out',
-          },
-        );
-      } else {
+        const animationOptions: KeyframeAnimationOptions = {
+          delay,
+          duration: heavyDamage ? 2000 : 480,
+          easing: heavyDamage
+            ? 'cubic-bezier(.16,.84,.24,1)'
+            : 'ease-out',
+        };
+        if (visuals.healthBarShake) {
+          bar.animate(
+            heavyDamage
+              ? [
+                  { transform: 'translateX(0) scaleY(1)' },
+                  { transform: 'translateX(-12px) scaleY(1.18) rotate(-0.35deg)', offset: 0.12 },
+                  { transform: 'translateX(11px) scaleY(.9) rotate(.3deg)', offset: 0.24 },
+                  { transform: 'translateX(-9px) scaleY(1.1)', offset: 0.37 },
+                  { transform: 'translateX(8px) scaleY(.94)', offset: 0.5 },
+                  { transform: 'translateX(-6px) scaleY(1.06)', offset: 0.63 },
+                  { transform: 'translateX(4px) scaleY(.98)', offset: 0.76 },
+                  { transform: 'translateX(0) scaleY(1)' },
+                ]
+              : [
+                  { transform: 'translateX(0)' },
+                  { transform: 'translateX(-4px)', offset: 0.22 },
+                  { transform: 'translateX(4px)', offset: 0.44 },
+                  { transform: 'translateX(-3px)', offset: 0.64 },
+                  { transform: 'translateX(0)' },
+                ],
+            animationOptions,
+          );
+        }
+        if (visuals.damageEffect) {
+          bar.animate(
+            heavyDamage
+              ? [
+                  { filter: 'brightness(1) saturate(1)' },
+                  { filter: 'brightness(2.4) saturate(1.8)', offset: 0.12 },
+                  { filter: 'brightness(1.45) saturate(1.3)', offset: 0.5 },
+                  { filter: 'brightness(1) saturate(1)' },
+                ]
+              : [
+                  { filter: 'brightness(1)' },
+                  { filter: 'brightness(1.65)', offset: 0.22 },
+                  { filter: 'brightness(1)' },
+                ],
+            animationOptions,
+          );
+        }
+      } else if (visuals.healEffect) {
         const fullHeal = effect.intensity === 'full';
         const glowColor = fullHeal
           ? 'rgba(91,255,143,1)'
@@ -333,7 +370,7 @@ const AnimatedHealthBar = ({
         );
       }
     });
-  }, [effects]);
+  }, [effects, visuals]);
 
   return (
     <div className="health-bar-shell">
@@ -362,7 +399,11 @@ const AnimatedHealthBar = ({
         />
         <div className="health-bar-highlight" />
         <HealthRuler />
-        {effects.map((effect) => (
+        {effects.filter((effect) =>
+          effect.type === 'damage'
+            ? visuals.damageEffect
+            : visuals.healEffect,
+        ).map((effect) => (
           <div
             className={`health-impact is-${effect.type} ${
               effect.intensity === 'full' ? 'is-full' : ''
@@ -376,7 +417,7 @@ const AnimatedHealthBar = ({
           <span>{shield}</span>
         </div>
       )}
-      {shieldDamageEffects.map((effect, index) => (
+      {visuals.floatingDamageNumbers && shieldDamageEffects.map((effect, index) => (
         <b
           className="shield-damage-number"
           key={`shield-damage-${effect.id}`}
@@ -462,12 +503,12 @@ const AnimatedHealthBar = ({
           ))}
         </div>
       )}
-      {shieldBreakEffects.map((effect) => (
+      {visuals.particles && shieldBreakEffects.map((effect) => (
         <div className="shield-break-effect" key={`shield-break-${effect.id}`} aria-hidden="true">
           {shieldBreakParticles.map((index) => <span key={index} />)}
         </div>
       ))}
-      {damageEffects.map((effect, index) => {
+      {visuals.floatingDamageNumbers && damageEffects.map((effect, index) => {
         const damage = Math.round(effect.from - effect.to);
         const impactPosition = Math.max(
           3,
@@ -869,17 +910,16 @@ const SoundboardPlayer = () => {
 
 const EncounterEffectsPlayer = () => {
   const [settings, setSettings] = useState<EncounterEffectsState | null>(null);
-  const settingsRef = useRef({
-    volume: 0.8,
-    muted: false,
-    universalMuted: false,
-  });
+  const settingsRef = useRef<EncounterEffectsState>(
+    initialEncounterEffectsState,
+  );
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   const activeSounds = useRef(new Map<
     number,
     {
       audio: HTMLAudioElement;
+      kind: EncounterSoundEffectKind;
       source: MediaElementAudioSourceNode;
       release: () => void;
     }
@@ -905,11 +945,12 @@ const EncounterEffectsPlayer = () => {
   useEffect(() => {
     let active = true;
     const updateSettings = (state: EncounterEffectsState) => {
-      settingsRef.current = {
-        volume: state.volume,
-        muted: state.muted,
-        universalMuted: state.universalMuted,
-      };
+      settingsRef.current = state;
+      for (const activeSound of [...activeSounds.current.values()]) {
+        if (!isEncounterSoundEnabled(state, activeSound.kind)) {
+          activeSound.release();
+        }
+      }
       if (active) setSettings(state);
     };
     window.bossAPI.getEncounterEffectsState().then(updateSettings);
@@ -925,20 +966,22 @@ const EncounterEffectsPlayer = () => {
     const gain = masterGainRef.current;
     if (!settings || !context || !gain) return;
     gain.gain.setValueAtTime(
-      settings.muted || settings.universalMuted
-        ? 0
-        : volumeToGain(settings.volume),
+      settings.universalMuted ? 0 : volumeToGain(settings.volume),
       context.currentTime,
     );
-  }, [settings?.muted, settings?.universalMuted, settings?.volume]);
+  }, [settings?.universalMuted, settings?.volume]);
 
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeEncounterEffect((effect) => {
+      if (!isEncounterSoundEnabled(settingsRef.current, effect.kind)) {
+        window.bossAPI.encounterEffectFinished(effect.id);
+        return;
+      }
       const graph = ensureAudioGraph();
       if (!graph.gain) return;
       const currentSettings = settingsRef.current;
       graph.gain.gain.setValueAtTime(
-        currentSettings.muted || currentSettings.universalMuted
+        currentSettings.universalMuted
           ? 0
           : volumeToGain(currentSettings.volume),
         graph.context.currentTime,
@@ -962,7 +1005,12 @@ const EncounterEffectsPlayer = () => {
         source.disconnect();
         window.bossAPI.encounterEffectFinished(effect.id);
       };
-      activeSounds.current.set(effect.id, { audio, source, release });
+      activeSounds.current.set(effect.id, {
+        audio,
+        kind: effect.kind,
+        source,
+        release,
+      });
       audio.addEventListener('ended', release);
       audio.addEventListener('error', release);
       audio.load();
@@ -988,10 +1036,12 @@ const BossHud = memo(function BossHud({
   boss,
   bossCount,
   effects,
+  visuals,
 }: {
   boss: BossState;
   bossCount: number;
   effects: HealthEffect[];
+  visuals: EncounterVisualEffectSettings;
 }) {
   const hudScale = 1 - (bossCount - 1) * 0.15;
   return (
@@ -1006,6 +1056,7 @@ const BossHud = memo(function BossHud({
         effects={effects}
         maximum={boss.maxHealth}
         shield={boss.shield}
+        visuals={visuals}
       />
       <div className="action-slot">
         <AnimatedAction text={boss.nextAction} severity={boss.actionSeverity} />
@@ -1091,6 +1142,10 @@ const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
 
 const PlayerApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
+  const [encounterEffects, setEncounterEffects] = useState(
+    initialEncounterEffectsState,
+  );
+  const encounterEffectsRef = useRef(initialEncounterEffectsState);
   const [background, setBackground] = useState<BackgroundState>({
     url: null,
     name: null,
@@ -1115,6 +1170,22 @@ const PlayerApp = () => {
     });
 
     const unsubscribe = window.bossAPI.subscribe(setState);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const updateEncounterEffects = (nextState: EncounterEffectsState) => {
+      encounterEffectsRef.current = nextState;
+      if (active) setEncounterEffects(nextState);
+    };
+    window.bossAPI.getEncounterEffectsState().then(updateEncounterEffects);
+    const unsubscribe = window.bossAPI.subscribeEncounterEffects(
+      updateEncounterEffects,
+    );
     return () => {
       active = false;
       unsubscribe();
@@ -1171,7 +1242,9 @@ const PlayerApp = () => {
   useEffect(() => {
     const removalTimers = new Set<ReturnType<typeof setTimeout>>();
     const unsubscribe = window.bossAPI.subscribeHealthEffect((effect) => {
-      if (isHeavyDamageEffect(effect)) playHeavyScreenImpact();
+      if (isHeavyDamageEffect(effect)) {
+        playHeavyScreenImpact(encounterEffectsRef.current.visuals);
+      }
       setHealthEffects((currentEffects) => ({
         ...currentEffects,
         [effect.bossId]: [
@@ -1380,6 +1453,7 @@ const PlayerApp = () => {
               boss={boss}
               bossCount={visibleBosses.length}
               effects={healthEffects[boss.id] ?? noHealthEffects}
+              visuals={encounterEffects.visuals}
               key={boss.id}
             />
           ))}

@@ -1,7 +1,9 @@
 param(
   [string]$Source = (Join-Path $PSScriptRoot '..\Icones\Status.png'),
   [string]$WildcardSource = (Join-Path $PSScriptRoot '..\Icones\Status_Coringa.png'),
-  [string]$Destination = (Join-Path $PSScriptRoot '..\assets\status-icons')
+  [string]$CogSource = (Join-Path $PSScriptRoot '..\Icones\cog.png'),
+  [string]$Destination = (Join-Path $PSScriptRoot '..\assets\status-icons'),
+  [string]$CogDestination = (Join-Path $PSScriptRoot '..\assets\cog.png')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,13 +11,19 @@ Add-Type -AssemblyName System.Drawing
 
 $sourcePath = [System.IO.Path]::GetFullPath($Source)
 $wildcardSourcePath = [System.IO.Path]::GetFullPath($WildcardSource)
+$cogSourcePath = [System.IO.Path]::GetFullPath($CogSource)
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
+$cogDestinationPath = [System.IO.Path]::GetFullPath($CogDestination)
 
 if (-not [System.IO.File]::Exists($sourcePath)) {
   throw "Folha de status não encontrada: $sourcePath"
 }
 if (-not [System.IO.File]::Exists($wildcardSourcePath)) {
   throw "Ícone de status Coringa não encontrado: $wildcardSourcePath"
+}
+
+if (-not [System.IO.File]::Exists($cogSourcePath)) {
+  throw "Cog source not found: $cogSourcePath"
 }
 
 $generatorSource = @'
@@ -35,14 +43,23 @@ public static class BossBarStatusIconGenerator
         public int Y;
         public int Width;
         public int Height;
+        public bool RemoveEnclosedBackground;
 
-        public IconSpec(string fileName, int x, int y, int width, int height)
+        public IconSpec(
+            string fileName,
+            int x,
+            int y,
+            int width,
+            int height,
+            bool removeEnclosedBackground
+        )
         {
             FileName = fileName;
             X = x;
             Y = y;
             Width = width;
             Height = height;
+            RemoveEnclosedBackground = removeEnclosedBackground;
         }
     }
 
@@ -50,7 +67,10 @@ public static class BossBarStatusIconGenerator
     {
         int maximum = Math.Max(color.R, Math.Max(color.G, color.B));
         int minimum = Math.Min(color.R, Math.Min(color.G, color.B));
-        return minimum >= 205 && maximum - minimum <= 18;
+        // The source sheet contains an opaque checkerboard rather than alpha.
+        // Its light squares and ground residue range from white to light gray.
+        // Requiring low saturation protects the colored artwork.
+        return minimum >= 110 && maximum - minimum <= 32;
     }
 
     private static void RemoveBoundaryDebris(Bitmap crop, bool[] background)
@@ -69,6 +89,10 @@ public static class BossBarStatusIconGenerator
                 var component = new List<int>();
                 var componentQueue = new Queue<int>();
                 bool touchesBoundary = false;
+                int left = crop.Width;
+                int top = crop.Height;
+                int right = -1;
+                int bottom = -1;
                 visited[startOffset] = true;
                 componentQueue.Enqueue(startOffset);
 
@@ -78,6 +102,10 @@ public static class BossBarStatusIconGenerator
                     component.Add(offset);
                     int x = offset % crop.Width;
                     int y = offset / crop.Width;
+                    left = Math.Min(left, x);
+                    top = Math.Min(top, y);
+                    right = Math.Max(right, x);
+                    bottom = Math.Max(bottom, y);
                     if (x <= 5 || y <= 5 || x >= crop.Width - 6 || y >= crop.Height - 6)
                     {
                         touchesBoundary = true;
@@ -102,7 +130,12 @@ public static class BossBarStatusIconGenerator
                 // A folha possui pequenos fragmentos dos quadros vizinhos junto
                 // às divisões. Preserva o desenho principal e partículas úteis,
                 // removendo apenas ilhas minúsculas ou recortes presos à borda.
-                if (component.Count <= 8 || (touchesBoundary && component.Count <= 64))
+                int componentWidth = right - left + 1;
+                int componentHeight = bottom - top + 1;
+                bool narrowBoundaryFragment = touchesBoundary &&
+                    component.Count <= 512 &&
+                    (componentWidth <= 24 || componentHeight <= 12);
+                if (component.Count <= 8 || narrowBoundaryFragment)
                 {
                     foreach (int offset in component) background[offset] = true;
                 }
@@ -133,7 +166,14 @@ public static class BossBarStatusIconGenerator
         {
             int row = index / 7;
             int column = index % 7;
-            specs[index] = new IconSpec(names[index], column * 212, rowY[row], 212, rowHeight[row]);
+            specs[index] = new IconSpec(
+                names[index],
+                column * 212,
+                rowY[row],
+                212,
+                rowHeight[row],
+                index == 14
+            );
         }
         return specs;
     }
@@ -156,6 +196,23 @@ public static class BossBarStatusIconGenerator
         var queued = new bool[pixelCount];
         var queue = new Queue<int>();
 
+        // Enredado contains closed loops around pieces of the checkerboard.
+        // Only this crop needs enclosed neutral pixels removed; applying this
+        // globally would erase intentional whites in icons such as Ofuscado.
+        if (spec.RemoveEnclosedBackground)
+        {
+            for (int y = 0; y < crop.Height; y++)
+            {
+                for (int x = 0; x < crop.Width; x++)
+                {
+                    if (IsConnectedBackground(crop.GetPixel(x, y)))
+                    {
+                        background[y * crop.Width + x] = true;
+                    }
+                }
+            }
+        }
+
         Action<int, int> enqueue = (x, y) => {
             if (x < 0 || y < 0 || x >= crop.Width || y >= crop.Height) return;
             int offset = y * crop.Width + x;
@@ -173,6 +230,13 @@ public static class BossBarStatusIconGenerator
         {
             enqueue(0, y);
             enqueue(crop.Width - 1, y);
+        }
+
+        // The light checkerboard beneath Sobrecarregado is enclosed by the
+        // legs and chains, so it cannot be reached from a crop boundary.
+        if (spec.FileName == "status-32-sobrecarregado.png")
+        {
+            enqueue(84, 160);
         }
 
         while (queue.Count > 0)
@@ -272,11 +336,81 @@ public static class BossBarStatusIconGenerator
     {
         using (var source = new Bitmap(sourcePath))
         {
-            var spec = new IconSpec(fileName, 0, 0, source.Width, source.Height);
+            var spec = new IconSpec(fileName, 0, 0, source.Width, source.Height, false);
             using (Bitmap icon = ExtractTransparentIcon(source, spec))
             {
                 icon.Save(Path.Combine(destinationPath, fileName), ImageFormat.Png);
             }
+        }
+    }
+
+    public static void GenerateCog(string sourcePath, string destinationPath)
+    {
+        using (var source = new Bitmap(sourcePath))
+        {
+            if (source.Width != source.Height)
+            {
+                throw new InvalidDataException("cog.png must be square.");
+            }
+
+            var output = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
+            using (Graphics graphics = Graphics.FromImage(output))
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.CompositingMode = CompositingMode.SourceCopy;
+                graphics.DrawImageUnscaled(source, 0, 0);
+            }
+
+            int centerX = output.Width / 2;
+            int centerY = output.Height / 2;
+            Color center = output.GetPixel(centerX, centerY);
+            if (center.A < 240 || center.R < 220 || center.G < 220 || center.B < 220)
+            {
+                output.Dispose();
+                throw new InvalidDataException(
+                    "cog.png does not have the expected light center fill."
+                );
+            }
+
+            int radius = 0;
+            for (int x = centerX; x >= 0; x--)
+            {
+                Color pixel = output.GetPixel(x, centerY);
+                int maximum = Math.Max(pixel.R, Math.Max(pixel.G, pixel.B));
+                int minimum = Math.Min(pixel.R, Math.Min(pixel.G, pixel.B));
+                if (pixel.A < 240 || minimum < 180 || maximum - minimum > 16)
+                {
+                    radius = centerX - x - 1;
+                    break;
+                }
+            }
+            if (radius < output.Width / 10)
+            {
+                output.Dispose();
+                throw new InvalidDataException("Could not detect the center fill in cog.png.");
+            }
+
+            // Include the light transition pixel so the transparent hole does
+            // not retain a white halo when the icon is rendered at small sizes.
+            double transparentRadius = radius + 1.25;
+            double squaredRadius = transparentRadius * transparentRadius;
+            for (int y = 0; y < output.Height; y++)
+            {
+                for (int x = 0; x < output.Width; x++)
+                {
+                    double deltaX = x - centerX;
+                    double deltaY = y - centerY;
+                    if (deltaX * deltaX + deltaY * deltaY <= squaredRadius)
+                    {
+                        output.SetPixel(x, y, Color.FromArgb(0, 0, 0, 0));
+                    }
+                }
+            }
+
+            string directory = Path.GetDirectoryName(destinationPath);
+            if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            output.Save(destinationPath, ImageFormat.Png);
+            output.Dispose();
         }
     }
 }
@@ -289,6 +423,7 @@ Add-Type -TypeDefinition $generatorSource -ReferencedAssemblies System.Drawing
   $destinationPath,
   'status-36-coringa.png'
 )
+[BossBarStatusIconGenerator]::GenerateCog($cogSourcePath, $cogDestinationPath)
 
 $generated = Get-ChildItem -LiteralPath $destinationPath -Filter 'status-*.png' -File
 if ($generated.Count -ne 36) {

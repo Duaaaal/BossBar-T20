@@ -109,9 +109,16 @@ body {
 
 .boss-hud-entry {
   --hud-scale: 1;
+  position: relative;
   width: 100%;
   min-width: 0;
   animation: hud-entry-return 420ms ease-out both;
+}
+
+.boss-hud:has(.boss-status-icon:hover, .boss-status-icon:focus-visible),
+.boss-hud-entry:has(.boss-status-icon:hover, .boss-status-icon:focus-visible),
+.boss-status-tray:has(.boss-status-icon:hover, .boss-status-icon:focus-visible) {
+  z-index: 100;
 }
 
 .boss-hud.is-active {
@@ -294,7 +301,7 @@ body {
 
 .boss-status-icon:hover,
 .boss-status-icon:focus-visible {
-  z-index: 3;
+  z-index: 101;
   border-color: rgba(255, 220, 164, .96);
   box-shadow:
     0 3px 9px rgba(0, 0, 0, .92),
@@ -315,6 +322,7 @@ body {
 
 .boss-status-tooltip {
   position: absolute;
+  z-index: 102;
   right: calc(-4px * var(--hud-scale));
   bottom: calc(100% + 8px * var(--hud-scale));
   display: flex;
@@ -327,7 +335,8 @@ body {
   visibility: hidden;
   opacity: 0;
   background:
-    linear-gradient(145deg, rgba(29, 21, 26, .98), rgba(7, 6, 10, .98));
+    linear-gradient(145deg, rgba(29, 21, 26, .93), rgba(7, 6, 10, .94));
+  backdrop-filter: blur(2px);
   box-shadow:
     0 8px 22px rgba(0, 0, 0, .86),
     inset 0 1px 0 rgba(255, 226, 184, .09);

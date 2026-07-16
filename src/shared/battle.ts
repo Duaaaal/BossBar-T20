@@ -276,10 +276,60 @@ export type SoundEffect = {
 
 export type EncounterEffectsState = {
   volume: number;
-  muted: boolean;
   universalMuted: boolean;
+  sounds: EncounterSoundSettings;
+  visuals: EncounterVisualEffectSettings;
   revision: number;
 };
+
+export type EncounterSoundSetting = 'heal' | 'damage' | 'shield';
+
+export type EncounterSoundSettings = Record<EncounterSoundSetting, boolean>;
+
+export type EncounterVisualEffectSetting =
+  | 'screenShake'
+  | 'healthBarShake'
+  | 'damageEffect'
+  | 'healEffect'
+  | 'particles'
+  | 'floatingDamageNumbers';
+
+export type EncounterVisualEffectSettings = Record<
+  EncounterVisualEffectSetting,
+  boolean
+>;
+
+export const initialEncounterEffectsState: EncounterEffectsState = {
+  volume: 0.8,
+  universalMuted: false,
+  sounds: {
+    heal: true,
+    damage: true,
+    shield: true,
+  },
+  visuals: {
+    screenShake: true,
+    healthBarShake: true,
+    damageEffect: true,
+    healEffect: true,
+    particles: true,
+    floatingDamageNumbers: true,
+  },
+  revision: 0,
+};
+
+export const getEncounterSoundSetting = (
+  kind: EncounterSoundEffectKind,
+): EncounterSoundSetting => {
+  if (kind === 'heal') return 'heal';
+  if (kind === 'shield-impact' || kind === 'shield-break') return 'shield';
+  return 'damage';
+};
+
+export const isEncounterSoundEnabled = (
+  settings: Pick<EncounterEffectsState, 'sounds'>,
+  kind: EncounterSoundEffectKind,
+) => settings.sounds[getEncounterSoundSetting(kind)];
 
 export type EncounterSoundEffect = {
   id: number;

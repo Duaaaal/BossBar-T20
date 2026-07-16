@@ -490,7 +490,7 @@ const ControlApp = () => {
           onClick={() => void togglePanel()}
         >
           <span className="panel-arrows" aria-hidden="true">
-            {panelMinimized ? '<>' : '><'}
+            {panelMinimized ? '<>' : '—'}
           </span>
         </button>
       </header>

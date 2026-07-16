@@ -26,7 +26,9 @@ import {
   chooseEncounterSoundIndex,
   createInitialBoss,
   getEncounterSoundEffectKind,
+  initialEncounterEffectsState,
   initialBattleState,
+  isEncounterSoundEnabled,
   isBattleCommand,
   type BackgroundSelectionResult,
   type BackgroundState,
@@ -34,6 +36,8 @@ import {
   type EncounterEffectsState,
   type EncounterSoundEffect,
   type EncounterSoundEffectKind,
+  type EncounterSoundSetting,
+  type EncounterVisualEffectSetting,
   type HealthEffect,
   type HealthSequenceRequest,
   type HealthSequenceResult,
@@ -168,9 +172,10 @@ let soundboardAudioState = {
   muted: false,
 };
 let encounterEffectsAudioState = {
-  volume: 0.8,
-  muted: false,
-  revision: 0,
+  volume: initialEncounterEffectsState.volume,
+  sounds: { ...initialEncounterEffectsState.sounds },
+  visuals: { ...initialEncounterEffectsState.visuals },
+  revision: initialEncounterEffectsState.revision,
 };
 let masterFocusTimer: ReturnType<typeof setTimeout> | null = null;
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -178,6 +183,7 @@ let allowAppClose = false;
 let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPlayerWindowPosition: Pick<WindowBounds, 'x' | 'y'> | null = null;
 let dockedMoveFitTimer: ReturnType<typeof setTimeout> | null = null;
 let allowControlWindowClose = false;
 let synchronizingDockedWindows = false;
@@ -241,6 +247,7 @@ type BossLibraryEntry = {
 let bossLibraryEntries: BossLibraryEntry[] = [];
 let linkedLibraryEntryId: string | null = null;
 let libraryWriteQueue: Promise<void> = Promise.resolve();
+let encounterEffectsWriteQueue: Promise<void> = Promise.resolve();
 
 const supportedBackgroundExtensions: ReadonlySet<string> = new Set([
   ...backgroundImageExtensions,
@@ -442,6 +449,9 @@ const getEncounterEffectsState = (): EncounterEffectsState => ({
 const bossLibraryPath = () =>
   path.join(app.getPath('userData'), 'boss-library.json');
 
+const encounterEffectsSettingsPath = () =>
+  path.join(app.getPath('userData'), 'encounter-effects-settings.json');
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object');
 
@@ -452,6 +462,96 @@ const isStoredMediaFile = (value: unknown): value is StoredMediaFile =>
 
 const isFiniteStoredNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
+
+const loadEncounterEffectsSettings = async () => {
+  try {
+    const contents = await readFile(encounterEffectsSettingsPath(), 'utf8');
+    const parsed = JSON.parse(contents) as unknown;
+    if (!isRecord(parsed)) return;
+    const sounds = isRecord(parsed.sounds) ? parsed.sounds : {};
+    const visuals = isRecord(parsed.visuals) ? parsed.visuals : {};
+    encounterEffectsAudioState = {
+      volume: isFiniteStoredNumber(parsed.volume)
+        ? Math.max(0, Math.min(1, parsed.volume))
+        : initialEncounterEffectsState.volume,
+      sounds: {
+        heal: typeof sounds.heal === 'boolean'
+          ? sounds.heal
+          : initialEncounterEffectsState.sounds.heal,
+        damage: typeof sounds.damage === 'boolean'
+          ? sounds.damage
+          : initialEncounterEffectsState.sounds.damage,
+        shield: typeof sounds.shield === 'boolean'
+          ? sounds.shield
+          : initialEncounterEffectsState.sounds.shield,
+      },
+      visuals: {
+        screenShake: typeof visuals.screenShake === 'boolean'
+          ? visuals.screenShake
+          : initialEncounterEffectsState.visuals.screenShake,
+        healthBarShake: typeof visuals.healthBarShake === 'boolean'
+          ? visuals.healthBarShake
+          : initialEncounterEffectsState.visuals.healthBarShake,
+        damageEffect: typeof visuals.damageEffect === 'boolean'
+          ? visuals.damageEffect
+          : initialEncounterEffectsState.visuals.damageEffect,
+        healEffect: typeof visuals.healEffect === 'boolean'
+          ? visuals.healEffect
+          : initialEncounterEffectsState.visuals.healEffect,
+        particles: typeof visuals.particles === 'boolean'
+          ? visuals.particles
+          : initialEncounterEffectsState.visuals.particles,
+        floatingDamageNumbers:
+          typeof visuals.floatingDamageNumbers === 'boolean'
+            ? visuals.floatingDamageNumbers
+            : initialEncounterEffectsState.visuals.floatingDamageNumbers,
+      },
+      revision: initialEncounterEffectsState.revision,
+    };
+  } catch (error) {
+    if (isRecord(error) && error.code !== 'ENOENT') {
+      console.error('Não foi possível ler as configurações de efeitos.', error);
+    }
+  }
+};
+
+const persistEncounterEffectsSettings = () => {
+  const filePath = encounterEffectsSettingsPath();
+  const temporaryPath = `${filePath}.tmp`;
+  const contents = JSON.stringify(
+    {
+      schemaVersion: 1,
+      volume: encounterEffectsAudioState.volume,
+      sounds: encounterEffectsAudioState.sounds,
+      visuals: encounterEffectsAudioState.visuals,
+    },
+    null,
+    2,
+  );
+  encounterEffectsWriteQueue = encounterEffectsWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(temporaryPath, contents, 'utf8');
+      try {
+        await rename(temporaryPath, filePath);
+      } catch (error) {
+        if (
+          !isRecord(error) ||
+          (error.code !== 'EEXIST' && error.code !== 'EPERM')
+        ) throw error;
+        await rm(filePath, { force: true });
+        await rename(temporaryPath, filePath);
+      }
+    });
+  return encounterEffectsWriteQueue;
+};
+
+const persistEncounterEffectsSettingsSafely = () => {
+  void persistEncounterEffectsSettings().catch((error) => {
+    console.error('Não foi possível salvar as configurações de efeitos.', error);
+  });
+};
 
 const isStoredMusicTrack = (
   value: unknown,
@@ -914,9 +1014,9 @@ const playEncounterMechanicSound = (effect: HealthEffect) => {
     !soundKind ||
     !playerWindow ||
     playerWindow.isDestroyed() ||
-    encounterEffectsAudioState.muted ||
     musicState.universalMuted ||
-    encounterEffectsAudioState.volume <= 0
+    encounterEffectsAudioState.volume <= 0 ||
+    !isEncounterSoundEnabled(encounterEffectsAudioState, soundKind)
   ) return;
 
   const paths = encounterSoundPaths[soundKind];
@@ -1423,9 +1523,12 @@ const syncControlWindow = () => {
     controlWindow.isDestroyed()
   ) return;
   const currentControlBounds = controlWindow.getBounds();
+  const synchronizedControlHeight = controlPanelMinimized
+    ? CONTROL_PANEL_MINIMIZED_HEIGHT
+    : currentControlBounds.height;
   synchronizingDockedWindows = true;
   controlWindow.setBounds(
-    getDockedControlBoundsForWindow(playerWindow, currentControlBounds.height),
+    getDockedControlBoundsForWindow(playerWindow, synchronizedControlHeight),
   );
   synchronizingDockedWindows = false;
 };
@@ -1539,7 +1642,12 @@ const createControlWindow = (bounds: WindowBounds) => {
   return window;
 };
 
-const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
+const createPlayerWindow = (
+  bounds = {
+    ...getInitialWindowLayout().player,
+    ...lastPlayerWindowPosition,
+  },
+) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     if (!controlWindow || controlWindow.isDestroyed()) {
       const controlHeight = getInitialWindowLayout().control.height;
@@ -1628,6 +1736,8 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
     syncControlWindow();
   });
   window.on('moved', () => {
+    const { x, y } = window.getBounds();
+    lastPlayerWindowPosition = { x, y };
     const display = screen.getDisplayMatching(window.getBounds());
     constrainPlayerForControl(
       window,
@@ -1647,6 +1757,8 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
   window.on('show', () => controlWindow?.showInactive());
 
   window.on('close', (event) => {
+    const { x, y } = window.getBounds();
+    lastPlayerWindowPosition = { x, y };
     if (!allowPlayerWindowClose && musicState.isPlaying) {
       event.preventDefault();
       if (playerWindowClosePending) return;
@@ -2457,16 +2569,69 @@ ipcMain.on('encounter-effects:set-volume', (event, volume: unknown) => {
     revision: encounterEffectsAudioState.revision + 1,
   };
   broadcastEncounterEffectsState();
+  persistEncounterEffectsSettingsSafely();
 });
-ipcMain.on('encounter-effects:set-muted', (event, muted: unknown) => {
-  if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
-  encounterEffectsAudioState = {
-    ...encounterEffectsAudioState,
-    muted,
-    revision: encounterEffectsAudioState.revision + 1,
-  };
-  broadcastEncounterEffectsState();
-});
+const encounterSoundSettings = new Set<EncounterSoundSetting>([
+  'heal',
+  'damage',
+  'shield',
+]);
+const encounterVisualEffectSettings = new Set<EncounterVisualEffectSetting>([
+  'screenShake',
+  'healthBarShake',
+  'damageEffect',
+  'healEffect',
+  'particles',
+  'floatingDamageNumbers',
+]);
+ipcMain.on(
+  'encounter-effects:set-sound-enabled',
+  (event, setting: unknown, enabled: unknown) => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof setting !== 'string' ||
+      !encounterSoundSettings.has(setting as EncounterSoundSetting) ||
+      typeof enabled !== 'boolean'
+    ) return;
+    const typedSetting = setting as EncounterSoundSetting;
+    if (encounterEffectsAudioState.sounds[typedSetting] === enabled) return;
+    encounterEffectsAudioState = {
+      ...encounterEffectsAudioState,
+      sounds: {
+        ...encounterEffectsAudioState.sounds,
+        [typedSetting]: enabled,
+      },
+      revision: encounterEffectsAudioState.revision + 1,
+    };
+    broadcastEncounterEffectsState();
+    persistEncounterEffectsSettingsSafely();
+  },
+);
+ipcMain.on(
+  'encounter-effects:set-visual-enabled',
+  (event, setting: unknown, enabled: unknown) => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof setting !== 'string' ||
+      !encounterVisualEffectSettings.has(
+        setting as EncounterVisualEffectSetting,
+      ) ||
+      typeof enabled !== 'boolean'
+    ) return;
+    const typedSetting = setting as EncounterVisualEffectSetting;
+    if (encounterEffectsAudioState.visuals[typedSetting] === enabled) return;
+    encounterEffectsAudioState = {
+      ...encounterEffectsAudioState,
+      visuals: {
+        ...encounterEffectsAudioState.visuals,
+        [typedSetting]: enabled,
+      },
+      revision: encounterEffectsAudioState.revision + 1,
+    };
+    broadcastEncounterEffectsState();
+    persistEncounterEffectsSettingsSafely();
+  },
+);
 ipcMain.handle('music:set-soundboard-open', (event, open: unknown) => {
   if (!isMusicSender(event.sender.id) || typeof open !== 'boolean') return false;
   resizeMusicWindow(open);
@@ -3228,6 +3393,7 @@ app.whenReady().then(async () => {
   const [libraryEntries] = await Promise.all([
     loadBossLibrary(),
     loadEncounterMechanicSounds(),
+    loadEncounterEffectsSettings(),
   ]);
   bossLibraryEntries = libraryEntries;
   session.defaultSession.setPermissionCheckHandler(() => false);

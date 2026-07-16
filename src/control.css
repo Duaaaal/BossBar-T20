@@ -83,6 +83,16 @@ button { cursor: pointer; }
   padding: 0;
 }
 .control-shell.is-minimized .control-header { display: grid; width: 100%; min-height: 100%; }
+.control-shell.is-minimized .control-minimize-button {
+  top: 50%;
+  right: 6px;
+  width: 24px;
+  height: 18px;
+  border-radius: 5px;
+  transform: translateY(-50%);
+}
+.control-shell.is-minimized .control-minimize-button:hover:not(:disabled) { transform: translateY(-50%); }
+.control-shell.is-minimized .control-minimize-button .panel-arrows { font-size: .68rem; }
 .control-shell.is-minimized .control-tabs,
 .control-shell.is-minimized .control-vitals,
 .control-shell.is-minimized .control-form,

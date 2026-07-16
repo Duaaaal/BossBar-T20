@@ -15,7 +15,7 @@ test('creates stable local URLs for packaged assets', () => {
     'boss-asset://local/status-icons/status-01-abalado.png',
   );
   assert.equal(
-    statusIconUrl('status-01-abalado.png'),
-    'boss-asset://local/status-icons/status-01-abalado.png',
+    bundledAssetUrl('cog.png'),
+    'boss-asset://local/cog.png',
   );
 });

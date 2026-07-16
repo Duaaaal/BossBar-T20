@@ -7,6 +7,8 @@ import type {
   BattleState,
   EncounterEffectsState,
   EncounterSoundEffect,
+  EncounterSoundSetting,
+  EncounterVisualEffectSetting,
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
@@ -172,8 +174,17 @@ const bossAPI = {
   setEncounterEffectsVolume: (volume: number) => {
     ipcRenderer.send('encounter-effects:set-volume', volume);
   },
-  setEncounterEffectsMuted: (muted: boolean) => {
-    ipcRenderer.send('encounter-effects:set-muted', muted);
+  setEncounterSoundEnabled: (
+    setting: EncounterSoundSetting,
+    enabled: boolean,
+  ) => {
+    ipcRenderer.send('encounter-effects:set-sound-enabled', setting, enabled);
+  },
+  setEncounterVisualEffectEnabled: (
+    setting: EncounterVisualEffectSetting,
+    enabled: boolean,
+  ) => {
+    ipcRenderer.send('encounter-effects:set-visual-enabled', setting, enabled);
   },
   getSoundboardState: async (): Promise<SoundboardState> => {
     const state = (await ipcRenderer.invoke(

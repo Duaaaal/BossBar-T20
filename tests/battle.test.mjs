@@ -8,10 +8,13 @@ import {
   chooseNonRepeatingIndex,
   createInitialBoss,
   getEncounterSoundEffectKind,
+  getEncounterSoundSetting,
   getShieldMechanicSoundKind,
+  initialEncounterEffectsState,
   initialBattleState,
   isBattleCommand,
   isHeavyDamageEffect,
+  isEncounterSoundEnabled,
   isShieldBreakEffect,
   isMusicCommand,
   isSoundboardCommand,
@@ -359,6 +362,27 @@ test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () =
   assert.equal(
     chooseEncounterSoundIndex(3, 1, 2199, 2200, () => 1),
     2,
+  );
+});
+
+test('habilita todos os sons e efeitos visuais por padrão', () => {
+  assert.deepEqual(initialEncounterEffectsState.sounds, {
+    heal: true,
+    damage: true,
+    shield: true,
+  });
+  assert.equal(
+    Object.values(initialEncounterEffectsState.visuals).every(Boolean),
+    true,
+  );
+  assert.equal(getEncounterSoundSetting('heal'), 'heal');
+  assert.equal(getEncounterSoundSetting('damage'), 'damage');
+  assert.equal(getEncounterSoundSetting('critical-damage'), 'damage');
+  assert.equal(getEncounterSoundSetting('shield-impact'), 'shield');
+  assert.equal(getEncounterSoundSetting('shield-break'), 'shield');
+  assert.equal(
+    isEncounterSoundEnabled(initialEncounterEffectsState, 'shield-break'),
+    true,
   );
 });
 

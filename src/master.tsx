@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { type BattleState, type EncounterEffectsState } from './shared/battle';
+import {
+  type BattleState,
+  type EncounterEffectsState,
+  type EncounterSoundSetting,
+  type EncounterVisualEffectSetting,
+} from './shared/battle';
+import { bundledAssetUrl } from './shared/bundled-assets';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
 import './master.css';
 import './scrollbars.css';
@@ -26,13 +32,33 @@ const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
   })),
 });
 
+const SettingsCheckbox = ({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) => (
+  <label className="settings-checkbox">
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(event) => onChange(event.target.checked)}
+    />
+    <span className="settings-checkmark" aria-hidden="true" />
+    <span>{label}</span>
+  </label>
+);
+
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [appVersion, setAppVersion] = useState('...');
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [universalMuted, setUniversalMuted] = useState(false);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
-  const [encounterEffectsOpen, setEncounterEffectsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [backgroundError, setBackgroundError] = useState('');
   const [pendingBackgroundName, setPendingBackgroundName] = useState<string | null>(null);
   const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
@@ -237,11 +263,24 @@ const MasterApp = () => {
     window.bossAPI.setEncounterEffectsVolume(volume);
   };
 
-  const toggleEncounterEffectsMute = () => {
-    if (!encounterEffects) return;
-    const muted = !encounterEffects.muted;
-    setEncounterEffects({ ...encounterEffects, muted });
-    window.bossAPI.setEncounterEffectsMuted(muted);
+  const setEncounterSoundEnabled = (
+    setting: EncounterSoundSetting,
+    enabled: boolean,
+  ) => {
+    setEncounterEffects((current) => current
+      ? { ...current, sounds: { ...current.sounds, [setting]: enabled } }
+      : current);
+    window.bossAPI.setEncounterSoundEnabled(setting, enabled);
+  };
+
+  const setEncounterVisualEffectEnabled = (
+    setting: EncounterVisualEffectSetting,
+    enabled: boolean,
+  ) => {
+    setEncounterEffects((current) => current
+      ? { ...current, visuals: { ...current.visuals, [setting]: enabled } }
+      : current);
+    window.bossAPI.setEncounterVisualEffectEnabled(setting, enabled);
   };
 
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
@@ -257,14 +296,14 @@ const MasterApp = () => {
   return (
     <main className="master-shell">
       <button
-        className="encounter-effects-button"
+        className="settings-button"
         type="button"
-        title="Volume dos efeitos sonoros"
-        aria-label="Abrir controle dos efeitos sonoros"
+        title="Configurações"
+        aria-label="Abrir configurações"
         aria-haspopup="dialog"
-        onClick={() => setEncounterEffectsOpen(true)}
+        onClick={() => setSettingsOpen(true)}
       >
-        FX
+        <img src={bundledAssetUrl('cog.png')} alt="" />
       </button>
       <button
         className={`universal-mute-button ${universalMuted ? 'is-muted' : ''}`}
@@ -275,6 +314,13 @@ const MasterApp = () => {
         onClick={() => window.bossAPI.setUniversalMute(!universalMuted)}
       >
         {universalMuted ? '🔇' : '🔊'}
+      </button>
+      <button
+        className="music-window-button"
+        type="button"
+        onClick={() => void window.bossAPI.openMusicWindow()}
+      >
+        Trilha
       </button>
 
       {autosaveNoticeVisible && (
@@ -289,7 +335,7 @@ const MasterApp = () => {
       </header>
 
       <section className="compact-panel session-panel">
-        <div className="compact-panel-title"><span>01</span><h2>Sessão</h2></div>
+        <div className="compact-panel-title"><h2>Sessão</h2></div>
         <div className="session-actions">
           <button
             className="presentation-button"
@@ -301,9 +347,7 @@ const MasterApp = () => {
           >
             {presentationOpen ? 'Janela já aberta' : 'Abrir Janela'}
           </button>
-          <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
           <button className="hud-toggle-button" type="button" onClick={() => window.bossAPI.dispatch({ type: 'set-hud-visible', visible: !state.hudVisible })}>{state.hudVisible ? 'Esconder HUD' : 'Mostrar HUD'}</button>
-          <button className="music-window-button" type="button" onClick={() => void window.bossAPI.openMusicWindow()}>Trilha sonora</button>
           <button
             className={`start-battle-button ${state.battleStarted ? 'is-ending' : ''}`}
             type="button"
@@ -313,11 +357,12 @@ const MasterApp = () => {
           >
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
+          <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
         </div>
       </section>
 
       <section className="compact-panel">
-        <div className="compact-panel-title"><span>02</span><h2>Fundo da apresentação</h2></div>
+        <div className="compact-panel-title"><h2>Fundo da apresentação</h2></div>
         <div className="background-copy">
           <strong>Imagem, GIF ou vídeo</strong>
           <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
@@ -334,7 +379,7 @@ const MasterApp = () => {
       </section>
 
       <section className="compact-panel library-panel" aria-label="Biblioteca de encontros">
-        <div className="compact-panel-title"><span>03</span><h2>Biblioteca de Encontros</h2></div>
+        <div className="compact-panel-title"><h2>Biblioteca de Encontros</h2></div>
         <p>Salve ou recupere a luta completa, incluindo mídias e áudio.</p>
         <div className="library-actions">
           <button className="save-library-button" type="button" disabled={savingLibrary} onClick={() => void saveEncounter()}>{savingLibrary ? 'Salvando...' : 'Salvar encontro'}</button>
@@ -345,40 +390,50 @@ const MasterApp = () => {
 
       <footer className="master-footer">@Criado por: Brian Nascimento - Versão {appVersion}</footer>
 
-      {encounterEffectsOpen && encounterEffects && (
+      {settingsOpen && encounterEffects && (
         <div className="modal-backdrop">
-          <section className="confirmation-modal effects-audio-modal" role="dialog" aria-modal="true" aria-labelledby="effects-audio-title">
+          <section className="confirmation-modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <button
-              className="effects-close-button"
+              className="settings-close-button"
               type="button"
-              aria-label="Fechar controle dos efeitos sonoros"
-              onClick={() => setEncounterEffectsOpen(false)}
+              aria-label="Fechar configurações"
+              onClick={() => setSettingsOpen(false)}
             >
               ×
             </button>
-            <h2 id="effects-audio-title">Efeitos sonoros</h2>
-            <div className="effects-volume-control">
-              <button
-                className={`effects-mute-button ${encounterEffects.muted ? 'is-muted' : ''}`}
-                type="button"
-                title={encounterEffects.muted ? 'Ativar efeitos' : 'Mutar efeitos'}
-                aria-label={encounterEffects.muted ? 'Ativar efeitos' : 'Mutar efeitos'}
-                aria-pressed={encounterEffects.muted}
-                onClick={toggleEncounterEffectsMute}
-              >
-                {encounterEffects.muted ? '🔇' : '🔊'}
-              </button>
-              <input
-                className="effects-volume-range"
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={encounterEffects.volume}
-                aria-label="Volume dos efeitos sonoros"
-                onChange={(event) => setEncounterEffectsVolume(Number(event.target.value))}
-              />
-            </div>
+            <h2 id="settings-title">Configurações</h2>
+            <section className="settings-category" aria-labelledby="sound-settings-title">
+              <h3 id="sound-settings-title">Som</h3>
+              <div className="settings-options settings-sound-options">
+                <SettingsCheckbox checked={encounterEffects.sounds.heal} label="Cura" onChange={(checked) => setEncounterSoundEnabled('heal', checked)} />
+                <SettingsCheckbox checked={encounterEffects.sounds.damage} label="Dano" onChange={(checked) => setEncounterSoundEnabled('damage', checked)} />
+                <SettingsCheckbox checked={encounterEffects.sounds.shield} label="Escudo" onChange={(checked) => setEncounterSoundEnabled('shield', checked)} />
+              </div>
+              <label className="settings-volume-control">
+                <span>Volume <strong>{Math.round(encounterEffects.volume * 100)}%</strong></span>
+                <input
+                  className="settings-volume-range"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={encounterEffects.volume}
+                  aria-label="Volume dos efeitos sonoros"
+                  onChange={(event) => setEncounterEffectsVolume(Number(event.target.value))}
+                />
+              </label>
+            </section>
+            <section className="settings-category" aria-labelledby="visual-settings-title">
+              <h3 id="visual-settings-title">Efeitos</h3>
+              <div className="settings-options settings-visual-options">
+                <SettingsCheckbox checked={encounterEffects.visuals.screenShake} label="Tremor na tela" onChange={(checked) => setEncounterVisualEffectEnabled('screenShake', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.healthBarShake} label="Tremor na barra de vida" onChange={(checked) => setEncounterVisualEffectEnabled('healthBarShake', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.damageEffect} label="Efeito de dano" onChange={(checked) => setEncounterVisualEffectEnabled('damageEffect', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.healEffect} label="Efeito de cura" onChange={(checked) => setEncounterVisualEffectEnabled('healEffect', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.particles} label="Partículas" onChange={(checked) => setEncounterVisualEffectEnabled('particles', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.floatingDamageNumbers} label="Números flutuantes de dano" onChange={(checked) => setEncounterVisualEffectEnabled('floatingDamageNumbers', checked)} />
+              </div>
+            </section>
           </section>
         </div>
       )}

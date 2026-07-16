@@ -5,6 +5,8 @@ import type {
   BattleState,
   EncounterEffectsState,
   EncounterSoundEffect,
+  EncounterSoundSetting,
+  EncounterVisualEffectSetting,
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
@@ -71,7 +73,14 @@ export type BossAPI = {
   setUniversalMute: (muted: boolean) => void;
   getEncounterEffectsState: () => Promise<EncounterEffectsState>;
   setEncounterEffectsVolume: (volume: number) => void;
-  setEncounterEffectsMuted: (muted: boolean) => void;
+  setEncounterSoundEnabled: (
+    setting: EncounterSoundSetting,
+    enabled: boolean,
+  ) => void;
+  setEncounterVisualEffectEnabled: (
+    setting: EncounterVisualEffectSetting,
+    enabled: boolean,
+  ) => void;
   getSoundboardState: () => Promise<SoundboardState>;
   assignSoundboardSlot: (
     index: number,
