@@ -529,6 +529,16 @@ const AnimatedHealthBar = ({
           </span>
         );
       })}
+      {visuals.healthNumbers && (
+        <span
+          className="health-number-display"
+          aria-label={`Vida atual: ${current} de ${maximum}`}
+        >
+          <strong>{current}</strong>
+          <span aria-hidden="true">/</span>
+          <span>{maximum}</span>
+        </span>
+      )}
     </div>
   );
 };

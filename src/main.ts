@@ -505,6 +505,9 @@ const loadEncounterEffectsSettings = async () => {
           typeof visuals.floatingDamageNumbers === 'boolean'
             ? visuals.floatingDamageNumbers
             : initialEncounterEffectsState.visuals.floatingDamageNumbers,
+        healthNumbers: typeof visuals.healthNumbers === 'boolean'
+          ? visuals.healthNumbers
+          : initialEncounterEffectsState.visuals.healthNumbers,
       },
       revision: initialEncounterEffectsState.revision,
     };
@@ -2583,6 +2586,7 @@ const encounterVisualEffectSettings = new Set<EncounterVisualEffectSetting>([
   'healEffect',
   'particles',
   'floatingDamageNumbers',
+  'healthNumbers',
 ]);
 ipcMain.on(
   'encounter-effects:set-sound-enabled',

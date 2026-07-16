@@ -292,7 +292,8 @@ export type EncounterVisualEffectSetting =
   | 'damageEffect'
   | 'healEffect'
   | 'particles'
-  | 'floatingDamageNumbers';
+  | 'floatingDamageNumbers'
+  | 'healthNumbers';
 
 export type EncounterVisualEffectSettings = Record<
   EncounterVisualEffectSetting,
@@ -314,6 +315,7 @@ export const initialEncounterEffectsState: EncounterEffectsState = {
     healEffect: true,
     particles: true,
     floatingDamageNumbers: true,
+    healthNumbers: false,
   },
   revision: 0,
 };

@@ -365,16 +365,16 @@ test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () =
   );
 });
 
-test('habilita todos os sons e efeitos visuais por padrão', () => {
+test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () => {
   assert.deepEqual(initialEncounterEffectsState.sounds, {
     heal: true,
     damage: true,
     shield: true,
   });
-  assert.equal(
-    Object.values(initialEncounterEffectsState.visuals).every(Boolean),
-    true,
-  );
+  assert.equal(initialEncounterEffectsState.visuals.healthNumbers, false);
+  assert.equal(Object.entries(initialEncounterEffectsState.visuals)
+    .filter(([setting]) => setting !== 'healthNumbers')
+    .every(([, enabled]) => enabled), true);
   assert.equal(getEncounterSoundSetting('heal'), 'heal');
   assert.equal(getEncounterSoundSetting('damage'), 'damage');
   assert.equal(getEncounterSoundSetting('critical-damage'), 'damage');

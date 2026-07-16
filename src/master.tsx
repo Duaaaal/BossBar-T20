@@ -432,6 +432,7 @@ const MasterApp = () => {
                 <SettingsCheckbox checked={encounterEffects.visuals.healEffect} label="Efeito de cura" onChange={(checked) => setEncounterVisualEffectEnabled('healEffect', checked)} />
                 <SettingsCheckbox checked={encounterEffects.visuals.particles} label="Partículas" onChange={(checked) => setEncounterVisualEffectEnabled('particles', checked)} />
                 <SettingsCheckbox checked={encounterEffects.visuals.floatingDamageNumbers} label="Números flutuantes de dano" onChange={(checked) => setEncounterVisualEffectEnabled('floatingDamageNumbers', checked)} />
+                <SettingsCheckbox checked={encounterEffects.visuals.healthNumbers} label="Visor numérico de vida" onChange={(checked) => setEncounterVisualEffectEnabled('healthNumbers', checked)} />
               </div>
             </section>
           </section>

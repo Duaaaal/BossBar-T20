@@ -73,6 +73,16 @@ public static class BossBarStatusIconGenerator
         return minimum >= 110 && maximum - minimum <= 32;
     }
 
+    private static bool IsEnclosedBackgroundFringe(Color color)
+    {
+        int maximum = Math.Max(color.R, Math.Max(color.G, color.B));
+        int minimum = Math.Min(color.R, Math.Min(color.G, color.B));
+        // Antialiasing against the opaque checkerboard leaves a thin neutral
+        // fringe around enclosed holes. Keep colored artwork intact while
+        // contracting gray and white residue into the transparent region.
+        return minimum >= 45 && maximum - minimum <= 72;
+    }
+
     private static void RemoveBoundaryDebris(Bitmap crop, bool[] background)
     {
         var visited = new bool[background.Length];
@@ -143,6 +153,173 @@ public static class BossBarStatusIconGenerator
         }
     }
 
+    private static bool ShouldRemoveEnclosedCheckerboard(
+        IconSpec spec,
+        int pixelCount,
+        int left,
+        int top,
+        int right,
+        int bottom
+    )
+    {
+        switch (spec.FileName)
+        {
+            case "status-18-exausto.png":
+                return
+                    (pixelCount >= 600 && left >= 100 && top >= 60) ||
+                    (pixelCount >= 250 && left >= 70 && top >= 80) ||
+                    (pixelCount >= 40 && left >= 30 && right <= 60 && top >= 130);
+            case "status-32-sobrecarregado.png":
+                // Everything neutral below the upper chain is checkerboard
+                // trapped inside links, limbs or the gap between the feet.
+                return top >= 90;
+            case "status-23-imovel.png":
+                return pixelCount >= 300 && left >= 90 && right <= 130 && top >= 95;
+            case "status-19-fascinado.png":
+                // Preserve the central white star and the highlights on the
+                // small stars; remove only the two enclosed background arcs.
+                return
+                    (pixelCount >= 650 && top <= 50) ||
+                    (pixelCount >= 80 && right <= 55 && top >= 70);
+            case "status-06-caido.png":
+                return top >= 120 && (
+                    (pixelCount >= 60 && left >= 110 && right <= 135) ||
+                    (pixelCount >= 25 && left >= 80 && right <= 100) ||
+                    (pixelCount >= 20 && left >= 145 && right <= 165)
+                );
+            case "status-09-debilitado.png":
+                return
+                    pixelCount >= 100 &&
+                    left >= 155 &&
+                    top >= 25 &&
+                    bottom <= 60;
+            default:
+                return false;
+        }
+    }
+
+    private static void RemoveEnclosedCheckerboard(
+        Bitmap crop,
+        bool[] background,
+        bool[] enclosedBackground,
+        IconSpec spec
+    )
+    {
+        var visited = new bool[background.Length];
+        int[] horizontal = { -1, 1, 0, 0 };
+        int[] vertical = { 0, 0, -1, 1 };
+
+        for (int startY = 0; startY < crop.Height; startY++)
+        {
+            for (int startX = 0; startX < crop.Width; startX++)
+            {
+                int startOffset = startY * crop.Width + startX;
+                if (
+                    background[startOffset] ||
+                    visited[startOffset] ||
+                    !IsConnectedBackground(crop.GetPixel(startX, startY))
+                ) continue;
+
+                var component = new List<int>();
+                var componentQueue = new Queue<int>();
+                int left = crop.Width;
+                int top = crop.Height;
+                int right = -1;
+                int bottom = -1;
+                visited[startOffset] = true;
+                componentQueue.Enqueue(startOffset);
+
+                while (componentQueue.Count > 0)
+                {
+                    int offset = componentQueue.Dequeue();
+                    component.Add(offset);
+                    int x = offset % crop.Width;
+                    int y = offset / crop.Width;
+                    left = Math.Min(left, x);
+                    top = Math.Min(top, y);
+                    right = Math.Max(right, x);
+                    bottom = Math.Max(bottom, y);
+
+                    for (int direction = 0; direction < 4; direction++)
+                    {
+                        int nextX = x + horizontal[direction];
+                        int nextY = y + vertical[direction];
+                        if (
+                            nextX < 0 ||
+                            nextY < 0 ||
+                            nextX >= crop.Width ||
+                            nextY >= crop.Height
+                        ) continue;
+
+                        int nextOffset = nextY * crop.Width + nextX;
+                        if (
+                            background[nextOffset] ||
+                            visited[nextOffset] ||
+                            !IsConnectedBackground(crop.GetPixel(nextX, nextY))
+                        ) continue;
+                        visited[nextOffset] = true;
+                        componentQueue.Enqueue(nextOffset);
+                    }
+                }
+
+                if (ShouldRemoveEnclosedCheckerboard(
+                    spec,
+                    component.Count,
+                    left,
+                    top,
+                    right,
+                    bottom
+                ))
+                {
+                    foreach (int offset in component)
+                    {
+                        background[offset] = true;
+                        enclosedBackground[offset] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    private static void RemoveEnclosedBackgroundFringe(
+        Bitmap crop,
+        bool[] background,
+        bool[] enclosedBackground
+    )
+    {
+        for (int iteration = 0; iteration < 2; iteration++)
+        {
+            var additions = new List<int>();
+            for (int y = 0; y < crop.Height; y++)
+            {
+                for (int x = 0; x < crop.Width; x++)
+                {
+                    int offset = y * crop.Width + x;
+                    if (!enclosedBackground[offset]) continue;
+
+                    for (int nextY = Math.Max(0, y - 1); nextY <= Math.Min(crop.Height - 1, y + 1); nextY++)
+                    {
+                        for (int nextX = Math.Max(0, x - 1); nextX <= Math.Min(crop.Width - 1, x + 1); nextX++)
+                        {
+                            int nextOffset = nextY * crop.Width + nextX;
+                            if (
+                                background[nextOffset] ||
+                                !IsEnclosedBackgroundFringe(crop.GetPixel(nextX, nextY))
+                            ) continue;
+                            additions.Add(nextOffset);
+                        }
+                    }
+                }
+            }
+
+            foreach (int offset in additions)
+            {
+                background[offset] = true;
+                enclosedBackground[offset] = true;
+            }
+        }
+    }
+
     private static IconSpec[] BuildSpecs()
     {
         string[] names = {
@@ -172,7 +349,7 @@ public static class BossBarStatusIconGenerator
                 rowY[row],
                 212,
                 rowHeight[row],
-                index == 14
+                index == 14 || index == 21
             );
         }
         return specs;
@@ -193,12 +370,13 @@ public static class BossBarStatusIconGenerator
 
         int pixelCount = crop.Width * crop.Height;
         var background = new bool[pixelCount];
+        var enclosedBackground = new bool[pixelCount];
         var queued = new bool[pixelCount];
         var queue = new Queue<int>();
 
-        // Enredado contains closed loops around pieces of the checkerboard.
-        // Only this crop needs enclosed neutral pixels removed; applying this
-        // globally would erase intentional whites in icons such as Ofuscado.
+        // Enredado and Frustrado contain only colored artwork around their
+        // closed checkerboard holes, so every enclosed neutral component can
+        // be removed safely. Other icons use selective component rules below.
         if (spec.RemoveEnclosedBackground)
         {
             for (int y = 0; y < crop.Height; y++)
@@ -207,7 +385,9 @@ public static class BossBarStatusIconGenerator
                 {
                     if (IsConnectedBackground(crop.GetPixel(x, y)))
                     {
-                        background[y * crop.Width + x] = true;
+                        int offset = y * crop.Width + x;
+                        background[offset] = true;
+                        enclosedBackground[offset] = true;
                     }
                 }
             }
@@ -232,13 +412,6 @@ public static class BossBarStatusIconGenerator
             enqueue(crop.Width - 1, y);
         }
 
-        // The light checkerboard beneath Sobrecarregado is enclosed by the
-        // legs and chains, so it cannot be reached from a crop boundary.
-        if (spec.FileName == "status-32-sobrecarregado.png")
-        {
-            enqueue(84, 160);
-        }
-
         while (queue.Count > 0)
         {
             int offset = queue.Dequeue();
@@ -251,6 +424,8 @@ public static class BossBarStatusIconGenerator
             enqueue(x, y + 1);
         }
 
+        RemoveEnclosedCheckerboard(crop, background, enclosedBackground, spec);
+        RemoveEnclosedBackgroundFringe(crop, background, enclosedBackground);
         RemoveBoundaryDebris(crop, background);
 
         int left = crop.Width;
