@@ -23,12 +23,17 @@ import {
   applyBattleCommand,
   advanceBossTurn,
   calculateHealthSequence,
+  chooseEncounterSoundIndex,
   createInitialBoss,
+  getEncounterSoundEffectKind,
   initialBattleState,
   isBattleCommand,
   type BackgroundSelectionResult,
   type BackgroundState,
   type BattleState,
+  type EncounterEffectsState,
+  type EncounterSoundEffect,
+  type EncounterSoundEffectKind,
   type HealthEffect,
   type HealthSequenceRequest,
   type HealthSequenceResult,
@@ -129,8 +134,19 @@ const soundEffectSources = new Map<
   number,
   { filePath: string; index: number }
 >();
+const encounterEffectSources = new Map<number, string>();
+const encounterSoundPaths: Record<EncounterSoundEffectKind, string[]> = {
+  'shield-impact': [],
+  'shield-break': [],
+  damage: [],
+  'critical-damage': [],
+  heal: [],
+};
+const previousEncounterSoundIndex = new Map<EncounterSoundEffectKind, number>();
+const encounterSoundGroupLastPlayedAt = new Map<EncounterSoundEffectKind, number>();
 let musicTrackSequence = 0;
 let soundEffectSequence = 0;
+let encounterEffectSequence = 0;
 let soundboardRevision = 0;
 let musicState: Omit<MusicState, 'tracks'> = {
   currentTrackId: null,
@@ -150,6 +166,11 @@ let musicPlaybackState: MusicPlaybackState = {
 let soundboardAudioState = {
   volume: 0.8,
   muted: false,
+};
+let encounterEffectsAudioState = {
+  volume: 0.8,
+  muted: false,
+  revision: 0,
 };
 let masterFocusTimer: ReturnType<typeof setTimeout> | null = null;
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -287,6 +308,82 @@ const defaultMediaDirectory = (
   ? app.getPath(systemFolder)
   : path.join(app.getAppPath(), projectFolder);
 
+const personalSfxDirectories = () => Array.from(new Set([
+  app.isPackaged
+    ? path.join(path.dirname(process.execPath), 'SFX')
+    : path.join(app.getAppPath(), 'SFX'),
+  path.join(app.getPath('documents'), 'BossBar - Tormenta20', 'SFX'),
+  path.join(app.getPath('userData'), 'SFX'),
+  path.join(process.cwd(), 'SFX'),
+]));
+
+const findPersonalSfxFile = async (relativePath: string) => {
+  for (const directory of personalSfxDirectories()) {
+    const candidate = path.join(directory, relativePath);
+    try {
+      if ((await stat(candidate)).isFile()) return candidate;
+    } catch {
+      // Continue procurando nas bibliotecas pessoais conhecidas.
+    }
+  }
+  return null;
+};
+
+const loadEncounterMechanicSounds = async () => {
+  const definitions: Array<{
+    kind: EncounterSoundEffectKind;
+    directory: string;
+    names: string[];
+  }> = [
+    {
+      kind: 'shield-impact',
+      directory: 'Mecanica_Escudo',
+      names: [
+        'impacto_escudo_1.mp3',
+        'impacto_escudo_2.mp3',
+        'impacto_escudo_3.mp3',
+      ],
+    },
+    {
+      kind: 'shield-break',
+      directory: 'Mecanica_Escudo',
+      names: ['escudo_quebrando.mp3'],
+    },
+    {
+      kind: 'damage',
+      directory: 'Mecanica_Dano',
+      names: ['Dano_1.mp3', 'Dano_2.mp3', 'Dano_3.mp3', 'Dano_4.mp3'],
+    },
+    {
+      kind: 'critical-damage',
+      directory: 'Mecanica_Dano',
+      names: ['Crit_1.mp3', 'Crit_2.mp3'],
+    },
+    {
+      kind: 'heal',
+      directory: 'Mecanica_Cura',
+      names: ['heal_1.mp3', 'heal_2.mp3'],
+    },
+  ];
+
+  await Promise.all(definitions.map(async ({ kind, directory, names }) => {
+    const paths = await Promise.all(
+      names.map((name) => findPersonalSfxFile(path.join(directory, name))),
+    );
+    encounterSoundPaths[kind].splice(
+      0,
+      encounterSoundPaths[kind].length,
+      ...paths.filter((filePath): filePath is string => Boolean(filePath)),
+    );
+  }));
+  previousEncounterSoundIndex.clear();
+  encounterSoundGroupLastPlayedAt.clear();
+  encounterEffectsAudioState = {
+    ...encounterEffectsAudioState,
+    revision: encounterEffectsAudioState.revision + 1,
+  };
+};
+
 const rendererUrl = (page: RendererPage) => {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     const baseUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL.endsWith('/')
@@ -335,6 +432,11 @@ const getSoundboardState = (): SoundboardState => ({
   ...soundboardAudioState,
   universalMuted: musicState.universalMuted,
   revision: soundboardRevision,
+});
+
+const getEncounterEffectsState = (): EncounterEffectsState => ({
+  ...encounterEffectsAudioState,
+  universalMuted: musicState.universalMuted,
 });
 
 const bossLibraryPath = () =>
@@ -797,6 +899,50 @@ const broadcastSoundboardState = () => {
   }
 };
 
+const broadcastEncounterEffectsState = () => {
+  const state = getEncounterEffectsState();
+  for (const window of [masterWindow, playerWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('encounter-effects:state-changed', state);
+    }
+  }
+};
+
+const playEncounterMechanicSound = (effect: HealthEffect) => {
+  const soundKind = getEncounterSoundEffectKind(effect);
+  if (
+    !soundKind ||
+    !playerWindow ||
+    playerWindow.isDestroyed() ||
+    encounterEffectsAudioState.muted ||
+    musicState.universalMuted ||
+    encounterEffectsAudioState.volume <= 0
+  ) return;
+
+  const paths = encounterSoundPaths[soundKind];
+  const playbackTime = Date.now();
+  const soundIndex = chooseEncounterSoundIndex(
+    paths.length,
+    previousEncounterSoundIndex.get(soundKind) ?? null,
+    encounterSoundGroupLastPlayedAt.get(soundKind) ?? null,
+    playbackTime,
+    randomInt,
+  );
+  const filePath = paths[soundIndex] ?? null;
+  if (!filePath) return;
+  previousEncounterSoundIndex.set(soundKind, soundIndex);
+  encounterSoundGroupLastPlayedAt.set(soundKind, playbackTime);
+
+  encounterEffectSequence += 1;
+  encounterEffectSources.set(encounterEffectSequence, filePath);
+  const encounterEffect: EncounterSoundEffect = {
+    id: encounterEffectSequence,
+    kind: soundKind,
+    url: `boss-media://encounter-sfx/${encounterEffectSequence}`,
+  };
+  playerWindow.webContents.send('encounter-effects:play', encounterEffect);
+};
+
 const stopSoundboardPlayback = (index?: number) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('soundboard:stop', { index });
@@ -1218,7 +1364,10 @@ const getInitialWindowLayout = (): {
     workArea.x + Math.round((playerAreaWidth - playerWidth) / 2);
   const groupHeight = playerHeight + controlHeight;
   const playerY = workArea.y + Math.max(0, Math.round((workArea.height - groupHeight) / 2));
-  const masterX = workArea.x + workArea.width - masterWidth;
+  const masterX = Math.min(
+    workArea.x + workArea.width - masterWidth,
+    playerX + playerWidth + DOCKED_WINDOW_GAP,
+  );
 
   return {
     player: {
@@ -1238,6 +1387,31 @@ const getInitialWindowLayout = (): {
       height: masterHeight,
     },
   };
+};
+
+const positionMasterBesidePlayer = () => {
+  if (
+    !masterWindow ||
+    masterWindow.isDestroyed() ||
+    !playerWindow ||
+    playerWindow.isDestroyed()
+  ) return;
+
+  const playerBounds = playerWindow.getBounds();
+  const masterBounds = masterWindow.getBounds();
+  const { workArea } = screen.getDisplayMatching(playerBounds);
+  const maximumX = workArea.x + workArea.width - masterBounds.width;
+  const maximumY = workArea.y + workArea.height - masterBounds.height;
+  masterWindow.setPosition(
+    Math.max(
+      workArea.x,
+      Math.min(
+        maximumX,
+        playerBounds.x + playerBounds.width + DOCKED_WINDOW_GAP,
+      ),
+    ),
+    Math.max(workArea.y, Math.min(maximumY, playerBounds.y)),
+  );
 };
 
 const syncControlWindow = () => {
@@ -1335,7 +1509,6 @@ const createControlWindow = (bounds: WindowBounds) => {
   controlPanelMinimized = false;
   controlPanelExpandedHeight = bounds.height;
   window.setClosable(false);
-  window.setContentProtection(true);
   configureNativeDockedWindowChrome();
   window.on('focus', focusDockedWindowGroup);
   window.on('will-resize', (event, newBounds, details) => {
@@ -1503,6 +1676,7 @@ const createPlayerWindow = (bounds = getInitialWindowLayout().player) => {
       allowPlayerWindowClose = false;
       playerWindowClosePending = false;
       soundEffectSources.clear();
+      encounterEffectSources.clear();
       if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
       playerWindowCloseTimer = null;
       if (dockedMoveFitTimer) clearTimeout(dockedMoveFitTimer);
@@ -1524,6 +1698,7 @@ const createEncounterWindows = () => {
   if (masterWindow && !masterWindow.isDestroyed()) {
     masterWindow.show();
     createPlayerWindow();
+    positionMasterBesidePlayer();
     return;
   }
   const layout = getInitialWindowLayout();
@@ -1548,6 +1723,7 @@ const createEncounterWindows = () => {
 
   loadRenderer(masterWindow, 'master');
   createPlayerWindow(layout.player);
+  positionMasterBesidePlayer();
 
   masterWindow.on('close', (event) => {
     if (allowAppClose) return;
@@ -1659,6 +1835,9 @@ const isMasterSender = (senderId: number) =>
 
 const isControlSender = (senderId: number) =>
   Boolean(controlWindow && senderId === controlWindow.webContents.id);
+
+const isPlayerSender = (senderId: number) =>
+  Boolean(playerWindow && senderId === playerWindow.webContents.id);
 
 const isLauncherSender = (senderId: number) =>
   Boolean(launcherWindow && senderId === launcherWindow.webContents.id);
@@ -1788,6 +1967,7 @@ ipcMain.handle('presentation:open', (event) => {
 
   if (isPresentationOpen()) return false;
   createPlayerWindow();
+  positionMasterBesidePlayer();
   return true;
 });
 
@@ -2247,6 +2427,11 @@ ipcMain.handle(
   (): MusicPlaybackState => musicPlaybackState,
 );
 ipcMain.handle('soundboard:get-state', (): SoundboardState => getSoundboardState());
+ipcMain.handle('encounter-effects:get-state', (event) =>
+  isMasterSender(event.sender.id) || isPlayerSender(event.sender.id)
+    ? getEncounterEffectsState()
+    : null,
+);
 ipcMain.on('audio:set-universal-muted', (event, muted: unknown) => {
   if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
   if (musicState.universalMuted === muted) return;
@@ -2258,6 +2443,29 @@ ipcMain.on('audio:set-universal-muted', (event, muted: unknown) => {
   soundboardRevision += 1;
   broadcastMusicState();
   broadcastSoundboardState();
+  broadcastEncounterEffectsState();
+});
+ipcMain.on('encounter-effects:set-volume', (event, volume: unknown) => {
+  if (
+    !isMasterSender(event.sender.id) ||
+    typeof volume !== 'number' ||
+    !Number.isFinite(volume)
+  ) return;
+  encounterEffectsAudioState = {
+    ...encounterEffectsAudioState,
+    volume: Math.max(0, Math.min(1, volume)),
+    revision: encounterEffectsAudioState.revision + 1,
+  };
+  broadcastEncounterEffectsState();
+});
+ipcMain.on('encounter-effects:set-muted', (event, muted: unknown) => {
+  if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
+  encounterEffectsAudioState = {
+    ...encounterEffectsAudioState,
+    muted,
+    revision: encounterEffectsAudioState.revision + 1,
+  };
+  broadcastEncounterEffectsState();
 });
 ipcMain.handle('music:set-soundboard-open', (event, open: unknown) => {
   if (!isMusicSender(event.sender.id) || typeof open !== 'boolean') return false;
@@ -2417,6 +2625,18 @@ ipcMain.on('soundboard:playback-finished', (event, effectId: unknown) => {
   ) return;
   soundEffectSources.delete(effectId);
 });
+
+ipcMain.on(
+  'encounter-effects:playback-finished',
+  (event, effectId: unknown) => {
+    if (
+      !isPlayerSender(event.sender.id) ||
+      typeof effectId !== 'number' ||
+      !Number.isInteger(effectId)
+    ) return;
+    encounterEffectSources.delete(effectId);
+  },
+);
 
 ipcMain.on(
   'soundboard:playback-error',
@@ -2751,6 +2971,7 @@ const applyHealthMutation = (
       shieldTo: nextBoss.shield,
     };
     playerWindow.webContents.send('health:effect', effect);
+    playEncounterMechanicSound(effect);
   }
 };
 
@@ -3004,7 +3225,11 @@ const createMediaResponse = async (
 };
 
 app.whenReady().then(async () => {
-  bossLibraryEntries = await loadBossLibrary();
+  const [libraryEntries] = await Promise.all([
+    loadBossLibrary(),
+    loadEncounterMechanicSounds(),
+  ]);
+  bossLibraryEntries = libraryEntries;
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
@@ -3045,13 +3270,25 @@ app.whenReady().then(async () => {
           ? soundEffectSources.get(effectId)?.filePath ?? null
           : null;
         errorLabel = 'efeito sonoro';
+      } else if (requestUrl.hostname === 'encounter-sfx') {
+        const effectId = Number(
+          decodeURIComponent(requestUrl.pathname.slice(1)),
+        );
+        mediaPath = Number.isInteger(effectId)
+          ? encounterEffectSources.get(effectId) ?? null
+          : null;
+        errorLabel = 'efeito do encontro';
       }
 
       if (!mediaPath) {
         return new Response(`${errorLabel} não encontrada.`, { status: 404 });
       }
 
-      if (requestUrl.hostname === 'audio' || requestUrl.hostname === 'sfx') {
+      if (
+        requestUrl.hostname === 'audio' ||
+        requestUrl.hostname === 'sfx' ||
+        requestUrl.hostname === 'encounter-sfx'
+      ) {
         return await createMediaResponse(request, mediaPath, 'audio/mpeg');
       }
       const backgroundVideoMimeType = backgroundVideoMimeTypeForFile(mediaPath);
@@ -3088,6 +3325,8 @@ app.on('before-quit', () => {
   controlWindow?.setClosable(true);
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
+  soundEffectSources.clear();
+  encounterEffectSources.clear();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
   if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
   if (masterFocusTimer) clearTimeout(masterFocusTimer);

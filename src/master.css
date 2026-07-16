@@ -30,6 +30,7 @@ button { font: inherit; cursor: pointer; }
 
 .universal-mute-button { position: absolute; z-index: 3; top: 13px; right: 13px; display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid #7b4b69; border-radius: 8px; background: linear-gradient(145deg, #37243d, #563153); font-size: .84rem; }
 .universal-mute-button.is-muted { border-color: #d35468; background: linear-gradient(145deg, #762538, #ad344a); }
+.encounter-effects-button { position: absolute; z-index: 3; top: 13px; right: 53px; display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid #69537d; border-radius: 8px; background: linear-gradient(145deg, #343052, #574a7c); color: #e9ddf6; font-size: .65rem; font-weight: 950; letter-spacing: -.03em; }
 .autosave-notification { position: fixed; z-index: 15; top: 8px; left: 50%; border: 1px solid rgba(132, 102, 148, .45); border-radius: 8px; padding: 7px 11px; background: rgba(40, 31, 45, .92); color: #c9b3d2; font-size: .58rem; transform: translateX(-50%); }
 
 .compact-panel { border: 1px solid #322b35; border-radius: 11px; padding: 13px; background: rgba(24, 20, 26, .9); box-shadow: 0 12px 28px rgba(0, 0, 0, .18); }
@@ -40,7 +41,7 @@ button { font: inherit; cursor: pointer; }
 .session-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .session-actions button, .background-actions button, .library-actions button, .modal-actions button { border: 1px solid rgba(171, 112, 130, .28); border-radius: 8px; min-height: 38px; padding: 8px 10px; color: #fff; font-size: .7rem; font-weight: 800; }
 .session-actions button, .background-actions button, .library-actions button, .modal-actions button { box-shadow: inset 0 1px rgba(255, 255, 255, .1), 0 3px 8px rgba(0, 0, 0, .16); transition: filter .15s ease, transform .15s ease; }
-.session-actions button:hover:not(:disabled), .background-actions button:hover:not(:disabled), .library-actions button:hover:not(:disabled), .modal-actions button:hover:not(:disabled), .universal-mute-button:hover:not(:disabled) { filter: brightness(1.16) saturate(1.12); transform: translateY(-1px); }
+.session-actions button:hover:not(:disabled), .background-actions button:hover:not(:disabled), .library-actions button:hover:not(:disabled), .modal-actions button:hover:not(:disabled), .universal-mute-button:hover:not(:disabled), .encounter-effects-button:hover:not(:disabled) { filter: brightness(1.16) saturate(1.12); transform: translateY(-1px); }
 .presentation-button { background: linear-gradient(135deg, #6a3d8e, #a45bc0); }
 .presentation-button:disabled { opacity: .5; cursor: default; filter: saturate(.55); }
 .reset-button { background: linear-gradient(135deg, #6d3544, #a64b5d); color: #fff !important; }
@@ -78,3 +79,12 @@ button { font: inherit; cursor: pointer; }
 .modal-confirm-button { background: linear-gradient(135deg, #92283f, #d23e55); }
 .modal-warning-button { background: linear-gradient(135deg, #a35822, #dd7d31); }
 .three-actions { flex-wrap: wrap; }
+
+.effects-audio-modal { position: relative; width: min(310px, 100%); padding: 20px; }
+.effects-audio-modal h2 { padding-right: 28px; }
+.effects-close-button { position: absolute; top: 9px; right: 10px; display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #a99dab; font-size: 1.2rem; line-height: 1; }
+.effects-close-button:hover { background: rgba(151, 91, 119, .18); color: #fff; }
+.effects-volume-control { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 11px; margin-top: 20px; }
+.effects-volume-range { width: 100%; margin: 0; accent-color: #b54f92; cursor: pointer; }
+.effects-mute-button { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid #6b4671; border-radius: 9px; background: linear-gradient(135deg, #6b3c72, #9d5198); font-size: .9rem; }
+.effects-mute-button.is-muted { border-color: #bd465b; background: linear-gradient(135deg, #872d42, #c7445b); }

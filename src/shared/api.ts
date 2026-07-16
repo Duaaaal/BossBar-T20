@@ -3,6 +3,8 @@ import type {
   BackgroundState,
   BattleCommand,
   BattleState,
+  EncounterEffectsState,
+  EncounterSoundEffect,
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
@@ -67,6 +69,9 @@ export type BossAPI = {
   getMusicPlayback: () => Promise<MusicPlaybackState>;
   dispatchMusic: (command: MusicCommand) => void;
   setUniversalMute: (muted: boolean) => void;
+  getEncounterEffectsState: () => Promise<EncounterEffectsState>;
+  setEncounterEffectsVolume: (volume: number) => void;
+  setEncounterEffectsMuted: (muted: boolean) => void;
   getSoundboardState: () => Promise<SoundboardState>;
   assignSoundboardSlot: (
     index: number,
@@ -77,6 +82,7 @@ export type BossAPI = {
   setSoundboardOpen: (open: boolean) => Promise<boolean>;
   soundEffectFinished: (effectId: number) => void;
   reportSoundEffectError: (effectId: number, index: number) => void;
+  encounterEffectFinished: (effectId: number) => void;
   musicTrackEnded: () => void;
   musicFadeoutComplete: () => void;
   reportMusicProgress: (state: MusicPlaybackState) => void;
@@ -120,5 +126,11 @@ export type BossAPI = {
   ) => () => void;
   subscribeSoundboardError: (
     callback: (message: string) => void,
+  ) => () => void;
+  subscribeEncounterEffects: (
+    callback: (state: EncounterEffectsState) => void,
+  ) => () => void;
+  subscribeEncounterEffect: (
+    callback: (effect: EncounterSoundEffect) => void,
   ) => () => void;
 };

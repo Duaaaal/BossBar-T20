@@ -13,6 +13,7 @@ import {
   type BackgroundState,
   type BattleState,
   type BossState,
+  type EncounterEffectsState,
   type HealthEffect,
   isHeavyDamageEffect,
   isShieldBreakEffect,
@@ -45,6 +46,52 @@ const splitStatusRows = <Item,>(items: Item[], rowSize = 10) =>
   Array.from({ length: Math.ceil(items.length / rowSize) }, (_, rowIndex) =>
     items.slice(rowIndex * rowSize, (rowIndex + 1) * rowSize),
   );
+
+const playHeavyScreenImpact = () => {
+  if (!document.querySelector('.waiting-screen.is-hidden')) return;
+  const stage = document.querySelector<HTMLElement>('.player-stage');
+  const hud = document.querySelector<HTMLElement>('.boss-hud.is-active');
+  const flash = document.querySelector<HTMLElement>('.critical-screen-flash');
+  stage?.animate(
+    [
+      { transform: 'scale(1.02) translate3d(0, 0, 0) rotate(0)' },
+      { transform: 'scale(1.025) translate3d(-9px, 5px, 0) rotate(-.12deg)', offset: 0.08 },
+      { transform: 'scale(1.025) translate3d(8px, -5px, 0) rotate(.11deg)', offset: 0.17 },
+      { transform: 'scale(1.023) translate3d(-7px, -3px, 0) rotate(-.08deg)', offset: 0.28 },
+      { transform: 'scale(1.021) translate3d(6px, 4px, 0) rotate(.07deg)', offset: 0.4 },
+      { transform: 'scale(1.017) translate3d(-4px, 2px, 0) rotate(-.04deg)', offset: 0.54 },
+      { transform: 'scale(1.011) translate3d(3px, -2px, 0) rotate(.02deg)', offset: 0.7 },
+      { transform: 'scale(1.005) translate3d(-1px, 1px, 0) rotate(0)', offset: 0.86 },
+      { transform: 'scale(1) translate3d(0, 0, 0)' },
+    ],
+    { duration: 1050, easing: 'cubic-bezier(.16,.82,.2,1)' },
+  );
+  hud?.animate(
+    [
+      { filter: 'brightness(1)', transform: 'translate3d(0, 0, 0) scale(1)' },
+      { filter: 'brightness(1.4) saturate(1.28)', transform: 'translate3d(-16px, 7px, 0) scale(1.03) rotate(-.35deg)', offset: 0.07 },
+      { filter: 'brightness(1.18) saturate(1.18)', transform: 'translate3d(14px, -8px, 0) scale(1.025) rotate(.3deg)', offset: 0.16 },
+      { filter: 'brightness(1.12)', transform: 'translate3d(-12px, -4px, 0) scale(1.02) rotate(-.22deg)', offset: 0.27 },
+      { filter: 'brightness(1.08)', transform: 'translate3d(10px, 5px, 0) scale(1.016) rotate(.18deg)', offset: 0.39 },
+      { filter: 'brightness(1.04)', transform: 'translate3d(-7px, 2px, 0) scale(1.012) rotate(-.1deg)', offset: 0.54 },
+      { filter: 'brightness(1.02)', transform: 'translate3d(5px, -2px, 0) scale(1.008) rotate(.06deg)', offset: 0.7 },
+      { filter: 'brightness(1)', transform: 'translate3d(-2px, 1px, 0) scale(1.003)', offset: 0.86 },
+      { filter: 'brightness(1)', transform: 'translate3d(0, 0, 0) scale(1)' },
+    ],
+    { duration: 1120, easing: 'cubic-bezier(.15,.8,.2,1)' },
+  );
+  flash?.animate(
+    [
+      { opacity: 0 },
+      { opacity: 0.42, offset: 0.07 },
+      { opacity: 0.12, offset: 0.25 },
+      { opacity: 0.3, offset: 0.39 },
+      { opacity: 0.08, offset: 0.62 },
+      { opacity: 0, offset: 1 },
+    ],
+    { duration: 980, easing: 'ease-out' },
+  );
+};
 
 const HealthRuler = memo(function HealthRuler() {
   return (
@@ -820,6 +867,123 @@ const SoundboardPlayer = () => {
   return null;
 };
 
+const EncounterEffectsPlayer = () => {
+  const [settings, setSettings] = useState<EncounterEffectsState | null>(null);
+  const settingsRef = useRef({
+    volume: 0.8,
+    muted: false,
+    universalMuted: false,
+  });
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const activeSounds = useRef(new Map<
+    number,
+    {
+      audio: HTMLAudioElement;
+      source: MediaElementAudioSourceNode;
+      release: () => void;
+    }
+  >());
+
+  const ensureAudioGraph = useCallback(() => {
+    if (!audioContextRef.current) {
+      const context = new AudioContext();
+      const gain = context.createGain();
+      gain.connect(context.destination);
+      audioContextRef.current = context;
+      masterGainRef.current = gain;
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      void audioContextRef.current.resume();
+    }
+    return {
+      context: audioContextRef.current,
+      gain: masterGainRef.current,
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const updateSettings = (state: EncounterEffectsState) => {
+      settingsRef.current = {
+        volume: state.volume,
+        muted: state.muted,
+        universalMuted: state.universalMuted,
+      };
+      if (active) setSettings(state);
+    };
+    window.bossAPI.getEncounterEffectsState().then(updateSettings);
+    const unsubscribe = window.bossAPI.subscribeEncounterEffects(updateSettings);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const context = audioContextRef.current;
+    const gain = masterGainRef.current;
+    if (!settings || !context || !gain) return;
+    gain.gain.setValueAtTime(
+      settings.muted || settings.universalMuted
+        ? 0
+        : volumeToGain(settings.volume),
+      context.currentTime,
+    );
+  }, [settings?.muted, settings?.universalMuted, settings?.volume]);
+
+  useEffect(() => {
+    const unsubscribe = window.bossAPI.subscribeEncounterEffect((effect) => {
+      const graph = ensureAudioGraph();
+      if (!graph.gain) return;
+      const currentSettings = settingsRef.current;
+      graph.gain.gain.setValueAtTime(
+        currentSettings.muted || currentSettings.universalMuted
+          ? 0
+          : volumeToGain(currentSettings.volume),
+        graph.context.currentTime,
+      );
+
+      const audio = new Audio();
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+      audio.src = effect.url;
+      const source = graph.context.createMediaElementSource(audio);
+      source.connect(graph.gain);
+
+      const release = () => {
+        if (!activeSounds.current.has(effect.id)) return;
+        activeSounds.current.delete(effect.id);
+        audio.removeEventListener('ended', release);
+        audio.removeEventListener('error', release);
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+        source.disconnect();
+        window.bossAPI.encounterEffectFinished(effect.id);
+      };
+      activeSounds.current.set(effect.id, { audio, source, release });
+      audio.addEventListener('ended', release);
+      audio.addEventListener('error', release);
+      audio.load();
+      void audio.play().catch(release);
+    });
+
+    return () => {
+      unsubscribe();
+      for (const activeSound of [...activeSounds.current.values()]) {
+        activeSound.release();
+      }
+      activeSounds.current.clear();
+      void audioContextRef.current?.close();
+      audioContextRef.current = null;
+      masterGainRef.current = null;
+    };
+  }, [ensureAudioGraph]);
+
+  return null;
+};
+
 const BossHud = memo(function BossHud({
   boss,
   bossCount,
@@ -1007,6 +1171,7 @@ const PlayerApp = () => {
   useEffect(() => {
     const removalTimers = new Set<ReturnType<typeof setTimeout>>();
     const unsubscribe = window.bossAPI.subscribeHealthEffect((effect) => {
+      if (isHeavyDamageEffect(effect)) playHeavyScreenImpact();
       setHealthEffects((currentEffects) => ({
         ...currentEffects,
         [effect.bossId]: [
@@ -1174,6 +1339,7 @@ const PlayerApp = () => {
     <>
       <MusicPlayer battle={state} />
       <SoundboardPlayer />
+      <EncounterEffectsPlayer />
       <main className="player-stage" style={backgroundStyle}>
         {activeVideoUrl && (
           <video
@@ -1189,6 +1355,7 @@ const PlayerApp = () => {
             aria-hidden="true"
           />
         )}
+        <div className="critical-screen-flash" aria-hidden="true" />
         <div className="ambient ambient-one" />
         <div className="ambient ambient-two" />
 

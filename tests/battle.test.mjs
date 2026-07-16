@@ -4,7 +4,11 @@ import {
   applyBattleCommand,
   advanceBossTurn,
   calculateHealthSequence,
+  chooseEncounterSoundIndex,
+  chooseNonRepeatingIndex,
   createInitialBoss,
+  getEncounterSoundEffectKind,
+  getShieldMechanicSoundKind,
   initialBattleState,
   isBattleCommand,
   isHeavyDamageEffect,
@@ -297,6 +301,65 @@ test('consome um ponto de escudo por golpe antes de atingir a vida', () => {
     shieldTo: 0,
   };
   assert.equal(isShieldBreakEffect(breakEffect), true);
+  assert.equal(getShieldMechanicSoundKind(breakEffect), 'shield-break');
+  assert.equal(
+    getShieldMechanicSoundKind({ ...breakEffect, shieldFrom: 2, shieldTo: 1 }),
+    'shield-impact',
+  );
+  assert.equal(
+    getShieldMechanicSoundKind({ ...breakEffect, shieldFrom: 0, shieldTo: 0 }),
+    null,
+  );
+  assert.equal(getEncounterSoundEffectKind(breakEffect), 'shield-break');
+  assert.equal(getEncounterSoundEffectKind({
+    ...breakEffect,
+    from: 500,
+    to: 450,
+    shieldFrom: 0,
+    shieldTo: 0,
+  }), 'damage');
+  assert.equal(getEncounterSoundEffectKind({
+    ...breakEffect,
+    from: 500,
+    to: 449,
+    shieldFrom: 0,
+    shieldTo: 0,
+  }), 'critical-damage');
+  assert.equal(getEncounterSoundEffectKind({
+    ...breakEffect,
+    type: 'heal',
+    from: 400,
+    to: 450,
+    shieldFrom: 0,
+    shieldTo: 0,
+  }), 'heal');
+});
+
+test('alterna efeitos aleatórios sem repetir imediatamente o mesmo arquivo', () => {
+  assert.equal(chooseNonRepeatingIndex(3, null, () => 1), 1);
+  assert.equal(chooseNonRepeatingIndex(3, 1, () => 0), 0);
+  assert.equal(chooseNonRepeatingIndex(3, 1, () => 1), 2);
+  assert.equal(chooseNonRepeatingIndex(1, 0, () => 0), 0);
+  assert.equal(chooseNonRepeatingIndex(0, null, () => 0), -1);
+});
+
+test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () => {
+  assert.equal(
+    chooseEncounterSoundIndex(2, 0, 1200, 1500, () => 0),
+    -1,
+  );
+  assert.equal(
+    chooseEncounterSoundIndex(2, 0, 1000, 2000, () => 0),
+    0,
+  );
+  assert.equal(
+    chooseEncounterSoundIndex(2, 0, 1200, 2200, () => 1),
+    1,
+  );
+  assert.equal(
+    chooseEncounterSoundIndex(3, 1, 2199, 2200, () => 1),
+    2,
+  );
 });
 
 test('aplica, renova e remove uma condição sem duplicar seu ícone', () => {

@@ -5,6 +5,8 @@ import type {
   BackgroundState,
   BattleCommand,
   BattleState,
+  EncounterEffectsState,
+  EncounterSoundEffect,
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
@@ -41,6 +43,10 @@ const musicPlaybackSubscribers = new Set<
 >();
 let latestSoundboardState: SoundboardState | null = null;
 const soundboardSubscribers = new Set<(state: SoundboardState) => void>();
+let latestEncounterEffectsState: EncounterEffectsState | null = null;
+const encounterEffectsSubscribers = new Set<
+  (state: EncounterEffectsState) => void
+>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -73,6 +79,14 @@ ipcRenderer.on('soundboard:state-changed', (_event, state: SoundboardState) => {
   latestSoundboardState = state;
   for (const subscriber of soundboardSubscribers) subscriber(state);
 });
+
+ipcRenderer.on(
+  'encounter-effects:state-changed',
+  (_event, state: EncounterEffectsState) => {
+    latestEncounterEffectsState = state;
+    for (const subscriber of encounterEffectsSubscribers) subscriber(state);
+  },
+);
 
 const bossAPI = {
   getState: async (): Promise<BattleState> => {
@@ -148,6 +162,19 @@ const bossAPI = {
   setUniversalMute: (muted: boolean) => {
     ipcRenderer.send('audio:set-universal-muted', muted);
   },
+  getEncounterEffectsState: async (): Promise<EncounterEffectsState> => {
+    const state = (await ipcRenderer.invoke(
+      'encounter-effects:get-state',
+    )) as EncounterEffectsState;
+    latestEncounterEffectsState = state;
+    return state;
+  },
+  setEncounterEffectsVolume: (volume: number) => {
+    ipcRenderer.send('encounter-effects:set-volume', volume);
+  },
+  setEncounterEffectsMuted: (muted: boolean) => {
+    ipcRenderer.send('encounter-effects:set-muted', muted);
+  },
   getSoundboardState: async (): Promise<SoundboardState> => {
     const state = (await ipcRenderer.invoke(
       'soundboard:get-state',
@@ -171,6 +198,9 @@ const bossAPI = {
   },
   reportSoundEffectError: (effectId: number, index: number) => {
     ipcRenderer.send('soundboard:playback-error', effectId, index);
+  },
+  encounterEffectFinished: (effectId: number) => {
+    ipcRenderer.send('encounter-effects:playback-finished', effectId);
   },
   musicTrackEnded: () => {
     ipcRenderer.send('music:track-ended');
@@ -303,6 +333,23 @@ const bossAPI = {
     };
     ipcRenderer.on('soundboard:error', listener);
     return () => ipcRenderer.removeListener('soundboard:error', listener);
+  },
+  subscribeEncounterEffects: (
+    callback: (state: EncounterEffectsState) => void,
+  ) => {
+    encounterEffectsSubscribers.add(callback);
+    if (latestEncounterEffectsState) callback(latestEncounterEffectsState);
+    return () => encounterEffectsSubscribers.delete(callback);
+  },
+  subscribeEncounterEffect: (
+    callback: (effect: EncounterSoundEffect) => void,
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      effect: EncounterSoundEffect,
+    ) => callback(effect);
+    ipcRenderer.on('encounter-effects:play', listener);
+    return () => ipcRenderer.removeListener('encounter-effects:play', listener);
   },
 } satisfies BossAPI;
 

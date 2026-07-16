@@ -34,6 +34,7 @@ body {
 .player-stage {
   position: relative;
   overflow: hidden;
+  transform-origin: center;
   background-color: #050408;
   background-image:
     linear-gradient(180deg, rgba(5, 4, 8, 0.08), rgba(5, 4, 8, 0.68)),
@@ -43,6 +44,17 @@ body {
     );
   background-position: center;
   background-size: 100% 100%;
+}
+
+.critical-screen-flash {
+  position: absolute;
+  z-index: 50;
+  inset: 0;
+  background:
+    radial-gradient(circle at center, rgba(185, 20, 25, .08), rgba(134, 5, 16, .48)),
+    linear-gradient(180deg, rgba(196, 25, 34, .18), rgba(91, 0, 10, .34));
+  opacity: 0;
+  pointer-events: none;
 }
 
 .battle-background-video {

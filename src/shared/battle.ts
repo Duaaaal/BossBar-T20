@@ -92,6 +92,73 @@ export const isHeavyDamageEffect = (effect: HealthEffect) =>
 export const isShieldBreakEffect = (effect: HealthEffect) =>
   effect.type === 'damage' && effect.shieldFrom > 0 && effect.shieldTo === 0;
 
+export type ShieldMechanicSoundKind = 'shield-impact' | 'shield-break';
+export type EncounterSoundEffectKind =
+  | ShieldMechanicSoundKind
+  | 'damage'
+  | 'critical-damage'
+  | 'heal';
+
+export const getShieldMechanicSoundKind = (
+  effect: HealthEffect,
+): ShieldMechanicSoundKind | null => {
+  if (effect.type !== 'damage' || effect.shieldFrom <= effect.shieldTo) {
+    return null;
+  }
+  return effect.shieldTo === 0 ? 'shield-break' : 'shield-impact';
+};
+
+export const getEncounterSoundEffectKind = (
+  effect: HealthEffect,
+): EncounterSoundEffectKind | null => {
+  const shieldKind = getShieldMechanicSoundKind(effect);
+  if (shieldKind) return shieldKind;
+  if (effect.type === 'damage' && effect.to < effect.from) {
+    return isHeavyDamageEffect(effect) ? 'critical-damage' : 'damage';
+  }
+  if (effect.type === 'heal' && effect.to > effect.from) return 'heal';
+  return null;
+};
+
+export const chooseNonRepeatingIndex = (
+  itemCount: number,
+  previousIndex: number | null,
+  randomInteger: RandomIntGenerator,
+) => {
+  if (!Number.isInteger(itemCount) || itemCount <= 0) return -1;
+  if (itemCount === 1) return 0;
+  if (
+    previousIndex === null ||
+    !Number.isInteger(previousIndex) ||
+    previousIndex < 0 ||
+    previousIndex >= itemCount
+  ) {
+    return randomInteger(0, itemCount);
+  }
+  const candidate = randomInteger(0, itemCount - 1);
+  return candidate >= previousIndex ? candidate + 1 : candidate;
+};
+
+export const encounterSoundReplayDelayMs = 1000;
+
+export const chooseEncounterSoundIndex = (
+  itemCount: number,
+  previousIndex: number | null,
+  lastGroupPlayedAt: number | null,
+  now: number,
+  randomInteger: RandomIntGenerator,
+) => {
+  if (itemCount >= 3) {
+    return chooseNonRepeatingIndex(itemCount, previousIndex, randomInteger);
+  }
+  if (!Number.isInteger(itemCount) || itemCount <= 0) return -1;
+  if (
+    lastGroupPlayedAt !== null &&
+    now - lastGroupPlayedAt < encounterSoundReplayDelayMs
+  ) return -1;
+  return randomInteger(0, itemCount);
+};
+
 export type HealthSequenceRequest = {
   bossId: string;
   type: 'damage' | 'heal';
@@ -204,6 +271,19 @@ export type SoundboardAssignmentResult = {
 export type SoundEffect = {
   id: number;
   index: number;
+  url: string;
+};
+
+export type EncounterEffectsState = {
+  volume: number;
+  muted: boolean;
+  universalMuted: boolean;
+  revision: number;
+};
+
+export type EncounterSoundEffect = {
+  id: number;
+  kind: EncounterSoundEffectKind;
   url: string;
 };
 

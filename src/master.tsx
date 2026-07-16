@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { type BattleState } from './shared/battle';
+import { type BattleState, type EncounterEffectsState } from './shared/battle';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
 import './master.css';
 import './scrollbars.css';
@@ -31,6 +31,8 @@ const MasterApp = () => {
   const [appVersion, setAppVersion] = useState('...');
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [universalMuted, setUniversalMuted] = useState(false);
+  const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
+  const [encounterEffectsOpen, setEncounterEffectsOpen] = useState(false);
   const [backgroundError, setBackgroundError] = useState('');
   const [pendingBackgroundName, setPendingBackgroundName] = useState<string | null>(null);
   const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
@@ -86,6 +88,19 @@ const MasterApp = () => {
     };
     window.bossAPI.getMusicState().then(updateMute);
     const unsubscribe = window.bossAPI.subscribeMusic(updateMute);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const updateEncounterEffects = (effectsState: EncounterEffectsState) => {
+      if (active) setEncounterEffects(effectsState);
+    };
+    window.bossAPI.getEncounterEffectsState().then(updateEncounterEffects);
+    const unsubscribe = window.bossAPI.subscribeEncounterEffects(updateEncounterEffects);
     return () => {
       active = false;
       unsubscribe();
@@ -217,6 +232,18 @@ const MasterApp = () => {
     window.bossAPI.dispatch({ type: 'start-battle' });
   };
 
+  const setEncounterEffectsVolume = (volume: number) => {
+    setEncounterEffects((current) => current ? { ...current, volume } : current);
+    window.bossAPI.setEncounterEffectsVolume(volume);
+  };
+
+  const toggleEncounterEffectsMute = () => {
+    if (!encounterEffects) return;
+    const muted = !encounterEffects.muted;
+    setEncounterEffects({ ...encounterEffects, muted });
+    window.bossAPI.setEncounterEffectsMuted(muted);
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const backgroundPending = Boolean(pendingBackgroundName || pendingBackgroundRemoval);
@@ -229,6 +256,16 @@ const MasterApp = () => {
 
   return (
     <main className="master-shell">
+      <button
+        className="encounter-effects-button"
+        type="button"
+        title="Volume dos efeitos sonoros"
+        aria-label="Abrir controle dos efeitos sonoros"
+        aria-haspopup="dialog"
+        onClick={() => setEncounterEffectsOpen(true)}
+      >
+        FX
+      </button>
       <button
         className={`universal-mute-button ${universalMuted ? 'is-muted' : ''}`}
         type="button"
@@ -307,6 +344,44 @@ const MasterApp = () => {
       </section>
 
       <footer className="master-footer">@Criado por: Brian Nascimento - Versão {appVersion}</footer>
+
+      {encounterEffectsOpen && encounterEffects && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal effects-audio-modal" role="dialog" aria-modal="true" aria-labelledby="effects-audio-title">
+            <button
+              className="effects-close-button"
+              type="button"
+              aria-label="Fechar controle dos efeitos sonoros"
+              onClick={() => setEncounterEffectsOpen(false)}
+            >
+              ×
+            </button>
+            <h2 id="effects-audio-title">Efeitos sonoros</h2>
+            <div className="effects-volume-control">
+              <button
+                className={`effects-mute-button ${encounterEffects.muted ? 'is-muted' : ''}`}
+                type="button"
+                title={encounterEffects.muted ? 'Ativar efeitos' : 'Mutar efeitos'}
+                aria-label={encounterEffects.muted ? 'Ativar efeitos' : 'Mutar efeitos'}
+                aria-pressed={encounterEffects.muted}
+                onClick={toggleEncounterEffectsMute}
+              >
+                {encounterEffects.muted ? '🔇' : '🔊'}
+              </button>
+              <input
+                className="effects-volume-range"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={encounterEffects.volume}
+                aria-label="Volume dos efeitos sonoros"
+                onChange={(event) => setEncounterEffectsVolume(Number(event.target.value))}
+              />
+            </div>
+          </section>
+        </div>
+      )}
 
       {resetConfirmationOpen && (
         <div className="modal-backdrop">
