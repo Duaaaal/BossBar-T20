@@ -8,6 +8,7 @@ import {
   type ActiveBossStatus,
   type StatusId,
 } from './status.ts';
+import { applyStatusRules } from './status-rules.ts';
 
 export type BossState = {
   id: string;
@@ -22,6 +23,7 @@ export type BossState = {
   attack: number;
   rangedAttack: number;
   defense: number;
+  rangedDefense: number;
   shield: number;
   skills: number;
   damageReduction: number;
@@ -291,10 +293,15 @@ export type SoundEffect = {
 export type EncounterEffectsState = {
   volume: number;
   universalMuted: boolean;
+  general: EncounterGeneralSettings;
   sounds: EncounterSoundSettings;
   visuals: EncounterVisualEffectSettings;
   revision: number;
 };
+
+export type EncounterGeneralSetting = 'automaticStatusEffects';
+
+export type EncounterGeneralSettings = Record<EncounterGeneralSetting, boolean>;
 
 export type EncounterSoundSetting = 'heal' | 'damage' | 'shield';
 
@@ -317,6 +324,9 @@ export type EncounterVisualEffectSettings = Record<
 export const initialEncounterEffectsState: EncounterEffectsState = {
   volume: 0.8,
   universalMuted: false,
+  general: {
+    automaticStatusEffects: true,
+  },
   sounds: {
     heal: true,
     damage: true,
@@ -455,6 +465,7 @@ export type BattleCommand =
       attack: number;
       rangedAttack: number;
       defense: number;
+      rangedDefense?: number;
       shield: number;
       skills: number;
       damageReduction: number;
@@ -505,6 +516,7 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   attack: 10,
   rangedAttack: 10,
   defense: 10,
+  rangedDefense: 10,
   shield: 0,
   skills: 10,
   damageReduction: 10,
@@ -542,6 +554,8 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
           (field) =>
             typeof command[field] === 'number' && Number.isFinite(command[field]),
         ) &&
+        (command.rangedDefense === undefined ||
+          (typeof command.rangedDefense === 'number' && Number.isFinite(command.rangedDefense))) &&
         (command.controlAmount === undefined ||
           typeof command.controlAmount === 'string') &&
         (command.applyDamageReduction === undefined ||
@@ -659,11 +673,12 @@ export const applyBattleCommand = (
           currentHealth: wasAtFullHealth
             ? maxHealth
             : Math.min(boss.currentHealth, maxHealth),
-          attack: clampInteger(command.attack, 0, 999),
-          rangedAttack: clampInteger(command.rangedAttack, 0, 999),
+          attack: clampInteger(command.attack, -999, 999),
+          rangedAttack: clampInteger(command.rangedAttack, -999, 999),
           defense: clampInteger(command.defense, 0, 999),
+          rangedDefense: clampInteger(command.rangedDefense ?? command.defense, 0, 999),
           shield: clampInteger(command.shield, 0, 999),
-          skills: clampInteger(command.skills, 0, 999),
+          skills: clampInteger(command.skills, -999, 999),
           damageReduction: clampInteger(command.damageReduction, 0, 999),
         };
       });
@@ -735,12 +750,10 @@ export const applyBattleCommand = (
         };
         return {
           ...boss,
-          activeStatuses: [
-            ...boss.activeStatuses.filter(
-              (activeStatus) => activeStatus.statusId !== command.statusId,
-            ),
+          activeStatuses: applyStatusRules(
+            boss.activeStatuses,
             status,
-          ],
+          ),
         };
       });
     case 'remove-status':

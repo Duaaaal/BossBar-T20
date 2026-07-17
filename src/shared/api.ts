@@ -8,6 +8,7 @@ import type {
   EncounterSoundCustomizationState,
   EncounterSoundEffect,
   EncounterSoundEffectKind,
+  EncounterGeneralSetting,
   EncounterSoundSetting,
   EncounterVisualEffectSetting,
   HealthEffect,
@@ -76,6 +77,10 @@ export type BossAPI = {
   setUniversalMute: (muted: boolean) => void;
   getEncounterEffectsState: () => Promise<EncounterEffectsState>;
   setEncounterEffectsVolume: (volume: number) => void;
+  setEncounterGeneralEnabled: (
+    setting: EncounterGeneralSetting,
+    enabled: boolean,
+  ) => void;
   setEncounterSoundEnabled: (
     setting: EncounterSoundSetting,
     enabled: boolean,

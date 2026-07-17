@@ -10,6 +10,7 @@ export type BossLibraryBossDraft = {
   attack: number;
   rangedAttack: number;
   defense: number;
+  rangedDefense: number;
   shield: number;
   skills: number;
   damageReduction: number;
@@ -31,6 +32,7 @@ export type BossLibraryBossSummary = {
   attack: number;
   rangedAttack: number;
   defense: number;
+  rangedDefense: number;
   shield: number;
   skills: number;
   damageReduction: number;

@@ -1,7 +1,7 @@
 {
   "name": "boss-battle",
   "productName": "BossBar - Tormenta20",
-  "version": "1.4.3",
+  "version": "1.4.5",
   "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,

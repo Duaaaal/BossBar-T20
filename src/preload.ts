@@ -10,6 +10,7 @@ import type {
   EncounterSoundCustomizationState,
   EncounterSoundEffect,
   EncounterSoundEffectKind,
+  EncounterGeneralSetting,
   EncounterSoundSetting,
   EncounterVisualEffectSetting,
   HealthEffect,
@@ -176,6 +177,12 @@ const bossAPI = {
   },
   setEncounterEffectsVolume: (volume: number) => {
     ipcRenderer.send('encounter-effects:set-volume', volume);
+  },
+  setEncounterGeneralEnabled: (
+    setting: EncounterGeneralSetting,
+    enabled: boolean,
+  ) => {
+    ipcRenderer.send('encounter-effects:set-general-enabled', setting, enabled);
   },
   setEncounterSoundEnabled: (
     setting: EncounterSoundSetting,

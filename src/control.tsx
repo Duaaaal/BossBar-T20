@@ -12,8 +12,15 @@ import { createRoot } from 'react-dom/client';
 import {
   calculateHealthSequence,
   type BattleState,
+  type EncounterEffectsState,
+  initialEncounterEffectsState,
 } from './shared/battle';
 import { statusIconUrl } from './shared/bundled-assets';
+import {
+  deriveStatusAttributes,
+  getStatusSkillAnnotations,
+  type StatusSkillAnnotation,
+} from './shared/status-rules';
 import {
   getActiveStatusDescription,
   getActiveStatusName,
@@ -53,38 +60,196 @@ const healthButtonFontSize = (label: string, value: number) => {
   return `${Math.max(0.52, 0.76 - overflowCharacters * 0.035)}rem`;
 };
 
+const numberFromDraft = (value: string, fallback: number) => {
+  if (!value.trim()) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 type StatusTooltipState = {
   statusId: StatusId;
   left: number;
   top: number;
   placement: 'above' | 'below';
+  annotationText?: string;
 };
 
 type NumericFieldProps = {
+  id: string;
   label: string;
   value: string;
   required: boolean;
   min?: number;
   max?: number;
+  effectiveValue?: number;
+  modifier?: number;
   onChange: (value: string) => void;
 };
 
 const NumericField = ({
+  id,
   label,
   value,
   required,
   min = 0,
   max = 999,
+  effectiveValue,
+  modifier = 0,
   onChange,
-}: NumericFieldProps) => (
-  <label className="control-number-field">
-    <span>{label}<RequiredStar visible={required} /></span>
-    <input type="number" min={min} max={max} value={value} onChange={(event) => onChange(event.target.value)} />
-  </label>
-);
+}: NumericFieldProps) => {
+  const [focused, setFocused] = useState(false);
+  const hasEffectiveValue = value.trim() !== '' &&
+    Number.isFinite(effectiveValue) &&
+    modifier !== 0;
+  const displayedValue = !focused && hasEffectiveValue
+    ? String(effectiveValue)
+    : value;
+  const modifierClass = !focused && modifier < 0
+    ? 'is-penalized'
+    : !focused && modifier > 0
+      ? 'is-bonused'
+      : '';
+  const previewClass = modifier < 0 ? 'is-penalized' : 'is-bonused';
+
+  return (
+    <div className={`control-number-field ${modifierClass} ${focused ? 'is-focused' : ''}`}>
+      <span className="control-number-heading">
+        <label htmlFor={id}>{label}<RequiredStar visible={required} /></label>
+      </span>
+      <div className={`control-number-input-shell ${focused && hasEffectiveValue ? 'has-preview' : ''}`}>
+        <input
+          id={id}
+          type="number"
+          min={min}
+          max={max}
+          value={displayedValue}
+          title={hasEffectiveValue ? `Valor base: ${value}; modificação: ${modifier > 0 ? '+' : ''}${modifier}` : undefined}
+          onBlur={() => setFocused(false)}
+          onChange={(event) => onChange(event.target.value)}
+          onFocus={() => setFocused(true)}
+        />
+        {focused && hasEffectiveValue && (
+          <span className={`control-effective-preview ${previewClass}`} aria-hidden="true">
+            ({effectiveValue})
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+type SplitNumericFieldProps = {
+  id: string;
+  legend: string;
+  leftLabel: string;
+  rightLabel: string;
+  leftAriaLabel: string;
+  rightAriaLabel: string;
+  leftValue: string;
+  rightValue: string;
+  effectiveLeft: number;
+  effectiveRight: number;
+  leftModifier: number;
+  rightModifier: number;
+  min: number;
+  max?: number;
+  required: boolean;
+  onLeftChange: (value: string) => void;
+  onRightChange: (value: string) => void;
+};
+
+const SplitNumericField = ({
+  id,
+  legend,
+  leftLabel,
+  rightLabel,
+  leftAriaLabel,
+  rightAriaLabel,
+  leftValue,
+  rightValue,
+  effectiveLeft,
+  effectiveRight,
+  leftModifier,
+  rightModifier,
+  min,
+  max = 999,
+  required,
+  onLeftChange,
+  onRightChange,
+}: SplitNumericFieldProps) => {
+  const [focusedSide, setFocusedSide] = useState<'left' | 'right' | null>(null);
+  const leftModified = leftValue.trim() !== '' && leftModifier !== 0;
+  const rightModified = rightValue.trim() !== '' && rightModifier !== 0;
+  const leftDisplay = focusedSide === 'left' || !leftModified
+    ? leftValue
+    : String(effectiveLeft);
+  const rightDisplay = focusedSide === 'right' || !rightModified
+    ? rightValue
+    : String(effectiveRight);
+
+  const tone = (modifier: number, focused: boolean, modified: boolean) => [
+    focused ? 'is-focused' : '',
+    modified ? 'has-effective-value' : '',
+    !focused && modifier < 0 ? 'is-penalized' : '',
+    !focused && modifier > 0 ? 'is-bonused' : '',
+  ].filter(Boolean).join(' ');
+  const previewTone = (modifier: number) => modifier < 0 ? 'is-penalized' : 'is-bonused';
+
+  return (
+    <div className="control-split-field" role="group" aria-labelledby={`${id}-heading`}>
+      <span className="control-split-heading" id={`${id}-heading`}>
+        {legend}<RequiredStar visible={required} />
+      </span>
+      <div className="control-split-inputs">
+        <label className={tone(leftModifier, focusedSide === 'left', leftModified)}>
+          <span className="control-split-side-label" aria-hidden="true">{leftLabel}</span>
+          <input
+            aria-label={leftAriaLabel}
+            type="number"
+            min={min}
+            max={max}
+            value={leftDisplay}
+            title={leftModified ? `Valor base: ${leftValue}; modificação: ${leftModifier > 0 ? '+' : ''}${leftModifier}` : undefined}
+            onBlur={() => setFocusedSide(null)}
+            onChange={(event) => onLeftChange(event.target.value)}
+            onFocus={() => setFocusedSide('left')}
+          />
+          {focusedSide === 'left' && leftModified && (
+            <span className={`control-effective-preview ${previewTone(leftModifier)}`} aria-hidden="true">
+              ({effectiveLeft})
+            </span>
+          )}
+        </label>
+        <span className="control-split-divider" aria-hidden="true" />
+        <label className={tone(rightModifier, focusedSide === 'right', rightModified)}>
+          <span className="control-split-side-label" aria-hidden="true">{rightLabel}</span>
+          <input
+            aria-label={rightAriaLabel}
+            type="number"
+            min={min}
+            max={max}
+            value={rightDisplay}
+            title={rightModified ? `Valor base: ${rightValue}; modificação: ${rightModifier > 0 ? '+' : ''}${rightModifier}` : undefined}
+            onBlur={() => setFocusedSide(null)}
+            onChange={(event) => onRightChange(event.target.value)}
+            onFocus={() => setFocusedSide('right')}
+          />
+          {focusedSide === 'right' && rightModified && (
+            <span className={`control-effective-preview ${previewTone(rightModifier)}`} aria-hidden="true">
+              ({effectiveRight})
+            </span>
+          )}
+        </label>
+      </div>
+    </div>
+  );
+};
 
 const ControlApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
+  const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState>(
+    initialEncounterEffectsState,
+  );
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
@@ -93,6 +258,7 @@ const ControlApp = () => {
   const [rangedAttack, setRangedAttack] = useState('10');
   const [skills, setSkills] = useState('10');
   const [defense, setDefense] = useState('10');
+  const [rangedDefense, setRangedDefense] = useState('10');
   const [damageReduction, setDamageReduction] = useState('10');
   const [shield, setShield] = useState('0');
   const [actionDraft, setActionDraft] = useState('');
@@ -123,11 +289,81 @@ const ControlApp = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getEncounterEffectsState().then((nextState) => {
+      if (active) setEncounterEffects(nextState);
+    });
+    const unsubscribe = window.bossAPI.subscribeEncounterEffects((nextState) => {
+      if (active) setEncounterEffects(nextState);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
   const activeStatusesById = useMemo(
     () => new Map(
       (activeBoss?.activeStatuses ?? []).map((status) => [status.statusId, status]),
     ),
+    [activeBoss?.activeStatuses],
+  );
+  const automaticStatusEffects = encounterEffects.general.automaticStatusEffects;
+  const derivedAttributes = useMemo(() => deriveStatusAttributes(
+    {
+      attack: numberFromDraft(attack, activeBoss?.attack ?? 0),
+      rangedAttack: numberFromDraft(rangedAttack, activeBoss?.rangedAttack ?? 0),
+      skills: numberFromDraft(skills, activeBoss?.skills ?? 0),
+      meleeDefense: numberFromDraft(defense, activeBoss?.defense ?? 0),
+      rangedDefense: numberFromDraft(
+        rangedDefense,
+        activeBoss?.rangedDefense ?? activeBoss?.defense ?? 0,
+      ),
+      damageReduction: numberFromDraft(
+        damageReduction,
+        activeBoss?.damageReduction ?? 0,
+      ),
+      shield: numberFromDraft(shield, activeBoss?.shield ?? 0),
+    },
+    activeBoss?.activeStatuses ?? [],
+    automaticStatusEffects,
+  ), [
+    activeBoss?.activeStatuses,
+    activeBoss?.attack,
+    activeBoss?.damageReduction,
+    activeBoss?.defense,
+    activeBoss?.rangedAttack,
+    activeBoss?.rangedDefense,
+    activeBoss?.shield,
+    activeBoss?.skills,
+    attack,
+    automaticStatusEffects,
+    damageReduction,
+    defense,
+    rangedAttack,
+    rangedDefense,
+    shield,
+    skills,
+  ]);
+  const authoritativeAttributes = useMemo(() => activeBoss
+    ? deriveStatusAttributes(
+        {
+          attack: activeBoss.attack,
+          rangedAttack: activeBoss.rangedAttack,
+          skills: activeBoss.skills,
+          meleeDefense: activeBoss.defense,
+          rangedDefense: activeBoss.rangedDefense,
+          damageReduction: activeBoss.damageReduction,
+          shield: activeBoss.shield,
+        },
+        activeBoss.activeStatuses,
+        automaticStatusEffects,
+      )
+    : null, [activeBoss, automaticStatusEffects]);
+  const skillAnnotations = useMemo(
+    () => getStatusSkillAnnotations(activeBoss?.activeStatuses ?? []),
     [activeBoss?.activeStatuses],
   );
   const bossSource = activeBoss
@@ -141,6 +377,7 @@ const ControlApp = () => {
         activeBoss.rangedAttack,
         activeBoss.skills,
         activeBoss.defense,
+        activeBoss.rangedDefense,
         activeBoss.damageReduction,
         activeBoss.shield,
         activeBoss.nextAction,
@@ -158,6 +395,7 @@ const ControlApp = () => {
     setRangedAttack(String(activeBoss.rangedAttack));
     setSkills(String(activeBoss.skills));
     setDefense(String(activeBoss.defense));
+    setRangedDefense(String(activeBoss.rangedDefense));
     setDamageReduction(String(activeBoss.damageReduction));
     setShield(String(activeBoss.shield));
     setActionDraft(activeBoss.nextAction);
@@ -197,7 +435,8 @@ const ControlApp = () => {
 
   const positionStatusTooltip = (
     statusId: StatusId,
-    target: HTMLButtonElement,
+    target: HTMLElement,
+    annotationText?: string,
   ) => {
     const bounds = target.getBoundingClientRect();
     const tooltipWidth = Math.min(330, window.innerWidth - 16);
@@ -214,6 +453,7 @@ const ControlApp = () => {
       left,
       top: placement === 'above' ? bounds.top - 8 : bounds.bottom + 8,
       placement,
+      annotationText,
     });
   };
 
@@ -226,6 +466,11 @@ const ControlApp = () => {
     statusId: StatusId,
     event: FocusEvent<HTMLButtonElement>,
   ) => positionStatusTooltip(statusId, event.currentTarget);
+
+  const showSkillAnnotationTooltip = (
+    annotation: StatusSkillAnnotation,
+    target: HTMLElement,
+  ) => positionStatusTooltip(annotation.statusId, target, annotation.text);
 
   const selectStatus = (statusId: StatusId) => {
     const definition = getStatusDefinition(statusId);
@@ -365,8 +610,32 @@ const ControlApp = () => {
   const applyIdentity = (event: FormEvent) => {
     event.preventDefault();
     if (!activeBoss) return;
-    const numericValues = [maxHealth, attack, rangedAttack, skills, defense, damageReduction, shield].map(Number);
-    if (!bossName.trim() || numericValues.some((value) => !Number.isFinite(value)) || !parseHealthExpression(amount)) {
+    const numericDrafts = {
+      maxHealth: Number(maxHealth),
+      attack: Number(attack),
+      rangedAttack: Number(rangedAttack),
+      skills: Number(skills),
+      defense: Number(defense),
+      rangedDefense: Number(rangedDefense),
+      damageReduction: Number(damageReduction),
+      shield: Number(shield),
+    };
+    const hasEmptyAttribute = [
+      maxHealth,
+      attack,
+      rangedAttack,
+      skills,
+      defense,
+      rangedDefense,
+      damageReduction,
+      shield,
+    ].some((value) => !value.trim());
+    if (
+      !bossName.trim() ||
+      hasEmptyAttribute ||
+      Object.values(numericDrafts).some((value) => !Number.isFinite(value)) ||
+      !parseHealthExpression(amount)
+    ) {
       setFormError('Revise o nome, o valor e os atributos antes de aplicar.');
       return;
     }
@@ -377,13 +646,7 @@ const ControlApp = () => {
       bossName,
       controlAmount: amount,
       applyDamageReduction,
-      maxHealth: numericValues[0],
-      attack: numericValues[1],
-      rangedAttack: numericValues[2],
-      skills: numericValues[3],
-      defense: numericValues[4],
-      damageReduction: numericValues[5],
-      shield: numericValues[6],
+      ...numericDrafts,
     });
   };
 
@@ -401,11 +664,16 @@ const ControlApp = () => {
         type: 'damage',
         total: parsedAmount.total,
         hits: parsedAmount.hits,
-        damageReduction: activeBoss.damageReduction,
+        damageReduction:
+          authoritativeAttributes?.values.damageReduction ?? activeBoss.damageReduction,
       })
     : null;
   const damagingHits = parsedAmount && activeBoss
-    ? Math.max(0, parsedAmount.hits - activeBoss.shield)
+    ? Math.max(
+        0,
+        parsedAmount.hits -
+          (authoritativeAttributes?.values.shield ?? activeBoss.shield),
+      )
     : 0;
   const damagePerHit = applyDamageReduction
     ? reducedSequence?.effectiveAmountPerHit ?? 0
@@ -520,13 +788,79 @@ const ControlApp = () => {
         </div>
 
         <div className="control-attributes-row">
-          <NumericField label="Vida máx." value={maxHealth} min={1} max={1_000_000} required={identityRequired} onChange={(value) => updateIdentity(setMaxHealth, value)} />
-          <NumericField label="Ataque" value={attack} required={identityRequired} onChange={(value) => updateIdentity(setAttack, value)} />
-          <NumericField label="Tiro" value={rangedAttack} required={identityRequired} onChange={(value) => updateIdentity(setRangedAttack, value)} />
-          <NumericField label="Perícias" value={skills} required={identityRequired} onChange={(value) => updateIdentity(setSkills, value)} />
-          <NumericField label="Defesa" value={defense} required={identityRequired} onChange={(value) => updateIdentity(setDefense, value)} />
-          <NumericField label="RD" value={damageReduction} required={identityRequired} onChange={(value) => updateIdentity(setDamageReduction, value)} />
-          <NumericField label="Escudo" value={shield} required={identityRequired} onChange={(value) => updateIdentity(setShield, value)} />
+          <NumericField
+            id="control-max-health"
+            label="Vida máx."
+            value={maxHealth}
+            min={1}
+            max={1_000_000}
+            required={identityRequired}
+            onChange={(value) => updateIdentity(setMaxHealth, value)}
+          />
+          <SplitNumericField
+            id="control-attacks"
+            legend="Ataque / Tiro"
+            leftLabel="Atq."
+            rightLabel="Tiro"
+            leftAriaLabel="Ataque corpo a corpo"
+            rightAriaLabel="Ataque à distância"
+            leftValue={attack}
+            rightValue={rangedAttack}
+            effectiveLeft={derivedAttributes.values.attack}
+            effectiveRight={derivedAttributes.values.rangedAttack}
+            leftModifier={derivedAttributes.modifiers.attack}
+            rightModifier={derivedAttributes.modifiers.rangedAttack}
+            min={-999}
+            required={identityRequired}
+            onLeftChange={(value) => updateIdentity(setAttack, value)}
+            onRightChange={(value) => updateIdentity(setRangedAttack, value)}
+          />
+          <NumericField
+            id="control-skills"
+            label="Perícias"
+            value={skills}
+            min={-999}
+            effectiveValue={derivedAttributes.values.skills}
+            modifier={derivedAttributes.modifiers.skills}
+            required={identityRequired}
+            onChange={(value) => updateIdentity(setSkills, value)}
+          />
+          <SplitNumericField
+            id="control-defenses"
+            legend="Defesa"
+            leftLabel="CaC"
+            rightLabel="AaD"
+            leftAriaLabel="Defesa corpo a corpo"
+            rightAriaLabel="Defesa contra ataques à distância"
+            leftValue={defense}
+            rightValue={rangedDefense}
+            effectiveLeft={derivedAttributes.values.meleeDefense}
+            effectiveRight={derivedAttributes.values.rangedDefense}
+            leftModifier={derivedAttributes.modifiers.meleeDefense}
+            rightModifier={derivedAttributes.modifiers.rangedDefense}
+            min={0}
+            required={identityRequired}
+            onLeftChange={(value) => updateIdentity(setDefense, value)}
+            onRightChange={(value) => updateIdentity(setRangedDefense, value)}
+          />
+          <NumericField
+            id="control-damage-reduction"
+            label="RD"
+            value={damageReduction}
+            effectiveValue={derivedAttributes.values.damageReduction}
+            modifier={derivedAttributes.modifiers.damageReduction}
+            required={identityRequired}
+            onChange={(value) => updateIdentity(setDamageReduction, value)}
+          />
+          <NumericField
+            id="control-shield"
+            label="Escudo"
+            value={shield}
+            effectiveValue={derivedAttributes.values.shield}
+            modifier={derivedAttributes.modifiers.shield}
+            required={identityRequired}
+            onChange={(value) => updateIdentity(setShield, value)}
+          />
           <button className="control-apply" type="submit">Aplicar</button>
         </div>
 
@@ -563,66 +897,96 @@ const ControlApp = () => {
             })}
           </div>
 
-          <div className="control-status-settings">
-            <label className="control-status-damage">
-              <span>Dano</span>
-              <input
-                aria-label="Dano da condição"
-                disabled={!selectedStatusDefinition?.damageCapable || selectedStatusDefinition.customizable}
-                maxLength={128}
-                placeholder={selectedStatusDefinition?.damageCapable && !selectedStatusDefinition.customizable ? '1d6' : '—'}
-                value={statusDamage}
-                onChange={(event) => setStatusDamage(event.target.value)}
-              />
-            </label>
-            <label className="control-status-turns">
-              <span>Turnos</span>
-              <input
-                aria-label="Duração da condição em turnos"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={999}
-                value={statusTurns}
-                onChange={(event) => setStatusTurns(event.target.value)}
-              />
-            </label>
-            <button
-              className="control-status-apply"
-              type="button"
-              disabled={!selectedStatusDefinition || selectedStatusDefinition.customizable}
-              onClick={applyStatus}
-            >
-              Aplicar
-            </button>
-            <button
-              className="control-status-remove"
-              type="button"
-              disabled={!selectedActiveStatus}
-              onClick={removeStatus}
-            >
-              Remover
-            </button>
-          </div>
+          <div className="control-status-controls">
+            <div className="control-status-skill-summary">
+              <span>Perícias afetadas:</span>
+              {skillAnnotations.length > 0 ? (
+                <div className="control-status-skill-icons">
+                  {skillAnnotations.map((annotation) => {
+                    const definition = getStatusDefinition(annotation.statusId);
+                    return (
+                      <button
+                        className={`control-skill-annotation is-${annotation.tone}`}
+                        type="button"
+                        aria-label={`${definition.name}: ${annotation.text}`}
+                        key={annotation.statusId}
+                        onBlur={() => setStatusTooltip(null)}
+                        onFocus={(event) => showSkillAnnotationTooltip(annotation, event.currentTarget)}
+                        onMouseEnter={(event) => showSkillAnnotationTooltip(annotation, event.currentTarget)}
+                        onMouseLeave={() => setStatusTooltip(null)}
+                      >
+                        <img src={statusIconUrl(definition.iconFile)} alt="" draggable={false} />
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <small>Nenhuma</small>
+              )}
+            </div>
+            <div className="control-status-command-row">
+              <div className="control-status-settings">
+                <label className="control-status-damage">
+                  <span>Dano</span>
+                  <input
+                    aria-label="Dano da condição"
+                    disabled={!selectedStatusDefinition?.damageCapable || selectedStatusDefinition.customizable}
+                    maxLength={128}
+                    placeholder={selectedStatusDefinition?.damageCapable && !selectedStatusDefinition.customizable ? '1d6' : '—'}
+                    value={statusDamage}
+                    onChange={(event) => setStatusDamage(event.target.value)}
+                  />
+                </label>
+                <label className="control-status-turns">
+                  <span>Turnos</span>
+                  <input
+                    aria-label="Duração da condição em turnos"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={999}
+                    value={statusTurns}
+                    onChange={(event) => setStatusTurns(event.target.value)}
+                  />
+                </label>
+                <button
+                  className="control-status-apply"
+                  type="button"
+                  disabled={!selectedStatusDefinition || selectedStatusDefinition.customizable}
+                  onClick={applyStatus}
+                >
+                  Aplicar
+                </button>
+                <button
+                  className="control-status-remove"
+                  type="button"
+                  disabled={!selectedActiveStatus}
+                  onClick={removeStatus}
+                >
+                  Remover
+                </button>
+              </div>
 
-          <div className="control-turn-controls">
-            <button
-              className="control-start-turn"
-              type="button"
-              disabled={!canAdvanceTurn}
-              title={
-                !state.battleStarted
-                  ? 'Inicie a batalha para avançar os turnos.'
-                  : activeBoss.setupStatus !== 'ready'
-                    ? 'Salve os dados deste chefão antes de incluí-lo na luta.'
-                    : activeBoss.currentHealth <= 0
-                      ? 'Um chefão derrotado não pode iniciar um turno.'
-                      : undefined
-              }
-              onClick={startTurn}
-            >
-              Iniciar turno
-            </button>
+              <div className="control-turn-controls">
+                <button
+                  className="control-start-turn"
+                  type="button"
+                  disabled={!canAdvanceTurn}
+                  title={
+                    !state.battleStarted
+                      ? 'Inicie a batalha para avançar os turnos.'
+                      : activeBoss.setupStatus !== 'ready'
+                        ? 'Salve os dados deste chefão antes de incluí-lo na luta.'
+                        : activeBoss.currentHealth <= 0
+                          ? 'Um chefão derrotado não pode iniciar um turno.'
+                          : undefined
+                  }
+                  onClick={startTurn}
+                >
+                  Iniciar turno
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -642,9 +1006,11 @@ const ControlApp = () => {
         const tooltipName = activeStatus
           ? getActiveStatusName(activeStatus)
           : definition.name;
-        const tooltipDescription = activeStatus
-          ? getActiveStatusDescription(activeStatus)
-          : definition.description;
+        const tooltipDescription = statusTooltip.annotationText ?? (
+          activeStatus
+            ? getActiveStatusDescription(activeStatus)
+            : definition.description
+        );
         const turnLabel = activeStatus
           ? activeStatus.turnsRemaining === 1
             ? '1 turno restante'

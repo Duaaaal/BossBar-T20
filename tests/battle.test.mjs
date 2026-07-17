@@ -103,7 +103,8 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.maxHealth, 1_000_000);
   assert.equal(boss.currentHealth, 1_000_000);
   assert.equal(boss.attack, 999);
-  assert.equal(boss.rangedAttack, 0);
+  assert.equal(boss.rangedAttack, -5);
+  assert.equal(boss.rangedDefense, 20);
   assert.equal(boss.shield, 999);
 });
 
@@ -367,6 +368,7 @@ test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () =
 });
 
 test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () => {
+  assert.equal(initialEncounterEffectsState.general.automaticStatusEffects, true);
   assert.deepEqual(initialEncounterEffectsState.sounds, {
     heal: true,
     damage: true,
@@ -428,6 +430,42 @@ test('aplica, renova e remove uma condição sem duplicar seu ícone', () => {
     statusId: 'em-chamas',
   });
   assert.deepEqual(state.bosses[0].activeStatuses, []);
+});
+
+test('integra progressões automáticas de condições ao estado da batalha', () => {
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'abalado',
+    damageFormula: null,
+    turns: 3,
+  });
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'abalado',
+    damageFormula: null,
+    turns: 2,
+  });
+
+  assert.deepEqual(state.bosses[0].activeStatuses, [{
+    statusId: 'apavorado',
+    damageFormula: null,
+    turnsRemaining: 5,
+  }]);
+
+  state = applyBattleCommand(state, {
+    type: 'apply-status',
+    bossId: 'boss-1',
+    statusId: 'abalado',
+    damageFormula: null,
+    turns: 6,
+  });
+  assert.deepEqual(state.bosses[0].activeStatuses, [{
+    statusId: 'apavorado',
+    damageFormula: null,
+    turnsRemaining: 6,
+  }]);
 });
 
 test('dano de status ignora escudo e RD e expira após o último efeito', () => {

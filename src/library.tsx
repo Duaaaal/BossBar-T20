@@ -48,6 +48,19 @@ const ColoredValues = ({
   </span>
 );
 
+const ColoredDefenseValues = ({ bosses }: { bosses: BossLibraryBossSummary[] }) => (
+  <span className="library-multi-values" title="Defesa corpo a corpo / à distância">
+    {bosses.map((boss, index) => (
+      <Fragment key={`defense-${index}`}>
+        <strong style={{ color: bossColors[index] }}>
+          {boss.defense}/{boss.rangedDefense}
+        </strong>
+        {index < bosses.length - 1 && <i aria-hidden="true">/</i>}
+      </Fragment>
+    ))}
+  </span>
+);
+
 const encounterLabel = (entry: BossLibraryEntrySummary) =>
   entry.bosses.map((boss) => boss.bossName).join(' / ');
 
@@ -148,7 +161,7 @@ const LibraryApp = () => {
             <span>Vida</span>
             <span>Ataque</span>
             <span>Tiro</span>
-            <span>Defesa</span>
+            <span title="Corpo a corpo / à distância">Def. C/D</span>
             <span>Perícias</span>
             <span>RD</span>
             <span>Escudo</span>
@@ -207,7 +220,7 @@ const LibraryApp = () => {
               </span>
               <ColoredValues bosses={entry.bosses} field="attack" />
               <ColoredValues bosses={entry.bosses} field="rangedAttack" />
-              <ColoredValues bosses={entry.bosses} field="defense" />
+              <ColoredDefenseValues bosses={entry.bosses} />
               <ColoredValues bosses={entry.bosses} field="skills" />
               <ColoredValues bosses={entry.bosses} field="damageReduction" />
               <ColoredValues bosses={entry.bosses} field="shield" />

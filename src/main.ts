@@ -43,6 +43,7 @@ import {
   type BackgroundState,
   type BattleState,
   type EncounterEffectsState,
+  type EncounterGeneralSetting,
   type EncounterSoundCustomizationResult,
   type EncounterSoundCustomizationState,
   type EncounterSoundEffect,
@@ -84,6 +85,10 @@ import {
   normalizeActiveStatuses,
   type ActiveBossStatus,
 } from './shared/status';
+import {
+  deriveStatusAttributes,
+  reconcileStatusIncompatibilities,
+} from './shared/status-rules';
 import {
   calculateInitialDockedPresentationSize,
   calculateProportionalDockedSize,
@@ -230,6 +235,7 @@ let soundboardAudioState = {
 };
 let encounterEffectsAudioState = {
   volume: initialEncounterEffectsState.volume,
+  general: { ...initialEncounterEffectsState.general },
   sounds: { ...initialEncounterEffectsState.sounds },
   visuals: { ...initialEncounterEffectsState.visuals },
   revision: initialEncounterEffectsState.revision,
@@ -271,15 +277,16 @@ type StoredMediaFile = {
 type StoredLibraryBoss = Omit<BossLibraryBossDraft, 'bossId'>;
 type LegacyStoredLibraryBoss = Omit<
   StoredLibraryBoss,
-  'shield' | 'turnCount' | 'activeStatuses'
+  'rangedDefense' | 'shield' | 'turnCount' | 'activeStatuses'
 > & {
+  rangedDefense?: number;
   shield?: number;
   turnCount?: number;
   activeStatuses?: ActiveBossStatus[];
 };
 
 type BossLibraryEntry = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   id: string;
   isAutosave: boolean;
   createdAt: string;
@@ -569,10 +576,17 @@ const loadEncounterEffectsSettings = async () => {
     if (!isRecord(parsed)) return;
     const sounds = isRecord(parsed.sounds) ? parsed.sounds : {};
     const visuals = isRecord(parsed.visuals) ? parsed.visuals : {};
+    const general = isRecord(parsed.general) ? parsed.general : {};
     encounterEffectsAudioState = {
       volume: isFiniteStoredNumber(parsed.volume)
         ? Math.max(0, Math.min(1, parsed.volume))
         : initialEncounterEffectsState.volume,
+      general: {
+        automaticStatusEffects:
+          typeof general.automaticStatusEffects === 'boolean'
+            ? general.automaticStatusEffects
+            : initialEncounterEffectsState.general.automaticStatusEffects,
+      },
       sounds: {
         heal: typeof sounds.heal === 'boolean'
           ? sounds.heal
@@ -622,8 +636,9 @@ const persistEncounterEffectsSettings = () => {
   const temporaryPath = `${filePath}.tmp`;
   const contents = JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       volume: encounterEffectsAudioState.volume,
+      general: encounterEffectsAudioState.general,
       sounds: encounterEffectsAudioState.sounds,
       visuals: encounterEffectsAudioState.visuals,
     },
@@ -764,6 +779,7 @@ const isStoredLibraryBoss = (value: unknown): value is LegacyStoredLibraryBoss =
   isFiniteStoredNumber(value.attack) &&
   isFiniteStoredNumber(value.rangedAttack) &&
   isFiniteStoredNumber(value.defense) &&
+  (value.rangedDefense === undefined || isFiniteStoredNumber(value.rangedDefense)) &&
   (value.shield === undefined || isFiniteStoredNumber(value.shield)) &&
   isFiniteStoredNumber(value.skills) &&
   isFiniteStoredNumber(value.damageReduction) &&
@@ -773,6 +789,7 @@ const isStoredLibraryBoss = (value: unknown): value is LegacyStoredLibraryBoss =
 const normalizeStoredLibraryBoss = (
   value: unknown,
   includesStatusState: boolean,
+  includesRangedDefense: boolean,
 ): StoredLibraryBoss | null => {
   if (!isStoredLibraryBoss(value)) return null;
   if (
@@ -781,6 +798,9 @@ const normalizeStoredLibraryBoss = (
       !Array.isArray(value.activeStatuses)
     )
   ) return null;
+  if (includesRangedDefense && !isFiniteStoredNumber(value.rangedDefense)) {
+    return null;
+  }
 
   return {
     bossName: value.bossName,
@@ -790,6 +810,9 @@ const normalizeStoredLibraryBoss = (
     attack: value.attack,
     rangedAttack: value.rangedAttack,
     defense: value.defense,
+    rangedDefense: includesRangedDefense
+      ? value.rangedDefense ?? value.defense
+      : value.defense,
     shield: value.shield ?? 0,
     skills: value.skills,
     damageReduction: value.damageReduction,
@@ -799,7 +822,9 @@ const normalizeStoredLibraryBoss = (
       ? clampInteger(value.turnCount ?? 0, 0, 1_000_000)
       : 0,
     activeStatuses: includesStatusState
-      ? normalizeActiveStatuses(value.activeStatuses)
+      ? reconcileStatusIncompatibilities(
+          normalizeActiveStatuses(value.activeStatuses),
+        )
       : [],
   };
 };
@@ -810,7 +835,7 @@ const normalizeStoredLibraryEntry = (
   if (!isStoredLibraryEnvelope(value)) return null;
 
   if (
-    (value.schemaVersion === 3 || value.schemaVersion === 2) &&
+    (value.schemaVersion === 4 || value.schemaVersion === 3 || value.schemaVersion === 2) &&
     Array.isArray(value.bosses) &&
     value.bosses.length >= 1 &&
     value.bosses.length <= 3 &&
@@ -819,11 +844,15 @@ const normalizeStoredLibraryEntry = (
     (value.activeBossIndex as number) < value.bosses.length
   ) {
     const bosses = value.bosses.map((boss) =>
-      normalizeStoredLibraryBoss(boss, value.schemaVersion === 3),
+      normalizeStoredLibraryBoss(
+        boss,
+        value.schemaVersion === 4 || value.schemaVersion === 3,
+        value.schemaVersion === 4,
+      ),
     );
     if (bosses.some((boss) => boss === null)) return null;
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
@@ -837,10 +866,10 @@ const normalizeStoredLibraryEntry = (
   }
 
   if (value.schemaVersion === 1) {
-    const boss = normalizeStoredLibraryBoss(value.boss, false);
+    const boss = normalizeStoredLibraryBoss(value.boss, false, false);
     if (!boss) return null;
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
@@ -877,7 +906,7 @@ const persistBossLibrary = () => {
   const filePath = bossLibraryPath();
   const temporaryPath = `${filePath}.tmp`;
   const contents = JSON.stringify(
-    { schemaVersion: 3, entries: bossLibraryEntries },
+    { schemaVersion: 4, entries: bossLibraryEntries },
     null,
     2,
   );
@@ -928,6 +957,7 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
     'attack',
     'rangedAttack',
     'defense',
+    'rangedDefense',
     'shield',
     'skills',
     'damageReduction',
@@ -952,16 +982,19 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       amount,
       maxHealth,
       currentHealth: clampInteger(rawBoss.currentHealth as number, 0, maxHealth),
-      attack: clampInteger(rawBoss.attack as number, 0, 999),
-      rangedAttack: clampInteger(rawBoss.rangedAttack as number, 0, 999),
+      attack: clampInteger(rawBoss.attack as number, -999, 999),
+      rangedAttack: clampInteger(rawBoss.rangedAttack as number, -999, 999),
       defense: clampInteger(rawBoss.defense as number, 0, 999),
+      rangedDefense: clampInteger(rawBoss.rangedDefense as number, 0, 999),
       shield: clampInteger(rawBoss.shield as number, 0, 999),
-      skills: clampInteger(rawBoss.skills as number, 0, 999),
+      skills: clampInteger(rawBoss.skills as number, -999, 999),
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
       description: rawBoss.description.trim().slice(0, 100),
       actionSeverity: rawBoss.actionSeverity,
       turnCount: clampInteger(rawBoss.turnCount as number, 0, 1_000_000),
-      activeStatuses: normalizeActiveStatuses(rawBoss.activeStatuses),
+      activeStatuses: reconcileStatusIncompatibilities(
+        normalizeActiveStatuses(rawBoss.activeStatuses),
+      ),
     }];
   });
 
@@ -992,6 +1025,7 @@ const captureLibraryEntry = (
     attack: boss.attack,
     rangedAttack: boss.rangedAttack,
     defense: boss.defense,
+    rangedDefense: boss.rangedDefense,
     shield: boss.shield,
     skills: boss.skills,
     damageReduction: boss.damageReduction,
@@ -1001,7 +1035,7 @@ const captureLibraryEntry = (
     activeStatuses: boss.activeStatuses,
   }));
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: existingEntry?.id ?? (isAutosave ? 'autosave' : randomUUID()),
     isAutosave,
     createdAt: existingEntry?.createdAt ?? now,
@@ -1052,6 +1086,7 @@ const getBossLibrarySummaries = (): BossLibraryEntrySummary[] =>
         attack: boss.attack,
         rangedAttack: boss.rangedAttack,
         defense: boss.defense,
+        rangedDefense: boss.rangedDefense,
         shield: boss.shield ?? 0,
         skills: boss.skills,
         damageReduction: boss.damageReduction,
@@ -1142,7 +1177,7 @@ const broadcastSoundboardState = () => {
 
 const broadcastEncounterEffectsState = () => {
   const state = getEncounterEffectsState();
-  for (const window of [masterWindow, playerWindow]) {
+  for (const window of [masterWindow, playerWindow, controlWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('encounter-effects:state-changed', state);
     }
@@ -2399,16 +2434,19 @@ const restoreLibraryEntry = (
       applyDamageReduction: true,
       maxHealth,
       currentHealth: clampInteger(storedBoss.currentHealth, 0, maxHealth),
-      attack: clampInteger(storedBoss.attack, 0, 999),
-      rangedAttack: clampInteger(storedBoss.rangedAttack, 0, 999),
+      attack: clampInteger(storedBoss.attack, -999, 999),
+      rangedAttack: clampInteger(storedBoss.rangedAttack, -999, 999),
       defense: clampInteger(storedBoss.defense, 0, 999),
+      rangedDefense: clampInteger(storedBoss.rangedDefense, 0, 999),
       shield: clampInteger(storedBoss.shield ?? 0, 0, 999),
-      skills: clampInteger(storedBoss.skills, 0, 999),
+      skills: clampInteger(storedBoss.skills, -999, 999),
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
       nextAction: storedBoss.description.trim().slice(0, 100),
       actionSeverity: storedBoss.actionSeverity,
       turnCount: clampInteger(storedBoss.turnCount, 0, 1_000_000),
-      activeStatuses: normalizeActiveStatuses(storedBoss.activeStatuses),
+      activeStatuses: reconcileStatusIncompatibilities(
+        normalizeActiveStatuses(storedBoss.activeStatuses),
+      ),
     };
   });
   const activeBossIndex = Math.min(
@@ -2683,7 +2721,7 @@ ipcMain.handle(
 );
 ipcMain.handle('soundboard:get-state', (): SoundboardState => getSoundboardState());
 ipcMain.handle('encounter-effects:get-state', (event) =>
-  isMasterSender(event.sender.id) || isPlayerSender(event.sender.id)
+  isEncounterControllerSender(event.sender.id) || isPlayerSender(event.sender.id)
     ? getEncounterEffectsState()
     : null,
 );
@@ -2876,6 +2914,9 @@ const encounterSoundSettings = new Set<EncounterSoundSetting>([
   'damage',
   'shield',
 ]);
+const encounterGeneralSettings = new Set<EncounterGeneralSetting>([
+  'automaticStatusEffects',
+]);
 const encounterVisualEffectSettings = new Set<EncounterVisualEffectSetting>([
   'screenShake',
   'healthBarShake',
@@ -2885,6 +2926,29 @@ const encounterVisualEffectSettings = new Set<EncounterVisualEffectSetting>([
   'floatingDamageNumbers',
   'healthNumbers',
 ]);
+ipcMain.on(
+  'encounter-effects:set-general-enabled',
+  (event, setting: unknown, enabled: unknown) => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof setting !== 'string' ||
+      !encounterGeneralSettings.has(setting as EncounterGeneralSetting) ||
+      typeof enabled !== 'boolean'
+    ) return;
+    const typedSetting = setting as EncounterGeneralSetting;
+    if (encounterEffectsAudioState.general[typedSetting] === enabled) return;
+    encounterEffectsAudioState = {
+      ...encounterEffectsAudioState,
+      general: {
+        ...encounterEffectsAudioState.general,
+        [typedSetting]: enabled,
+      },
+      revision: encounterEffectsAudioState.revision + 1,
+    };
+    broadcastEncounterEffectsState();
+    persistEncounterEffectsSettingsSafely();
+  },
+);
 ipcMain.on(
   'encounter-effects:set-sound-enabled',
   (event, setting: unknown, enabled: unknown) => {
@@ -3467,11 +3531,24 @@ ipcMain.handle(
     if (!boss) return { ok: false, error: 'Chefão não encontrado.' };
 
     const total = Math.min(1_000_000, Math.ceil(request.total));
+    const effectiveAttributes = deriveStatusAttributes(
+      {
+        attack: boss.attack,
+        rangedAttack: boss.rangedAttack,
+        skills: boss.skills,
+        meleeDefense: boss.defense,
+        rangedDefense: boss.rangedDefense,
+        damageReduction: boss.damageReduction,
+        shield: boss.shield,
+      },
+      boss.activeStatuses,
+      encounterEffectsAudioState.general.automaticStatusEffects,
+    );
     const { effectiveAmountPerHit } = calculateHealthSequence({
       type: request.type,
       total,
       hits: request.hits,
-      damageReduction: boss.damageReduction,
+      damageReduction: effectiveAttributes.values.damageReduction,
       ignoreDamageReduction: request.ignoreDamageReduction,
     });
 

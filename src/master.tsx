@@ -26,6 +26,7 @@ const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
     attack: boss.attack,
     rangedAttack: boss.rangedAttack,
     defense: boss.defense,
+    rangedDefense: boss.rangedDefense,
     shield: boss.shield,
     skills: boss.skills,
     damageReduction: boss.damageReduction,
@@ -362,6 +363,16 @@ const MasterApp = () => {
     window.bossAPI.setEncounterEffectsVolume(volume);
   };
 
+  const setEncounterGeneralEnabled = (
+    setting: 'automaticStatusEffects',
+    enabled: boolean,
+  ) => {
+    setEncounterEffects((current) => current
+      ? { ...current, general: { ...current.general, [setting]: enabled } }
+      : current);
+    window.bossAPI.setEncounterGeneralEnabled(setting, enabled);
+  };
+
   const setEncounterSoundEnabled = (
     setting: EncounterSoundSetting,
     enabled: boolean,
@@ -641,6 +652,16 @@ const MasterApp = () => {
               ×
             </button>
             <h2 id="settings-title">Configurações</h2>
+            <section className="settings-category" aria-labelledby="general-settings-title">
+              <h3 id="general-settings-title">Geral</h3>
+              <div className="settings-options">
+                <SettingsCheckbox
+                  checked={encounterEffects.general.automaticStatusEffects}
+                  label="Cálculos automáticos de condições"
+                  onChange={(checked) => setEncounterGeneralEnabled('automaticStatusEffects', checked)}
+                />
+              </div>
+            </section>
             <section className="settings-category" aria-labelledby="sound-settings-title">
               <h3 id="sound-settings-title">Som</h3>
               <div className="settings-options settings-sound-options">

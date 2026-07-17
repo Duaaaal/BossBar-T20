@@ -110,6 +110,8 @@ button { cursor: pointer; }
 }
 .control-form input { height: 34px; padding: 6px 9px; font-size: .72rem; }
 .control-form textarea { height: 54px; resize: none; padding: 7px 9px; font-size: .7rem; line-height: 1.3; }
+.control-form input:not(:focus),
+.control-form textarea:not(:focus) { font-weight: 750; }
 .control-form input:focus, .control-form textarea:focus { border-color: #b25b75; box-shadow: 0 0 0 2px rgba(178, 82, 110, .18); }
 .required-star { margin-left: 3px; color: #ff5f70; font-size: .82rem; text-shadow: 0 0 8px rgba(255, 80, 102, .55); }
 
@@ -132,13 +134,219 @@ button { cursor: pointer; }
 .control-full-heal { background: linear-gradient(145deg, #167381, #2da9b3); box-shadow: inset 0 1px rgba(255, 255, 255, .1); }
 .control-combat-row button:hover, .control-apply:hover, .control-action-row > button:hover { filter: brightness(1.14) saturate(1.08); }
 
-.control-attributes-row { display: grid; grid-template-columns: minmax(88px, 1.25fr) repeat(6, minmax(58px, .82fr)) minmax(76px, .9fr); gap: 7px; align-items: end; }
-.control-number-field input { width: 100%; }
+.control-attributes-row {
+  display: grid;
+  grid-template-columns:
+    minmax(88px, 1.05fr)
+    minmax(120px, 1.35fr)
+    minmax(64px, .8fr)
+    minmax(104px, 1.15fr)
+    repeat(2, minmax(58px, .78fr))
+    minmax(76px, .9fr);
+  gap: 7px;
+  align-items: end;
+}
+.control-number-field,
+.control-split-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.control-number-heading,
+.control-split-heading {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: .8rem;
+  align-items: center;
+  padding: 0;
+}
+.control-number-heading > label,
+.control-split-heading {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  color: #aaa0ac;
+  font-size: .64rem;
+  font-weight: 800;
+  letter-spacing: .025em;
+  line-height: .8rem;
+}
+.control-number-heading > label { padding: 0; }
+.control-number-input-shell { position: relative; min-width: 0; }
+.control-number-input-shell > input {
+  width: 100%;
+  appearance: textfield;
+  transition: color 130ms ease, text-shadow 130ms ease, font-weight 130ms ease;
+}
+.control-number-input-shell.has-preview > input { padding-right: 42px; }
+.control-number-field:not(.is-focused) .control-number-input-shell > input,
+.control-split-inputs label:not(.is-focused) input {
+  font-weight: 850;
+}
+.control-number-field.is-focused .control-number-input-shell > input,
+.control-split-inputs label.is-focused input {
+  color: #eee7ef;
+  font-weight: 500;
+  text-shadow: none;
+}
+.control-number-field.is-penalized .control-number-input-shell > input,
+.control-split-inputs label.is-penalized input {
+  color: #ff7d8b;
+  text-shadow: 0 0 8px rgba(255, 70, 91, .28);
+}
+.control-number-field.is-bonused .control-number-input-shell > input,
+.control-split-inputs label.is-bonused input {
+  color: #78e8a3;
+  text-shadow: 0 0 8px rgba(72, 224, 130, .25);
+}
+.control-effective-preview {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 7px;
+  font-size: .62rem;
+  font-weight: 850;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.control-effective-preview.is-penalized {
+  color: #ff7d8b;
+  text-shadow: 0 0 8px rgba(255, 70, 91, .28);
+}
+.control-effective-preview.is-bonused {
+  color: #78e8a3;
+  text-shadow: 0 0 8px rgba(72, 224, 130, .25);
+}
+.control-skill-annotation {
+  position: relative;
+  display: grid;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(156, 126, 151, .72);
+  border-radius: 3px;
+  padding: 0;
+  background: #171219;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .7);
+  opacity: .92;
+  transition: border-color 120ms ease, filter 120ms ease, transform 120ms ease;
+}
+.control-skill-annotation img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.control-skill-annotation.is-penalty { border-color: rgba(231, 102, 120, .72); }
+.control-skill-annotation.is-bonus { border-color: rgba(95, 215, 143, .76); }
+.control-skill-annotation:hover,
+.control-skill-annotation:focus-visible {
+  z-index: 10;
+  outline: 0;
+  border-color: #f0b5c5;
+  filter: brightness(1.18) saturate(1.08);
+  transform: translateY(-1px) scale(1.12);
+}
+.control-split-field {
+  min-width: 0;
+}
+.control-split-inputs {
+  display: grid;
+  height: 34px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #39313c;
+  border-radius: 7px;
+  background: #100e12;
+}
+.control-split-inputs:focus-within {
+  border-color: #b25b75;
+  box-shadow: 0 0 0 2px rgba(178, 82, 110, .18);
+}
+.control-split-inputs label {
+  position: relative;
+  display: block;
+  min-width: 0;
+  gap: 0;
+  color: inherit;
+  font-size: inherit;
+  letter-spacing: 0;
+}
+.control-split-inputs .control-split-side-label {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 4px;
+  color: #b2a6b5;
+  font-size: .46rem;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .9);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.control-split-inputs input {
+  width: 100%;
+  height: 32px;
+  border: 0;
+  border-radius: 0;
+  padding: 6px 3px 6px 22px;
+  outline: 0;
+  background: transparent;
+  font-size: .68rem;
+  appearance: textfield;
+  transition: color 130ms ease, text-shadow 130ms ease, font-weight 130ms ease;
+}
+.control-split-inputs label.is-focused.has-effective-value input { padding-right: 28px; }
+.control-split-inputs .control-effective-preview { right: 3px; font-size: .5rem; }
+.control-split-inputs input:focus { border: 0; box-shadow: none; }
+.control-split-divider {
+  width: 1px;
+  background: linear-gradient(transparent, rgba(180, 105, 132, .62), transparent);
+}
 .control-apply { background: linear-gradient(145deg, #793a57, #b55675); }
 .control-status-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto minmax(72px, 82px);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 7px;
+}
+.control-status-controls {
+  display: grid;
+  min-width: 0;
+  align-content: end;
+  gap: 4px;
+}
+.control-status-skill-summary {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  color: #8f8491;
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .025em;
+  white-space: nowrap;
+}
+.control-status-skill-summary > span { color: #aaa0ac; }
+.control-status-skill-summary > small { color: #625a65; font-size: .54rem; font-weight: 700; }
+.control-status-skill-icons {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+.control-status-command-row {
+  display: grid;
+  grid-template-columns: auto minmax(72px, 82px);
   align-items: end;
   gap: 7px;
 }
@@ -432,8 +640,15 @@ button { cursor: pointer; }
   .control-tab button, .control-add-boss { padding-inline: 7px; font-size: .62rem; }
   .control-combat-row { grid-template-columns: minmax(130px, 1.6fr) 66px 40px repeat(3, minmax(70px, .68fr)); }
   .control-attributes-row { gap: 4px; }
-  .control-number-field span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .control-number-heading > label,
+  .control-split-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .control-split-inputs .control-split-side-label { left: 2px; font-size: .4rem; }
+  .control-split-inputs input { padding-inline: 20px 1px; font-size: .58rem; }
   .control-status-row { gap: 3px; }
+  .control-status-controls { gap: 2px; }
+  .control-status-command-row { gap: 3px; }
+  .control-status-skill-summary { min-height: 17px; gap: 4px; font-size: .48rem; }
+  .control-skill-annotation { width: 16px; height: 16px; flex-basis: 16px; }
   .control-status-picker { grid-template-columns: repeat(18, minmax(0, 1fr)); gap: 2px; }
   .control-status-icon { border-radius: 3px; padding: 0; }
   .control-status-settings { grid-template-columns: 52px 42px 48px 52px; gap: 2px; }
