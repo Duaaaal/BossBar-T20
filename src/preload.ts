@@ -6,7 +6,10 @@ import type {
   BattleCommand,
   BattleState,
   EncounterEffectsState,
+  EncounterSoundCustomizationResult,
+  EncounterSoundCustomizationState,
   EncounterSoundEffect,
+  EncounterSoundEffectKind,
   EncounterSoundSetting,
   EncounterVisualEffectSetting,
   HealthEffect,
@@ -186,6 +189,21 @@ const bossAPI = {
   ) => {
     ipcRenderer.send('encounter-effects:set-visual-enabled', setting, enabled);
   },
+  getEncounterSoundCustomization: (): Promise<EncounterSoundCustomizationState> =>
+    ipcRenderer.invoke('encounter-sounds:get-state'),
+  addEncounterSound: (
+    kind: EncounterSoundEffectKind,
+  ): Promise<EncounterSoundCustomizationResult> =>
+    ipcRenderer.invoke('encounter-sounds:add', kind),
+  setEncounterSoundOptionEnabled: (
+    optionId: string,
+    enabled: boolean,
+  ): Promise<EncounterSoundCustomizationResult> =>
+    ipcRenderer.invoke('encounter-sounds:set-enabled', optionId, enabled),
+  removeEncounterSound: (
+    optionId: string,
+  ): Promise<EncounterSoundCustomizationResult> =>
+    ipcRenderer.invoke('encounter-sounds:remove', optionId),
   getSoundboardState: async (): Promise<SoundboardState> => {
     const state = (await ipcRenderer.invoke(
       'soundboard:get-state',

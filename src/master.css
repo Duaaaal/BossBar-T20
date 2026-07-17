@@ -63,6 +63,11 @@ button { font: inherit; cursor: pointer; }
 .background-apply-button:disabled { opacity: .36; cursor: default; }
 .background-note { margin: 8px 0 0; color: #645c67; font-size: .59rem; text-align: center; }
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
+.scene-customization-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; border-top: 1px solid rgba(77, 64, 80, .5); padding-top: 11px; }
+.scene-customization-actions button { min-height: 36px; border: 1px solid #614c69; border-radius: 8px; background: transparent; color: #ccbcd2; font-size: .68rem; font-weight: 850; transition: border-color .15s ease, color .15s ease, filter .15s ease, transform .15s ease; }
+.scene-customization-actions button:hover:not(:disabled) { border-color: #9871a4; color: #f0e4f4; filter: brightness(1.13); transform: translateY(-1px); }
+.sound-customization-button { border-color: #6b507c !important; color: #d2bde2 !important; }
+.boss-phases-button:disabled { border-style: dashed; opacity: .38; cursor: default; }
 
 .library-panel > p { margin: 0 0 10px; color: #776e7a; font-size: .67rem; line-height: 1.35; }
 .library-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -102,3 +107,45 @@ button { font: inherit; cursor: pointer; }
 .settings-volume-control > span { display: flex; justify-content: space-between; }
 .settings-volume-control strong { color: #d7a7c0; font-variant-numeric: tabular-nums; }
 .settings-volume-range { width: 100%; margin: 0; accent-color: #b54f78; cursor: pointer; }
+
+.sound-customization-modal { position: relative; width: min(620px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px; }
+.sound-customization-modal > h2 { padding-right: 32px; color: #e3d8e5; }
+.sound-customization-loading { margin: 22px 0 8px !important; color: #9e91a2 !important; text-align: center; }
+.sound-category { margin-top: 14px; border: 1px solid #3b303e; border-radius: 10px; padding: 10px; background: rgba(15, 12, 17, .58); }
+.sound-category-toolbar { position: relative; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 9px; }
+.sound-category-dropdown { position: relative; min-width: 0; }
+.sound-category-trigger, .add-category-sound-button { width: 100%; min-height: 34px; border: 1px solid #654b70; border-radius: 7px; padding: 6px 9px; background: transparent; color: #d2bedb; font-size: .65rem; font-weight: 850; }
+.sound-category-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
+.sound-category-trigger:hover, .add-category-sound-button:hover:not(:disabled) { border-color: #9670a3; color: #f2e5f6; }
+.sound-category-chevron { color: #a987b4; font-size: .9rem; line-height: .8; transition: transform .15s ease; }
+.sound-category-trigger[aria-expanded="true"] .sound-category-chevron { transform: rotate(180deg); }
+.sound-category-menu { position: fixed; z-index: 50; display: grid; align-content: start; max-height: 258px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid #59445f; border-radius: 8px; padding: 4px; background: #1b161d; box-shadow: 0 15px 34px rgba(0, 0, 0, .62); }
+.sound-category-menu button { min-height: 31px; border: 0; border-radius: 5px; padding: 6px 8px; background: transparent; color: #a99dac; font-size: .63rem; font-weight: 750; text-align: left; }
+.sound-category-menu button:hover, .sound-category-menu button.is-selected { background: rgba(138, 75, 109, .24); color: #eadce8; }
+.sound-category-menu button.is-selected { box-shadow: inset 2px 0 #bd5b80; }
+.add-category-sound-button { width: 112px; }
+.add-category-sound-button:disabled { opacity: .44; cursor: default; }
+.scene-sound-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.scene-sound-row { display: flex; min-width: 0; align-items: stretch; overflow: hidden; border: 1px solid #3e3541; border-radius: 8px; background: #151217; }
+.scene-sound-option { position: relative; display: flex; min-width: 0; flex: 1; align-items: center; gap: 7px; padding: 7px 8px; cursor: pointer; }
+.scene-sound-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.scene-sound-option input:checked + .settings-checkmark { border-color: #c65c82; background: linear-gradient(145deg, #8d3658, #c54f76); }
+.scene-sound-option input:checked + .settings-checkmark::after { position: absolute; top: 1px; left: 4px; width: 4px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; content: ""; transform: rotate(45deg); }
+.scene-sound-option input:focus-visible + .settings-checkmark { outline: 2px solid #d785a0; outline-offset: 2px; }
+.scene-sound-option:has(input:disabled) { opacity: .58; cursor: default; }
+.scene-sound-copy { display: grid; min-width: 0; gap: 1px; }
+.scene-sound-copy strong { overflow: hidden; color: #d4cad6; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+.scene-sound-copy small { color: #726977; font-size: .52rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.preview-sound-button { display: grid; width: 34px; flex: 0 0 34px; place-items: center; border: 0; border-left: 1px solid #39313c; padding: 0; background: rgba(74, 57, 82, .2); color: #bda8c7; font-size: .63rem; }
+.preview-sound-button:hover:not(:disabled), .preview-sound-button.is-playing { background: rgba(113, 71, 105, .38); color: #f1dbea; }
+.preview-sound-button:disabled { opacity: .4; cursor: default; }
+.remove-custom-sound-button { flex: 0 0 auto; border: 0; border-left: 1px solid #4b3139; padding: 0 8px; background: rgba(101, 35, 51, .28); color: #d77c89; font-size: .54rem; font-weight: 900; }
+.remove-custom-sound-button:hover:not(:disabled) { background: rgba(147, 42, 63, .42); color: #ffafba; }
+.remove-custom-sound-button:disabled { opacity: .45; cursor: default; }
+.sound-category-empty { margin: 0; color: #6f6672; font-size: .61rem; }
+.sound-customization-error { margin: 11px 0 0 !important; color: #e58390 !important; font-size: .67rem !important; }
+.sound-removal-backdrop { z-index: 22; }
+
+@media (max-width: 520px) {
+  .scene-sound-options { grid-template-columns: 1fr; }
+}

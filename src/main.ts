@@ -11,7 +11,15 @@ import {
 import { randomInt, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
@@ -29,13 +37,17 @@ import {
   initialEncounterEffectsState,
   initialBattleState,
   isEncounterSoundEnabled,
+  isEncounterSoundEffectKind,
   isBattleCommand,
   type BackgroundSelectionResult,
   type BackgroundState,
   type BattleState,
   type EncounterEffectsState,
+  type EncounterSoundCustomizationResult,
+  type EncounterSoundCustomizationState,
   type EncounterSoundEffect,
   type EncounterSoundEffectKind,
+  type EncounterSoundOption,
   type EncounterSoundSetting,
   type EncounterVisualEffectSetting,
   type HealthEffect,
@@ -139,18 +151,63 @@ const soundEffectSources = new Map<
   { filePath: string; index: number }
 >();
 const encounterEffectSources = new Map<number, string>();
-const encounterSoundPaths: Record<EncounterSoundEffectKind, string[]> = {
-  'shield-impact': [],
-  'shield-break': [],
-  damage: [],
-  'critical-damage': [],
-  heal: [],
+type InternalEncounterSoundOption = Omit<EncounterSoundOption, 'previewUrl'> & {
+  filePath: string;
 };
+const encounterSoundOptions: InternalEncounterSoundOption[] = [];
+const defaultEncounterSoundDefinitions: Array<{
+  kind: EncounterSoundEffectKind;
+  directory: string;
+  sounds: Array<{ fileName: string; label: string }>;
+}> = [
+  {
+    kind: 'damage',
+    directory: 'Mecanica_Dano',
+    sounds: [
+      { fileName: 'Dano_1.mp3', label: 'Dano 1' },
+      { fileName: 'Dano_2.mp3', label: 'Dano 2' },
+      { fileName: 'Dano_3.mp3', label: 'Dano 3' },
+      { fileName: 'Dano_4.mp3', label: 'Dano 4' },
+    ],
+  },
+  {
+    kind: 'critical-damage',
+    directory: 'Mecanica_Dano',
+    sounds: [
+      { fileName: 'Crit_1.mp3', label: 'Crítico 1' },
+      { fileName: 'Crit_2.mp3', label: 'Crítico 2' },
+    ],
+  },
+  {
+    kind: 'heal',
+    directory: 'Mecanica_Cura',
+    sounds: [
+      { fileName: 'heal_1.mp3', label: 'Cura 1' },
+      { fileName: 'heal_2.mp3', label: 'Cura 2' },
+    ],
+  },
+  {
+    kind: 'shield-impact',
+    directory: 'Mecanica_Escudo',
+    sounds: [
+      { fileName: 'impacto_escudo_1.mp3', label: 'Impacto no escudo 1' },
+      { fileName: 'impacto_escudo_2.mp3', label: 'Impacto no escudo 2' },
+      { fileName: 'impacto_escudo_3.mp3', label: 'Impacto no escudo 3' },
+    ],
+  },
+  {
+    kind: 'shield-break',
+    directory: 'Mecanica_Escudo',
+    sounds: [{ fileName: 'escudo_quebrando.mp3', label: 'Escudo quebrando' }],
+  },
+];
+const defaultEncounterSoundEnabled = new Map<string, boolean>();
 const previousEncounterSoundIndex = new Map<EncounterSoundEffectKind, number>();
 const encounterSoundGroupLastPlayedAt = new Map<EncounterSoundEffectKind, number>();
 let musicTrackSequence = 0;
 let soundEffectSequence = 0;
 let encounterEffectSequence = 0;
+let encounterSoundCustomizationRevision = 0;
 let soundboardRevision = 0;
 let musicState: Omit<MusicState, 'tracks'> = {
   currentTrackId: null,
@@ -248,6 +305,7 @@ let bossLibraryEntries: BossLibraryEntry[] = [];
 let linkedLibraryEntryId: string | null = null;
 let libraryWriteQueue: Promise<void> = Promise.resolve();
 let encounterEffectsWriteQueue: Promise<void> = Promise.resolve();
+let encounterSoundCustomizationWriteQueue: Promise<void> = Promise.resolve();
 
 const supportedBackgroundExtensions: ReadonlySet<string> = new Set([
   ...backgroundImageExtensions,
@@ -337,58 +395,81 @@ const findPersonalSfxFile = async (relativePath: string) => {
 };
 
 const loadEncounterMechanicSounds = async () => {
-  const definitions: Array<{
-    kind: EncounterSoundEffectKind;
-    directory: string;
-    names: string[];
-  }> = [
-    {
-      kind: 'shield-impact',
-      directory: 'Mecanica_Escudo',
-      names: [
-        'impacto_escudo_1.mp3',
-        'impacto_escudo_2.mp3',
-        'impacto_escudo_3.mp3',
-      ],
-    },
-    {
-      kind: 'shield-break',
-      directory: 'Mecanica_Escudo',
-      names: ['escudo_quebrando.mp3'],
-    },
-    {
-      kind: 'damage',
-      directory: 'Mecanica_Dano',
-      names: ['Dano_1.mp3', 'Dano_2.mp3', 'Dano_3.mp3', 'Dano_4.mp3'],
-    },
-    {
-      kind: 'critical-damage',
-      directory: 'Mecanica_Dano',
-      names: ['Crit_1.mp3', 'Crit_2.mp3'],
-    },
-    {
-      kind: 'heal',
-      directory: 'Mecanica_Cura',
-      names: ['heal_1.mp3', 'heal_2.mp3'],
-    },
-  ];
+  let storedDefaultEnabled: Record<string, unknown> = {};
+  let storedCustomSounds: unknown[] = [];
+  try {
+    const contents = await readFile(encounterSoundCustomizationPath(), 'utf8');
+    const parsed = JSON.parse(contents) as unknown;
+    if (isRecord(parsed)) {
+      storedDefaultEnabled = isRecord(parsed.defaultEnabled)
+        ? parsed.defaultEnabled
+        : {};
+      storedCustomSounds = Array.isArray(parsed.customSounds)
+        ? parsed.customSounds
+        : [];
+    }
+  } catch (error) {
+    if (isRecord(error) && error.code !== 'ENOENT') {
+      console.error('Não foi possível ler a personalização dos efeitos sonoros.', error);
+    }
+  }
 
-  await Promise.all(definitions.map(async ({ kind, directory, names }) => {
-    const paths = await Promise.all(
-      names.map((name) => findPersonalSfxFile(path.join(directory, name))),
-    );
-    encounterSoundPaths[kind].splice(
-      0,
-      encounterSoundPaths[kind].length,
-      ...paths.filter((filePath): filePath is string => Boolean(filePath)),
-    );
+  defaultEncounterSoundEnabled.clear();
+  const defaultOptions = await Promise.all(
+    defaultEncounterSoundDefinitions.flatMap(({ kind, directory, sounds }) =>
+      sounds.map(async ({ fileName, label }) => {
+        const id = `default:${kind}:${fileName.toLowerCase()}`;
+        const enabled = typeof storedDefaultEnabled[id] === 'boolean'
+          ? storedDefaultEnabled[id]
+          : true;
+        defaultEncounterSoundEnabled.set(id, enabled);
+        const filePath = await findPersonalSfxFile(path.join(directory, fileName));
+        return filePath
+          ? { id, kind, name: label, isDefault: true, enabled, filePath }
+          : null;
+      }),
+    ),
+  );
+
+  const customOptions = await Promise.all(storedCustomSounds.map(async (value) => {
+    if (
+      !isRecord(value) ||
+      typeof value.id !== 'string' ||
+      !value.id.startsWith('custom:') ||
+      !isEncounterSoundEffectKind(value.kind) ||
+      typeof value.name !== 'string' ||
+      !value.name.trim() ||
+      typeof value.filePath !== 'string' ||
+      path.extname(value.filePath).toLowerCase() !== '.mp3'
+    ) return null;
+    try {
+      if (!(await stat(value.filePath)).isFile()) return null;
+    } catch {
+      return null;
+    }
+    return {
+      id: value.id,
+      kind: value.kind,
+      name: value.name.slice(0, 100),
+      isDefault: false,
+      enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
+      filePath: value.filePath,
+    } satisfies InternalEncounterSoundOption;
   }));
+
+  encounterSoundOptions.splice(
+    0,
+    encounterSoundOptions.length,
+    ...defaultOptions.filter(
+      (option): option is InternalEncounterSoundOption => Boolean(option),
+    ),
+    ...customOptions.filter(
+      (option): option is Exclude<typeof option, null> => Boolean(option),
+    ),
+  );
   previousEncounterSoundIndex.clear();
   encounterSoundGroupLastPlayedAt.clear();
-  encounterEffectsAudioState = {
-    ...encounterEffectsAudioState,
-    revision: encounterEffectsAudioState.revision + 1,
-  };
+  encounterSoundCustomizationRevision += 1;
 };
 
 const rendererUrl = (page: RendererPage) => {
@@ -446,11 +527,29 @@ const getEncounterEffectsState = (): EncounterEffectsState => ({
   universalMuted: musicState.universalMuted,
 });
 
+const getEncounterSoundCustomizationState = (): EncounterSoundCustomizationState => ({
+  options: encounterSoundOptions.map((option) => ({
+    id: option.id,
+    kind: option.kind,
+    name: option.name,
+    previewUrl: `boss-media://encounter-sound-preview/${encodeURIComponent(option.id)}?v=${encounterSoundCustomizationRevision}`,
+    isDefault: option.isDefault,
+    enabled: option.enabled,
+  })),
+  revision: encounterSoundCustomizationRevision,
+});
+
 const bossLibraryPath = () =>
   path.join(app.getPath('userData'), 'boss-library.json');
 
 const encounterEffectsSettingsPath = () =>
   path.join(app.getPath('userData'), 'encounter-effects-settings.json');
+
+const encounterSoundCustomizationPath = () =>
+  path.join(app.getPath('userData'), 'encounter-sound-customization.json');
+
+const customEncounterSoundsDirectory = () =>
+  path.join(app.getPath('userData'), 'custom-encounter-sounds');
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object');
@@ -554,6 +653,45 @@ const persistEncounterEffectsSettingsSafely = () => {
   void persistEncounterEffectsSettings().catch((error) => {
     console.error('Não foi possível salvar as configurações de efeitos.', error);
   });
+};
+
+const persistEncounterSoundCustomization = () => {
+  const filePath = encounterSoundCustomizationPath();
+  const temporaryPath = `${filePath}.tmp`;
+  const contents = JSON.stringify(
+    {
+      schemaVersion: 1,
+      defaultEnabled: Object.fromEntries(defaultEncounterSoundEnabled),
+      customSounds: encounterSoundOptions
+        .filter((option) => !option.isDefault)
+        .map(({ id, kind, name, enabled, filePath: soundFilePath }) => ({
+          id,
+          kind,
+          name,
+          enabled,
+          filePath: soundFilePath,
+        })),
+    },
+    null,
+    2,
+  );
+  encounterSoundCustomizationWriteQueue = encounterSoundCustomizationWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(temporaryPath, contents, 'utf8');
+      try {
+        await rename(temporaryPath, filePath);
+      } catch (error) {
+        if (
+          !isRecord(error) ||
+          (error.code !== 'EEXIST' && error.code !== 'EPERM')
+        ) throw error;
+        await rm(filePath, { force: true });
+        await rename(temporaryPath, filePath);
+      }
+    });
+  return encounterSoundCustomizationWriteQueue;
 };
 
 const isStoredMusicTrack = (
@@ -1022,16 +1160,18 @@ const playEncounterMechanicSound = (effect: HealthEffect) => {
     !isEncounterSoundEnabled(encounterEffectsAudioState, soundKind)
   ) return;
 
-  const paths = encounterSoundPaths[soundKind];
+  const availableSounds = encounterSoundOptions.filter(
+    (option) => option.kind === soundKind && option.enabled,
+  );
   const playbackTime = Date.now();
   const soundIndex = chooseEncounterSoundIndex(
-    paths.length,
+    availableSounds.length,
     previousEncounterSoundIndex.get(soundKind) ?? null,
     encounterSoundGroupLastPlayedAt.get(soundKind) ?? null,
     playbackTime,
     randomInt,
   );
-  const filePath = paths[soundIndex] ?? null;
+  const filePath = availableSounds[soundIndex]?.filePath ?? null;
   if (!filePath) return;
   previousEncounterSoundIndex.set(soundKind, soundIndex);
   encounterSoundGroupLastPlayedAt.set(soundKind, playbackTime);
@@ -2547,6 +2687,163 @@ ipcMain.handle('encounter-effects:get-state', (event) =>
     ? getEncounterEffectsState()
     : null,
 );
+ipcMain.handle('encounter-sounds:get-state', (event) =>
+  isMasterSender(event.sender.id)
+    ? getEncounterSoundCustomizationState()
+    : { options: [], revision: 0 },
+);
+ipcMain.handle(
+  'encounter-sounds:add',
+  async (
+    event,
+    kind: unknown,
+  ): Promise<EncounterSoundCustomizationResult> => {
+    if (
+      !masterWindow ||
+      !isMasterSender(event.sender.id) ||
+      !isEncounterSoundEffectKind(kind)
+    ) return { ok: false, error: 'Ação não autorizada.' };
+
+    const selection = await dialog.showOpenDialog(masterWindow, {
+      title: 'Adicionar efeito sonoro personalizado',
+      defaultPath: defaultMediaDirectory('SFX', 'music'),
+      properties: ['openFile'],
+      filters: [{ name: 'Arquivos MP3', extensions: ['mp3'] }],
+    });
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+
+    const sourcePath = selection.filePaths[0];
+    if (path.extname(sourcePath).toLowerCase() !== '.mp3') {
+      return { ok: false, error: 'Selecione um arquivo MP3 válido.' };
+    }
+    try {
+      const fileInfo = await stat(sourcePath);
+      if (!fileInfo.isFile()) throw new Error('not-file');
+      const metadata = await parseFile(sourcePath, { duration: true });
+      const container = metadata.format.container?.toLowerCase() ?? '';
+      const codec = metadata.format.codec?.toLowerCase() ?? '';
+      if (
+        !container.includes('mpeg') &&
+        !codec.includes('layer 3') &&
+        !codec.includes('mp3')
+      ) throw new Error('invalid-codec');
+    } catch {
+      return {
+        ok: false,
+        error: 'O arquivo não pôde ser decodificado como MP3 (MPEG Layer III).',
+      };
+    }
+
+    const fileId = randomUUID();
+    const destinationDirectory = path.join(customEncounterSoundsDirectory(), kind);
+    const destinationPath = path.join(destinationDirectory, `${fileId}.mp3`);
+    const customSoundName = path
+      .basename(sourcePath, path.extname(sourcePath))
+      .trim()
+      .slice(0, 100) || 'Efeito personalizado';
+    const option: InternalEncounterSoundOption = {
+      id: `custom:${fileId}`,
+      kind,
+      name: customSoundName,
+      isDefault: false,
+      enabled: true,
+      filePath: destinationPath,
+    };
+    try {
+      await mkdir(destinationDirectory, { recursive: true });
+      await copyFile(sourcePath, destinationPath);
+      encounterSoundOptions.push(option);
+      encounterSoundCustomizationRevision += 1;
+      previousEncounterSoundIndex.delete(kind);
+      encounterSoundGroupLastPlayedAt.delete(kind);
+      await persistEncounterSoundCustomization();
+      return { ok: true, state: getEncounterSoundCustomizationState() };
+    } catch (error) {
+      const optionIndex = encounterSoundOptions.findIndex(
+        (item) => item.id === option.id,
+      );
+      if (optionIndex >= 0) encounterSoundOptions.splice(optionIndex, 1);
+      await rm(destinationPath, { force: true }).catch(() => undefined);
+      console.error('Não foi possível adicionar o efeito sonoro.', error);
+      return { ok: false, error: 'Não foi possível salvar o efeito sonoro.' };
+    }
+  },
+);
+ipcMain.handle(
+  'encounter-sounds:set-enabled',
+  async (
+    event,
+    optionId: unknown,
+    enabled: unknown,
+  ): Promise<EncounterSoundCustomizationResult> => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof optionId !== 'string' ||
+      typeof enabled !== 'boolean'
+    ) return { ok: false, error: 'Ação não autorizada.' };
+    const option = encounterSoundOptions.find((item) => item.id === optionId);
+    if (!option) return { ok: false, error: 'Efeito sonoro não encontrado.' };
+    if (option.enabled === enabled) {
+      return { ok: true, state: getEncounterSoundCustomizationState() };
+    }
+    const previousEnabled = option.enabled;
+    option.enabled = enabled;
+    if (option.isDefault) defaultEncounterSoundEnabled.set(option.id, enabled);
+    encounterSoundCustomizationRevision += 1;
+    previousEncounterSoundIndex.delete(option.kind);
+    encounterSoundGroupLastPlayedAt.delete(option.kind);
+    try {
+      await persistEncounterSoundCustomization();
+      return { ok: true, state: getEncounterSoundCustomizationState() };
+    } catch (error) {
+      option.enabled = previousEnabled;
+      if (option.isDefault) {
+        defaultEncounterSoundEnabled.set(option.id, previousEnabled);
+      }
+      console.error('Não foi possível atualizar o efeito sonoro.', error);
+      return { ok: false, error: 'Não foi possível salvar esta alteração.' };
+    }
+  },
+);
+ipcMain.handle(
+  'encounter-sounds:remove',
+  async (
+    event,
+    optionId: unknown,
+  ): Promise<EncounterSoundCustomizationResult> => {
+    if (!isMasterSender(event.sender.id) || typeof optionId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const optionIndex = encounterSoundOptions.findIndex(
+      (item) => item.id === optionId,
+    );
+    const option = encounterSoundOptions[optionIndex];
+    if (!option) return { ok: false, error: 'Efeito sonoro não encontrado.' };
+    if (option.isDefault) {
+      return { ok: false, error: 'Os efeitos sonoros padrão não podem ser removidos.' };
+    }
+    encounterSoundOptions.splice(optionIndex, 1);
+    encounterSoundCustomizationRevision += 1;
+    previousEncounterSoundIndex.delete(option.kind);
+    encounterSoundGroupLastPlayedAt.delete(option.kind);
+    try {
+      await persistEncounterSoundCustomization();
+    } catch (error) {
+      encounterSoundOptions.splice(optionIndex, 0, option);
+      encounterSoundCustomizationRevision += 1;
+      console.error('Não foi possível remover o efeito sonoro.', error);
+      return { ok: false, error: 'Não foi possível remover o efeito sonoro.' };
+    }
+    try {
+      await rm(option.filePath, { force: true });
+    } catch (error) {
+      console.error('O cadastro foi removido, mas o arquivo não pôde ser excluído.', error);
+    }
+    return { ok: true, state: getEncounterSoundCustomizationState() };
+  },
+);
 ipcMain.on('audio:set-universal-muted', (event, muted: unknown) => {
   if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
   if (musicState.universalMuted === muted) return;
@@ -3448,6 +3745,12 @@ app.whenReady().then(async () => {
           ? encounterEffectSources.get(effectId) ?? null
           : null;
         errorLabel = 'efeito do encontro';
+      } else if (requestUrl.hostname === 'encounter-sound-preview') {
+        const optionId = decodeURIComponent(requestUrl.pathname.slice(1));
+        mediaPath = encounterSoundOptions.find(
+          (option) => option.id === optionId,
+        )?.filePath ?? null;
+        errorLabel = 'amostra do efeito';
       }
 
       if (!mediaPath) {
@@ -3457,7 +3760,8 @@ app.whenReady().then(async () => {
       if (
         requestUrl.hostname === 'audio' ||
         requestUrl.hostname === 'sfx' ||
-        requestUrl.hostname === 'encounter-sfx'
+        requestUrl.hostname === 'encounter-sfx' ||
+        requestUrl.hostname === 'encounter-sound-preview'
       ) {
         return await createMediaResponse(request, mediaPath, 'audio/mpeg');
       }

@@ -13,6 +13,7 @@ import {
   initialEncounterEffectsState,
   initialBattleState,
   isBattleCommand,
+  isEncounterSoundEffectKind,
   isHeavyDamageEffect,
   isEncounterSoundEnabled,
   isShieldBreakEffect,
@@ -384,6 +385,18 @@ test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () =>
     isEncounterSoundEnabled(initialEncounterEffectsState, 'shield-break'),
     true,
   );
+});
+
+test('reconhece apenas as cinco categorias configuráveis de efeitos sonoros', () => {
+  for (const kind of [
+    'damage',
+    'critical-damage',
+    'heal',
+    'shield-impact',
+    'shield-break',
+  ]) assert.equal(isEncounterSoundEffectKind(kind), true);
+  assert.equal(isEncounterSoundEffectKind('music'), false);
+  assert.equal(isEncounterSoundEffectKind(null), false);
 });
 
 test('aplica, renova e remove uma condição sem duplicar seu ícone', () => {

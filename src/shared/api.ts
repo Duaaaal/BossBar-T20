@@ -4,7 +4,10 @@ import type {
   BattleCommand,
   BattleState,
   EncounterEffectsState,
+  EncounterSoundCustomizationResult,
+  EncounterSoundCustomizationState,
   EncounterSoundEffect,
+  EncounterSoundEffectKind,
   EncounterSoundSetting,
   EncounterVisualEffectSetting,
   HealthEffect,
@@ -81,6 +84,17 @@ export type BossAPI = {
     setting: EncounterVisualEffectSetting,
     enabled: boolean,
   ) => void;
+  getEncounterSoundCustomization: () => Promise<EncounterSoundCustomizationState>;
+  addEncounterSound: (
+    kind: EncounterSoundEffectKind,
+  ) => Promise<EncounterSoundCustomizationResult>;
+  setEncounterSoundOptionEnabled: (
+    optionId: string,
+    enabled: boolean,
+  ) => Promise<EncounterSoundCustomizationResult>;
+  removeEncounterSound: (
+    optionId: string,
+  ) => Promise<EncounterSoundCustomizationResult>;
   getSoundboardState: () => Promise<SoundboardState>;
   assignSoundboardSlot: (
     index: number,

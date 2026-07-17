@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
   type BattleState,
   type EncounterEffectsState,
+  type EncounterSoundCustomizationState,
+  type EncounterSoundEffectKind,
+  type EncounterSoundOption,
   type EncounterSoundSetting,
   type EncounterVisualEffectSetting,
 } from './shared/battle';
@@ -52,6 +56,25 @@ const SettingsCheckbox = ({
   </label>
 );
 
+const encounterSoundCategories: Array<{
+  kind: EncounterSoundEffectKind;
+  label: string;
+}> = [
+  { kind: 'damage', label: 'Dano' },
+  { kind: 'critical-damage', label: 'Crit' },
+  { kind: 'heal', label: 'Cura' },
+  { kind: 'shield-impact', label: 'Dano do escudo' },
+  { kind: 'shield-break', label: 'Escudo quebrando' },
+];
+
+type SoundCategoryMenuPosition = {
+  left: number;
+  width: number;
+  maxHeight: number;
+  top?: number;
+  bottom?: number;
+};
+
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [appVersion, setAppVersion] = useState('...');
@@ -59,6 +82,15 @@ const MasterApp = () => {
   const [universalMuted, setUniversalMuted] = useState(false);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [soundCustomizationOpen, setSoundCustomizationOpen] = useState(false);
+  const [soundCustomization, setSoundCustomization] = useState<EncounterSoundCustomizationState | null>(null);
+  const [soundCustomizationBusy, setSoundCustomizationBusy] = useState<string | null>(null);
+  const [soundCustomizationError, setSoundCustomizationError] = useState('');
+  const [pendingSoundRemoval, setPendingSoundRemoval] = useState<EncounterSoundOption | null>(null);
+  const [selectedSoundCategory, setSelectedSoundCategory] = useState<EncounterSoundEffectKind>('damage');
+  const [soundCategoryMenuOpen, setSoundCategoryMenuOpen] = useState(false);
+  const [soundCategoryMenuPosition, setSoundCategoryMenuPosition] = useState<SoundCategoryMenuPosition | null>(null);
+  const [previewingSoundId, setPreviewingSoundId] = useState<string | null>(null);
   const [backgroundError, setBackgroundError] = useState('');
   const [pendingBackgroundName, setPendingBackgroundName] = useState<string | null>(null);
   const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
@@ -72,6 +104,73 @@ const MasterApp = () => {
   const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
   const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
   const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const soundPreviewRef = useRef<HTMLAudioElement | null>(null);
+  const soundCategoryTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const soundCategoryMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!soundCategoryMenuOpen) {
+      setSoundCategoryMenuPosition(null);
+      return;
+    }
+
+    const updateMenuPosition = () => {
+      const trigger = soundCategoryTriggerRef.current;
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      const desiredHeight = Math.min(
+        Math.max(encounterSoundCategories.length, 1),
+        8,
+      ) * 31 + 10;
+      const spaceBelow = Math.max(0, window.innerHeight - bounds.bottom - 8);
+      const spaceAbove = Math.max(0, bounds.top - 8);
+      const openAbove = spaceBelow < desiredHeight && spaceAbove > spaceBelow;
+      const availableHeight = openAbove ? spaceAbove : spaceBelow;
+      const width = Math.min(bounds.width, window.innerWidth - 16);
+      const left = Math.min(
+        Math.max(8, bounds.left),
+        Math.max(8, window.innerWidth - width - 8),
+      );
+      setSoundCategoryMenuPosition({
+        left,
+        width,
+        maxHeight: Math.max(64, Math.min(desiredHeight, availableHeight)),
+        ...(openAbove
+          ? { bottom: window.innerHeight - bounds.top + 5 }
+          : { top: bounds.bottom + 5 }),
+      });
+    };
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    document.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      document.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [soundCategoryMenuOpen]);
+
+  useEffect(() => {
+    if (!soundCategoryMenuOpen) return;
+    const closeOnOutsideInteraction = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        soundCategoryTriggerRef.current?.contains(target) ||
+        soundCategoryMenuRef.current?.contains(target)
+      ) return;
+      setSoundCategoryMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSoundCategoryMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideInteraction);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideInteraction);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [soundCategoryMenuOpen]);
 
   useEffect(() => {
     let active = true;
@@ -283,6 +382,122 @@ const MasterApp = () => {
     window.bossAPI.setEncounterVisualEffectEnabled(setting, enabled);
   };
 
+  const openSoundCustomization = async () => {
+    setSoundCustomizationOpen(true);
+    setSoundCustomizationError('');
+    setSoundCustomizationBusy('loading');
+    try {
+      setSoundCustomization(await window.bossAPI.getEncounterSoundCustomization());
+    } catch {
+      setSoundCustomizationError('Não foi possível carregar os efeitos sonoros.');
+    } finally {
+      setSoundCustomizationBusy(null);
+    }
+  };
+
+  const stopSoundPreview = () => {
+    setPreviewingSoundId(null);
+    const audio = soundPreviewRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+  };
+
+  const playSoundPreview = async (option: EncounterSoundOption) => {
+    const audio = soundPreviewRef.current;
+    if (!audio) return;
+    if (previewingSoundId === option.id && !audio.paused) {
+      stopSoundPreview();
+      return;
+    }
+    if (universalMuted) {
+      setSoundCustomizationError(
+        'Desative o mute universal para ouvir a amostra.',
+      );
+      return;
+    }
+    setSoundCustomizationError('');
+    audio.pause();
+    audio.src = option.previewUrl;
+    audio.volume = Math.max(0, Math.min(1, encounterEffects?.volume ?? 0.8));
+    audio.load();
+    try {
+      await audio.play();
+      setPreviewingSoundId(option.id);
+    } catch {
+      setPreviewingSoundId(null);
+      setSoundCustomizationError('Não foi possível reproduzir esta amostra.');
+    }
+  };
+
+  const addEncounterSound = async (kind: EncounterSoundEffectKind) => {
+    setSoundCustomizationBusy(`add:${kind}`);
+    setSoundCustomizationError('');
+    try {
+      const result = await window.bossAPI.addEncounterSound(kind);
+      if (result.ok && result.state) {
+        setSoundCustomization(result.state);
+      } else if (!result.canceled) {
+        setSoundCustomizationError(
+          result.error ?? 'Não foi possível adicionar o efeito sonoro.',
+        );
+      }
+    } catch {
+      setSoundCustomizationError('Não foi possível adicionar o efeito sonoro.');
+    } finally {
+      setSoundCustomizationBusy(null);
+    }
+  };
+
+  const setSoundOptionEnabled = async (optionId: string, enabled: boolean) => {
+    setSoundCustomizationBusy(optionId);
+    setSoundCustomizationError('');
+    try {
+      const result = await window.bossAPI.setEncounterSoundOptionEnabled(
+        optionId,
+        enabled,
+      );
+      if (result.ok && result.state) {
+        setSoundCustomization(result.state);
+      } else {
+        setSoundCustomizationError(
+          result.error ?? 'Não foi possível atualizar o efeito sonoro.',
+        );
+      }
+    } catch {
+      setSoundCustomizationError('Não foi possível atualizar o efeito sonoro.');
+    } finally {
+      setSoundCustomizationBusy(null);
+    }
+  };
+
+  const removeEncounterSound = async () => {
+    if (!pendingSoundRemoval) return;
+    setSoundCustomizationBusy(pendingSoundRemoval.id);
+    setSoundCustomizationError('');
+    try {
+      const result = await window.bossAPI.removeEncounterSound(
+        pendingSoundRemoval.id,
+      );
+      if (result.ok && result.state) {
+        setSoundCustomization(result.state);
+        setPendingSoundRemoval(null);
+      } else {
+        setSoundCustomizationError(
+          result.error ?? 'Não foi possível remover o efeito sonoro.',
+        );
+        setPendingSoundRemoval(null);
+      }
+    } catch {
+      setSoundCustomizationError('Não foi possível remover o efeito sonoro.');
+      setPendingSoundRemoval(null);
+    } finally {
+      setSoundCustomizationBusy(null);
+    }
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const backgroundPending = Boolean(pendingBackgroundName || pendingBackgroundRemoval);
@@ -292,6 +507,12 @@ const MasterApp = () => {
   const unpreparedBosses = state.bosses.filter(
     (boss) => !boss.identityPrepared || !boss.actionPrepared,
   );
+  const selectedSoundCategoryLabel = encounterSoundCategories.find(
+    (category) => category.kind === selectedSoundCategory,
+  )?.label ?? 'Dano';
+  const selectedSoundOptions = soundCustomization?.options.filter(
+    (option) => option.kind === selectedSoundCategory,
+  ) ?? [];
 
   return (
     <main className="master-shell">
@@ -362,7 +583,7 @@ const MasterApp = () => {
       </section>
 
       <section className="compact-panel">
-        <div className="compact-panel-title"><h2>Fundo da apresentação</h2></div>
+        <div className="compact-panel-title"><h2>Personalização de Cena</h2></div>
         <div className="background-copy">
           <strong>Imagem, GIF ou vídeo</strong>
           <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
@@ -376,6 +597,24 @@ const MasterApp = () => {
         </div>
         <p className="background-note">1920 × 1080 · 16:9 · até 25 MB</p>
         {backgroundError && <p className="master-error">{backgroundError}</p>}
+        <div className="scene-customization-actions">
+          <button
+            className="sound-customization-button"
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => void openSoundCustomization()}
+          >
+            Efeitos sonoros
+          </button>
+          <button
+            className="boss-phases-button"
+            type="button"
+            disabled
+            title="A criação de fases será implementada em uma próxima etapa"
+          >
+            Fases do chefão
+          </button>
+        </div>
       </section>
 
       <section className="compact-panel library-panel" aria-label="Biblioteca de encontros">
@@ -435,6 +674,201 @@ const MasterApp = () => {
                 <SettingsCheckbox checked={encounterEffects.visuals.healthNumbers} label="Visor numérico de vida" onChange={(checked) => setEncounterVisualEffectEnabled('healthNumbers', checked)} />
               </div>
             </section>
+          </section>
+        </div>
+      )}
+
+      {soundCustomizationOpen && (
+        <div className="modal-backdrop">
+          <section
+            className="confirmation-modal sound-customization-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sound-customization-title"
+          >
+            <button
+              className="settings-close-button"
+              type="button"
+              aria-label="Fechar personalização de efeitos sonoros"
+              onClick={() => {
+                stopSoundPreview();
+                setSoundCategoryMenuOpen(false);
+                setSoundCustomizationOpen(false);
+                setSoundCustomizationError('');
+              }}
+            >
+              ×
+            </button>
+            <h2 id="sound-customization-title">Efeitos sonoros da cena</h2>
+            <audio
+              ref={soundPreviewRef}
+              aria-hidden="true"
+              onEnded={() => setPreviewingSoundId(null)}
+              onError={() => {
+                if (
+                  !previewingSoundId ||
+                  !soundPreviewRef.current?.getAttribute('src')
+                ) return;
+                setPreviewingSoundId(null);
+                setSoundCustomizationError(
+                  'Não foi possível reproduzir esta amostra.',
+                );
+              }}
+            />
+            {soundCustomizationBusy === 'loading' && !soundCustomization ? (
+              <p className="sound-customization-loading">Carregando efeitos...</p>
+            ) : (
+              <section className="sound-category">
+                <div className="sound-category-toolbar">
+                  <div className="sound-category-dropdown">
+                    <button
+                      className="sound-category-trigger"
+                      ref={soundCategoryTriggerRef}
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={soundCategoryMenuOpen}
+                      onClick={() => setSoundCategoryMenuOpen((open) => !open)}
+                    >
+                      <span>{selectedSoundCategoryLabel}</span>
+                      <span className="sound-category-chevron" aria-hidden="true">⌄</span>
+                    </button>
+                    {soundCategoryMenuOpen && soundCategoryMenuPosition && createPortal(
+                      <div
+                        className="sound-category-menu"
+                        ref={soundCategoryMenuRef}
+                        role="listbox"
+                        aria-label="Categoria do efeito sonoro"
+                        style={soundCategoryMenuPosition}
+                      >
+                        {encounterSoundCategories.map(({ kind, label }) => (
+                          <button
+                            className={kind === selectedSoundCategory ? 'is-selected' : ''}
+                            type="button"
+                            role="option"
+                            aria-selected={kind === selectedSoundCategory}
+                            key={kind}
+                            onClick={() => {
+                              stopSoundPreview();
+                              setSelectedSoundCategory(kind);
+                              setSoundCategoryMenuOpen(false);
+                              setSoundCustomizationError('');
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>,
+                      document.body,
+                    )}
+                  </div>
+                  <button
+                    className="add-category-sound-button"
+                    type="button"
+                    disabled={soundCustomizationBusy !== null}
+                    onClick={() => void addEncounterSound(selectedSoundCategory)}
+                  >
+                    {soundCustomizationBusy === `add:${selectedSoundCategory}`
+                      ? 'Adicionando...'
+                      : 'Adicionar MP3'}
+                  </button>
+                </div>
+                {selectedSoundOptions.length > 0 ? (
+                  <div className="scene-sound-options">
+                    {selectedSoundOptions.map((option) => (
+                      <div className="scene-sound-row" key={option.id}>
+                        <label className="scene-sound-option">
+                          <input
+                            type="checkbox"
+                            checked={option.enabled}
+                            disabled={soundCustomizationBusy !== null}
+                            onChange={(event) => void setSoundOptionEnabled(
+                              option.id,
+                              event.target.checked,
+                            )}
+                          />
+                          <span className="settings-checkmark" aria-hidden="true" />
+                          <span className="scene-sound-copy">
+                            <strong title={option.name}>{option.name}</strong>
+                            <small>{option.isDefault ? 'Padrão' : 'Personalizado'}</small>
+                          </span>
+                        </label>
+                        <button
+                          className={`preview-sound-button ${previewingSoundId === option.id ? 'is-playing' : ''}`}
+                          type="button"
+                          disabled={soundCustomizationBusy !== null}
+                          aria-label={previewingSoundId === option.id
+                            ? `Parar amostra de ${option.name}`
+                            : `Ouvir amostra de ${option.name}`}
+                          title={previewingSoundId === option.id
+                            ? 'Parar amostra'
+                            : 'Ouvir amostra'}
+                          onClick={() => void playSoundPreview(option)}
+                        >
+                          {previewingSoundId === option.id ? '■' : '▶'}
+                        </button>
+                        {!option.isDefault && (
+                          <button
+                            className="remove-custom-sound-button"
+                            type="button"
+                            disabled={soundCustomizationBusy !== null}
+                            aria-label={`Remover ${option.name}`}
+                            title="Remover efeito personalizado"
+                            onClick={() => {
+                              stopSoundPreview();
+                              setPendingSoundRemoval(option);
+                            }}
+                          >
+                            Remover
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="sound-category-empty">Nenhum som disponível.</p>
+                )}
+              </section>
+            )}
+            {soundCustomizationError && (
+              <p className="sound-customization-error" role="alert">
+                {soundCustomizationError}
+              </p>
+            )}
+          </section>
+        </div>
+      )}
+
+      {pendingSoundRemoval && (
+        <div className="modal-backdrop sound-removal-backdrop">
+          <section
+            className="confirmation-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-sound-title"
+          >
+            <p className="modal-eyebrow">Efeito personalizado</p>
+            <h2 id="remove-sound-title">Remover “{pendingSoundRemoval.name}”?</h2>
+            <p>O arquivo copiado para o BossBar também será excluído.</p>
+            <div className="modal-actions">
+              <button
+                className="modal-cancel-button"
+                type="button"
+                disabled={soundCustomizationBusy !== null}
+                onClick={() => setPendingSoundRemoval(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="modal-confirm-button"
+                type="button"
+                disabled={soundCustomizationBusy !== null}
+                onClick={() => void removeEncounterSound()}
+              >
+                {soundCustomizationBusy === pendingSoundRemoval.id
+                  ? 'Removendo...'
+                  : 'Sim, remover'}
+              </button>
+            </div>
           </section>
         </div>
       )}

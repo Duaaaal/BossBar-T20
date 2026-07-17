@@ -99,6 +99,20 @@ export type EncounterSoundEffectKind =
   | 'critical-damage'
   | 'heal';
 
+export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
+  'damage',
+  'critical-damage',
+  'heal',
+  'shield-impact',
+  'shield-break',
+];
+
+export const isEncounterSoundEffectKind = (
+  value: unknown,
+): value is EncounterSoundEffectKind =>
+  typeof value === 'string' &&
+  encounterSoundEffectKinds.includes(value as EncounterSoundEffectKind);
+
 export const getShieldMechanicSoundKind = (
   effect: HealthEffect,
 ): ShieldMechanicSoundKind | null => {
@@ -337,6 +351,27 @@ export type EncounterSoundEffect = {
   id: number;
   kind: EncounterSoundEffectKind;
   url: string;
+};
+
+export type EncounterSoundOption = {
+  id: string;
+  kind: EncounterSoundEffectKind;
+  name: string;
+  previewUrl: string;
+  isDefault: boolean;
+  enabled: boolean;
+};
+
+export type EncounterSoundCustomizationState = {
+  options: EncounterSoundOption[];
+  revision: number;
+};
+
+export type EncounterSoundCustomizationResult = {
+  ok: boolean;
+  state?: EncounterSoundCustomizationState;
+  error?: string;
+  canceled?: boolean;
 };
 
 export type SoundboardStop = {
