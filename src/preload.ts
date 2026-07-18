@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BossAPI } from './shared/api';
+import {
+  bossApiMethodsByRole,
+  type RendererRole,
+} from './shared/preload';
 import type {
   BackgroundSelectionResult,
   BackgroundState,
@@ -36,6 +40,14 @@ import type {
   BossLibrarySaveMode,
   BossLibrarySaveResult,
 } from './shared/library';
+import type {
+  SceneMediaSelectionResult,
+  SceneMediaSlot,
+  ScenePlan,
+  ScenePlanDraft,
+  SceneSaveResult,
+  SceneTransitionEvent,
+} from './shared/scene';
 
 let latestBattleState: BattleState | null = null;
 const stateSubscribers = new Set<(state: BattleState) => void>();
@@ -53,6 +65,8 @@ let latestEncounterEffectsState: EncounterEffectsState | null = null;
 const encounterEffectsSubscribers = new Set<
   (state: EncounterEffectsState) => void
 >();
+let latestScenePlan: ScenePlan | null = null;
+const scenePlanSubscribers = new Set<(state: ScenePlan) => void>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -80,6 +94,11 @@ ipcRenderer.on(
     for (const subscriber of musicPlaybackSubscribers) subscriber(state);
   },
 );
+
+ipcRenderer.on('scene:state-changed', (_event, state: ScenePlan) => {
+  latestScenePlan = state;
+  for (const subscriber of scenePlanSubscribers) subscriber(state);
+});
 
 ipcRenderer.on('soundboard:state-changed', (_event, state: SoundboardState) => {
   latestSoundboardState = state;
@@ -116,6 +135,26 @@ const bossAPI = {
     ipcRenderer.invoke('control:set-minimized', minimized),
   openMusicWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('music:open-window'),
+  openSceneEditor: (): Promise<boolean> =>
+    ipcRenderer.invoke('scene:open-window'),
+  confirmSceneEditorClose: () => ipcRenderer.send('scene:confirm-close'),
+  getScenePlan: async (): Promise<ScenePlan> => {
+    const state = (await ipcRenderer.invoke('scene:get-state')) as ScenePlan;
+    latestScenePlan = state;
+    return state;
+  },
+  saveScenePlan: (draft: ScenePlanDraft): Promise<SceneSaveResult> =>
+    ipcRenderer.invoke('scene:save', draft),
+  chooseScenePhaseMedia: (
+    phaseId: string,
+    slot: SceneMediaSlot,
+  ): Promise<SceneMediaSelectionResult> =>
+    ipcRenderer.invoke('scene:choose-media', phaseId, slot),
+  clearScenePhaseMedia: (
+    phaseId: string,
+    slot: SceneMediaSlot,
+  ): Promise<SceneSaveResult> =>
+    ipcRenderer.invoke('scene:clear-media', phaseId, slot),
   openBossLibrary: (): Promise<boolean> =>
     ipcRenderer.invoke('library:open-window'),
   hasEncounterLibraryEntries: (): Promise<boolean> =>
@@ -387,6 +426,32 @@ const bossAPI = {
     ipcRenderer.on('encounter-effects:play', listener);
     return () => ipcRenderer.removeListener('encounter-effects:play', listener);
   },
+  subscribeScenePlan: (callback: (state: ScenePlan) => void) => {
+    scenePlanSubscribers.add(callback);
+    if (latestScenePlan) callback(latestScenePlan);
+    return () => scenePlanSubscribers.delete(callback);
+  },
+  subscribeSceneEditorCloseRequested: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('scene:close-requested', listener);
+    return () => ipcRenderer.removeListener('scene:close-requested', listener);
+  },
+  subscribeSceneTransition: (
+    callback: (effect: SceneTransitionEvent) => void,
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      effect: SceneTransitionEvent,
+    ) => callback(effect);
+    ipcRenderer.on('scene:transition', listener);
+    return () => ipcRenderer.removeListener('scene:transition', listener);
+  },
 } satisfies BossAPI;
 
-contextBridge.exposeInMainWorld('bossAPI', bossAPI);
+export const exposeBossApi = (role: RendererRole) => {
+  const roleApi = Object.fromEntries(
+    bossApiMethodsByRole[role].map((method) => [method, bossAPI[method]]),
+  ) as Partial<BossAPI>;
+
+  contextBridge.exposeInMainWorld('bossAPI', Object.freeze(roleApi));
+};

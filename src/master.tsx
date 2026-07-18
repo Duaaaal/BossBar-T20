@@ -92,9 +92,6 @@ const MasterApp = () => {
   const [soundCategoryMenuOpen, setSoundCategoryMenuOpen] = useState(false);
   const [soundCategoryMenuPosition, setSoundCategoryMenuPosition] = useState<SoundCategoryMenuPosition | null>(null);
   const [previewingSoundId, setPreviewingSoundId] = useState<string | null>(null);
-  const [backgroundError, setBackgroundError] = useState('');
-  const [pendingBackgroundName, setPendingBackgroundName] = useState<string | null>(null);
-  const [pendingBackgroundRemoval, setPendingBackgroundRemoval] = useState(false);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const [overwriteConfirmationOpen, setOverwriteConfirmationOpen] = useState(false);
@@ -239,15 +236,7 @@ const MasterApp = () => {
   );
 
   useEffect(
-    () => window.bossAPI.subscribeBackgroundError(setBackgroundError),
-    [],
-  );
-
-  useEffect(
     () => window.bossAPI.subscribeBossLoaded(({ bossCount }) => {
-      setPendingBackgroundName(null);
-      setPendingBackgroundRemoval(false);
-      setBackgroundError('');
       setLibraryMessage(
         bossCount === 1
           ? 'Encontro carregado da biblioteca.'
@@ -279,31 +268,6 @@ const MasterApp = () => {
       if (autosaveNoticeTimer.current) clearTimeout(autosaveNoticeTimer.current);
     };
   }, []);
-
-  const chooseBackground = async () => {
-    setBackgroundError('');
-    const result = await window.bossAPI.chooseBackground();
-    if (result.ok) {
-      setPendingBackgroundName(result.name ?? null);
-      setPendingBackgroundRemoval(false);
-    } else if (!result.canceled) {
-      setBackgroundError(result.error ?? 'Não foi possível carregar o arquivo.');
-    }
-  };
-
-  const clearBackground = async () => {
-    setBackgroundError('');
-    if (await window.bossAPI.clearBackground()) {
-      setPendingBackgroundName(null);
-      setPendingBackgroundRemoval(true);
-    }
-  };
-
-  const applyBackground = () => {
-    window.bossAPI.dispatch({ type: 'commit-background' });
-    setPendingBackgroundName(null);
-    setPendingBackgroundRemoval(false);
-  };
 
   const saveEncounter = async (mode: BossLibrarySaveMode = 'prompt') => {
     const draft = latestLibraryDraft.current;
@@ -511,10 +475,6 @@ const MasterApp = () => {
 
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
-  const backgroundPending = Boolean(pendingBackgroundName || pendingBackgroundRemoval);
-  const backgroundCanBeRemoved = Boolean(
-    (state.backgroundName || pendingBackgroundName) && !pendingBackgroundRemoval,
-  );
   const unpreparedBosses = state.bosses.filter(
     (boss) => !boss.identityPrepared || !boss.actionPrepared,
   );
@@ -595,19 +555,6 @@ const MasterApp = () => {
 
       <section className="compact-panel">
         <div className="compact-panel-title"><h2>Personalização de Cena</h2></div>
-        <div className="background-copy">
-          <strong>Imagem, GIF ou vídeo</strong>
-          <span>{pendingBackgroundRemoval ? 'Remoção pendente' : pendingBackgroundName ? `${pendingBackgroundName} — pendente` : state.backgroundName ?? 'Nenhum arquivo selecionado'}</span>
-        </div>
-        <div className={`background-actions ${backgroundCanBeRemoved ? 'has-remove' : ''}`}>
-          <button className="background-button" type="button" onClick={() => void chooseBackground()}>Upload</button>
-          <button className="background-apply-button" type="button" disabled={!backgroundPending} onClick={applyBackground}>Aplicar</button>
-          {backgroundCanBeRemoved && (
-            <button className="background-remove-button" type="button" onClick={() => void clearBackground()}>Remover</button>
-          )}
-        </div>
-        <p className="background-note">1920 × 1080 · 16:9 · até 25 MB</p>
-        {backgroundError && <p className="master-error">{backgroundError}</p>}
         <div className="scene-customization-actions">
           <button
             className="sound-customization-button"
@@ -620,10 +567,9 @@ const MasterApp = () => {
           <button
             className="boss-phases-button"
             type="button"
-            disabled
-            title="A criação de fases será implementada em uma próxima etapa"
+            onClick={() => void window.bossAPI.openSceneEditor()}
           >
-            Fases do chefão
+            Editar cena
           </button>
         </div>
       </section>

@@ -6,6 +6,11 @@ export type ByteRange = {
 
 export type BackgroundMediaType = 'image' | 'video';
 
+export type MediaOriginPolicy = {
+  allowed: boolean;
+  responseOrigin: string | null;
+};
+
 export const backgroundImageExtensions = [
   '.avif',
   '.bmp',
@@ -55,6 +60,17 @@ export const backgroundMediaTypeForFile = (
 
 export const backgroundVideoMimeTypeForFile = (fileName: string) =>
   backgroundVideoMimeTypes[fileExtension(fileName)] ?? null;
+
+export const resolveMediaOriginPolicy = (
+  requestOrigin: string | null,
+  rendererOrigin: string,
+): MediaOriginPolicy => {
+  if (!requestOrigin) return { allowed: true, responseOrigin: null };
+  if (requestOrigin === rendererOrigin) {
+    return { allowed: true, responseOrigin: rendererOrigin };
+  }
+  return { allowed: false, responseOrigin: null };
+};
 
 export const resolveByteRange = (
   rangeHeader: string | null,

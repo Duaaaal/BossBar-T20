@@ -1,7 +1,7 @@
 {
   "name": "boss-battle",
   "productName": "BossBar - Tormenta20",
-  "version": "1.4.5",
+  "version": "1.5.0",
   "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,
@@ -23,8 +23,7 @@
     "discord"
   ],
   "author": {
-    "name": "Brian",
-    "email": "Briannascimento111@gmail.com"
+    "name": "Brian"
   },
   "license": "MIT",
   "devDependencies": {
@@ -36,19 +35,25 @@
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@typescript-eslint/eslint-plugin": "^8.63.0",
-    "@typescript-eslint/parser": "^8.63.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "electron": "43.1.0",
+    "@typescript-eslint/eslint-plugin": "8.64.0",
+    "@typescript-eslint/parser": "8.64.0",
+    "@vitejs/plugin-react": "6.0.3",
+    "electron": "43.1.1",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "typescript": "^5.9.3",
-    "vite": "^5.4.21"
+    "vite": "8.1.5"
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
-    "music-metadata": "^11.13.0",
+    "music-metadata": "11.14.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
+  },
+  "overrides": {
+    "@electron/node-gyp": "10.2.0-electron.2"
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.4": true
   }
 }

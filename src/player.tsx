@@ -25,7 +25,8 @@ import {
   type SoundboardState,
   volumeToGain,
 } from './shared/battle';
-import { statusIconUrl } from './shared/bundled-assets';
+import type { ScenePlan, SceneTransitionEvent } from './shared/scene';
+import { bundledAssetUrl, statusIconUrl } from './shared/bundled-assets';
 import {
   getDamageFormulaRange,
   getActiveStatusDescription,
@@ -135,10 +136,25 @@ const HealthRuler = memo(function HealthRuler() {
   );
 });
 
+const PhaseHealthMarkers = memo(function PhaseHealthMarkers({
+  markers,
+}: {
+  markers: number[];
+}) {
+  return markers.length > 0 ? (
+    <div className="phase-health-markers" aria-hidden="true">
+      {markers.map((marker) => (
+        <span key={marker} style={{ left: `${marker}%` }} />
+      ))}
+    </div>
+  ) : null;
+});
+
 type AnimatedHealthBarProps = {
   activeStatuses: BossState['activeStatuses'];
   current: number;
   maximum: number;
+  phaseMarkers: number[];
   shield: number;
   effects: HealthEffect[];
   visuals: EncounterVisualEffectSettings;
@@ -151,6 +167,7 @@ const AnimatedHealthBar = ({
   shield,
   effects,
   visuals,
+  phaseMarkers,
 }: AnimatedHealthBarProps) => {
   const initialPercent = healthPercent(current, maximum);
   const statusTooltipPrefix = useId();
@@ -399,6 +416,7 @@ const AnimatedHealthBar = ({
         />
         <div className="health-bar-highlight" />
         <HealthRuler />
+        <PhaseHealthMarkers markers={phaseMarkers} />
         {effects.filter((effect) =>
           effect.type === 'damage'
             ? visuals.damageEffect
@@ -1046,11 +1064,13 @@ const BossHud = memo(function BossHud({
   boss,
   bossCount,
   effects,
+  phaseMarkers,
   visuals,
 }: {
   boss: BossState;
   bossCount: number;
   effects: HealthEffect[];
+  phaseMarkers: number[];
   visuals: EncounterVisualEffectSettings;
 }) {
   const hudScale = 1 - (bossCount - 1) * 0.15;
@@ -1065,6 +1085,7 @@ const BossHud = memo(function BossHud({
         current={boss.currentHealth}
         effects={effects}
         maximum={boss.maxHealth}
+        phaseMarkers={phaseMarkers}
         shield={boss.shield}
         visuals={visuals}
       />
@@ -1150,11 +1171,74 @@ const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
   );
 };
 
+const SceneTransitionPlayer = () => {
+  const [effect, setEffect] = useState<SceneTransitionEvent | null>(null);
+  const universalMuted = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getMusicState().then((state) => {
+      if (active) universalMuted.current = state.universalMuted;
+    });
+    const unsubscribeMusic = window.bossAPI.subscribeMusic((state) => {
+      universalMuted.current = state.universalMuted;
+    });
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const audios = new Set<HTMLAudioElement>();
+    const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
+      setEffect(nextEffect);
+      if (nextEffect.soundUrl && !universalMuted.current) {
+        const audio = new Audio(nextEffect.soundUrl);
+        audios.add(audio);
+        audio.preload = 'auto';
+        audio.volume = 1;
+        const release = () => {
+          audios.delete(audio);
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.load();
+        };
+        audio.addEventListener('ended', release, { once: true });
+        audio.addEventListener('error', release, { once: true });
+        void audio.play().catch(release);
+      }
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        setEffect((current) => current?.id === nextEffect.id ? null : current);
+      }, nextEffect.durationMs + 80);
+      timers.add(timer);
+    });
+    return () => {
+      active = false;
+      unsubscribeMusic();
+      unsubscribeTransition();
+      timers.forEach(clearTimeout);
+      audios.forEach((audio) => {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      });
+    };
+  }, []);
+
+  return effect ? (
+    <div
+      className={`scene-transition scene-transition-${effect.kind}`}
+      key={effect.id}
+      style={{ '--scene-transition-duration': `${effect.durationMs}ms` } as CSSProperties}
+      aria-hidden="true"
+    >
+      <div className="scene-transition-burst" />
+    </div>
+  ) : null;
+};
+
 const PlayerApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState(
     initialEncounterEffectsState,
   );
+  const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
   const encounterEffectsRef = useRef(initialEncounterEffectsState);
   const [background, setBackground] = useState<BackgroundState>({
     url: null,
@@ -1180,6 +1264,20 @@ const PlayerApp = () => {
     });
 
     const unsubscribe = window.bossAPI.subscribe(setState);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getScenePlan().then((nextPlan) => {
+      if (active) setScenePlan(nextPlan);
+    });
+    const unsubscribe = window.bossAPI.subscribeScenePlan((nextPlan) => {
+      if (active) setScenePlan(nextPlan);
+    });
     return () => {
       active = false;
       unsubscribe();
@@ -1402,13 +1500,13 @@ const PlayerApp = () => {
     return <main className="player-loading">Preparando o encontro...</main>;
   }
 
-  const backgroundStyle = state.battleStarted &&
-    background.url &&
-    background.mediaType === 'image'
-    ? ({
-        '--battle-background': `url("${background.url}")`,
-      } as CSSProperties)
-    : undefined;
+  const backgroundStyle = {
+    '--shield-icon': `url("${bundledAssetUrl('shield-icon.png')}")`,
+    '--waiting-background': `url("${bundledAssetUrl('waiting-background.png')}")`,
+    ...(state.battleStarted && background.url && background.mediaType === 'image'
+      ? { '--battle-background': `url("${background.url}")` }
+      : {}),
+  } as CSSProperties;
   const activeVideoUrl = state.battleStarted &&
     background.mediaType === 'video'
     ? background.url
@@ -1423,6 +1521,7 @@ const PlayerApp = () => {
       <MusicPlayer battle={state} />
       <SoundboardPlayer />
       <EncounterEffectsPlayer />
+      <SceneTransitionPlayer />
       <main className="player-stage" style={backgroundStyle}>
         {activeVideoUrl && (
           <video
@@ -1463,6 +1562,13 @@ const PlayerApp = () => {
               boss={boss}
               bossCount={visibleBosses.length}
               effects={healthEffects[boss.id] ?? noHealthEffects}
+              phaseMarkers={scenePlan?.showPhaseMarkers
+                ? [...new Set(scenePlan.phases
+                    .slice(1)
+                    .filter((phase) => phase.triggerBossId === boss.id)
+                    .map((phase) => phase.startPercent)
+                    .filter((percent) => percent > 0 && percent < 100))]
+                : []}
               visuals={encounterEffects.visuals}
               key={boss.id}
             />

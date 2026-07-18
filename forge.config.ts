@@ -40,7 +40,37 @@ const config: ForgeConfig = {
           target: 'main',
         },
         {
-          entry: 'src/preload.ts',
+          entry: 'src/preload-control.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-launcher.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-library.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-master.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-music.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-player.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload-scene-editor.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },
@@ -51,6 +81,9 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.mts',
         },
       ],
+      // Cada preload possui uma API distinta. A compilação sequencial evita que
+      // múltiplos alvos disputem o mesmo diretório de saída do Forge/Vite.
+      concurrent: false,
     }),
     // Fuses are used to enable/disable various Electron functionality
     // at package time, before code signing the application

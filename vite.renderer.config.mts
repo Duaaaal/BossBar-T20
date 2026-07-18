@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // eslint-disable-next-line import/no-unresolved -- pacote ESM resolvido pelo Vite
 import react from '@vitejs/plugin-react';
+// eslint-disable-next-line import/no-unresolved -- o resolvedor do ESLint 8 não interpreta os exports condicionais do Vite 8
 import { defineConfig } from 'vite';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ export default defineConfig({
         control: path.resolve(projectRoot, 'control.html'),
         music: path.resolve(projectRoot, 'music.html'),
         library: path.resolve(projectRoot, 'library.html'),
+        sceneEditor: path.resolve(projectRoot, 'scene-editor.html'),
       },
     },
   },

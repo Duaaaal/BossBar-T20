@@ -34,6 +34,14 @@ import type {
   BossLibrarySaveMode,
   BossLibrarySaveResult,
 } from './library';
+import type {
+  SceneMediaSelectionResult,
+  SceneMediaSlot,
+  ScenePlan,
+  ScenePlanDraft,
+  SceneSaveResult,
+  SceneTransitionEvent,
+} from './scene';
 
 export type BossAPI = {
   getState: () => Promise<BattleState>;
@@ -47,6 +55,18 @@ export type BossAPI = {
   isPresentationOpen: () => Promise<boolean>;
   setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
   openMusicWindow: () => Promise<boolean>;
+  openSceneEditor: () => Promise<boolean>;
+  confirmSceneEditorClose: () => void;
+  getScenePlan: () => Promise<ScenePlan>;
+  saveScenePlan: (draft: ScenePlanDraft) => Promise<SceneSaveResult>;
+  chooseScenePhaseMedia: (
+    phaseId: string,
+    slot: SceneMediaSlot,
+  ) => Promise<SceneMediaSelectionResult>;
+  clearScenePhaseMedia: (
+    phaseId: string,
+    slot: SceneMediaSlot,
+  ) => Promise<SceneSaveResult>;
   openBossLibrary: () => Promise<boolean>;
   hasEncounterLibraryEntries: () => Promise<boolean>;
   startNewEncounter: () => Promise<boolean>;
@@ -160,5 +180,10 @@ export type BossAPI = {
   ) => () => void;
   subscribeEncounterEffect: (
     callback: (effect: EncounterSoundEffect) => void,
+  ) => () => void;
+  subscribeScenePlan: (callback: (state: ScenePlan) => void) => () => void;
+  subscribeSceneEditorCloseRequested: (callback: () => void) => () => void;
+  subscribeSceneTransition: (
+    callback: (effect: SceneTransitionEvent) => void,
   ) => () => void;
 };

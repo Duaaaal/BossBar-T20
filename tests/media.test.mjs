@@ -4,6 +4,7 @@ import {
   backgroundMediaTypeForFile,
   backgroundVideoMimeTypeForFile,
   resolveByteRange,
+  resolveMediaOriginPolicy,
 } from '../src/shared/media.ts';
 
 test('identifica imagens e vídeos compatíveis para o fundo', () => {
@@ -54,4 +55,26 @@ test('rejeita intervalos inválidos, múltiplos ou arquivos vazios', () => {
   assert.equal(resolveByteRange('bytes=-0', 1000), null);
   assert.equal(resolveByteRange('bytes=0-1,4-5', 1000), null);
   assert.equal(resolveByteRange(null, 0), null);
+});
+
+test('permite mídia apenas para a origem do renderer', () => {
+  assert.deepEqual(resolveMediaOriginPolicy(null, 'null'), {
+    allowed: true,
+    responseOrigin: null,
+  });
+  assert.deepEqual(resolveMediaOriginPolicy('null', 'null'), {
+    allowed: true,
+    responseOrigin: 'null',
+  });
+  assert.deepEqual(
+    resolveMediaOriginPolicy(
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5173',
+    ),
+    { allowed: true, responseOrigin: 'http://127.0.0.1:5173' },
+  );
+  assert.deepEqual(
+    resolveMediaOriginPolicy('https://example.com', 'null'),
+    { allowed: false, responseOrigin: null },
+  );
 });
