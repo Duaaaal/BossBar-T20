@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
 import './launcher.css';
+import './scrollbars.css';
+
+installDisabledControlTooltips();
 
 const LauncherApp = () => {
   const [hasSavedEncounters, setHasSavedEncounters] = useState(false);
@@ -31,6 +35,9 @@ const LauncherApp = () => {
           className="launcher-load"
           type="button"
           disabled={loading || !hasSavedEncounters}
+          data-disabled-reason={loading
+            ? 'Aguarde a biblioteca carregar'
+            : 'Nenhum encontro salvo'}
           title={!loading && !hasSavedEncounters ? 'Nenhum encontro salvo' : undefined}
           onClick={() => void window.bossAPI.openBossLibrary()}
         >

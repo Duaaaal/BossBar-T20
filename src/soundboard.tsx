@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { BattleState, SoundboardSlot, SoundboardState } from './shared/battle';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { installUndoShortcut } from './shared/undo-shortcut';
 import './soundboard.css';
 import './scrollbars.css';
+
+installDisabledControlTooltips();
+installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 const SoundboardApp = () => {
   const [state, setState] = useState<SoundboardState | null>(null);
@@ -81,8 +86,8 @@ const SoundboardApp = () => {
           <h1>Soundboard</h1>
         </div>
         <div className="soundboard-header-actions">
-          <button type="button" disabled={!state.slots.some((slot) => slot.assigned)} onClick={() => window.bossAPI.dispatchSoundboard({ type: 'stop-all' })}>Parar sons</button>
-          <button type="button" disabled={!state.slots.some((slot) => slot.assigned)} onClick={() => setClearOpen(true)}>Limpar tudo</button>
+          <button type="button" disabled={!state.slots.some((slot) => slot.assigned)} data-disabled-reason="Nenhum atalho possui som" onClick={() => window.bossAPI.dispatchSoundboard({ type: 'stop-all' })}>Parar sons</button>
+          <button type="button" disabled={!state.slots.some((slot) => slot.assigned)} data-disabled-reason="Nenhum atalho possui som" onClick={() => setClearOpen(true)}>Limpar tudo</button>
         </div>
       </header>
 

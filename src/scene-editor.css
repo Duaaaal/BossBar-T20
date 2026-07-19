@@ -6,19 +6,13 @@ button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .48; }
 input:disabled, select:disabled { cursor: default; opacity: .48; }
 .scene-loading { display: grid; min-height: 100vh; place-items: center; color: #a99ba8; background: #100d13; }
-.scene-shell { display: grid; height: 100vh; grid-template-rows: auto auto minmax(0, 1fr) auto; background: radial-gradient(circle at 75% -20%, rgba(113, 45, 75, .32), transparent 42%), linear-gradient(150deg, #19131c, #0d0a10 72%); }
+.scene-shell { display: grid; height: 100vh; grid-template-rows: auto minmax(0, 1fr) auto; background: radial-gradient(circle at 75% -20%, rgba(113, 45, 75, .32), transparent 42%), linear-gradient(150deg, #19131c, #0d0a10 72%); }
 .scene-header { position: relative; display: flex; min-height: 68px; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(184, 94, 123, .28); padding: 10px 104px 10px 20px; background: rgba(13, 10, 15, .72); box-shadow: 0 10px 30px rgba(0, 0, 0, .22); }
 .scene-header-error { position: absolute; right: 24px; bottom: 5px; max-width: 60%; margin: 0; color: #ef8998; font-size: .62rem; text-align: right; }
 .scene-header p, .scene-card-heading small { margin: 0 0 3px; color: #c27691; font-size: .67rem; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; }
 .scene-header h1 { margin: 0; color: #f0e4ec; font-family: Georgia, serif; font-size: 1.8rem; letter-spacing: .04em; }
 .scene-reset-button { position: absolute; top: 17px; right: 20px; min-width: 70px; min-height: 32px; border: 1px solid #8b4559; border-radius: 7px; background: transparent; color: #e39aaa; font-size: .66rem; font-weight: 900; }
 .scene-reset-button:hover:not(:disabled) { border-color: #d3667f; color: #ffd2db; }
-.scene-boss-tabs { display: flex; min-height: 40px; align-items: stretch; gap: 5px; border-bottom: 1px solid rgba(154, 78, 105, .25); padding: 5px 12px 0; background: rgba(12, 9, 14, .9); }
-.scene-boss-tabs button { display: flex; min-width: 0; max-width: 235px; flex: 1; align-items: center; gap: 7px; border: 1px solid #443442; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 6px 10px; background: #171119; color: #968895; }
-.scene-boss-tabs button > span { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 1px solid #6e4358; border-radius: 50%; color: #c87891; font-size: .57rem; font-weight: 950; }
-.scene-boss-tabs button > strong { overflow: hidden; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
-.scene-boss-tabs button.is-selected { border-color: #b85675; background: linear-gradient(145deg, #482336, #652c40); color: #fff; }
-.scene-boss-tabs .scene-add-boss-tab { max-width: 37px; justify-content: center; border-style: dashed; color: #d0839b; font-size: 1rem; }
 input, select { min-width: 0; height: 36px; border: 1px solid #493746; border-radius: 7px; outline: 0; padding: 6px 9px; background: #100c12; color: #eee7ed; }
 input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(192, 78, 116, .2); }
 .scene-workspace { display: grid; min-height: 0; grid-template-columns: 210px minmax(0, 1fr); }
@@ -44,6 +38,8 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
 .scene-card-heading h2 { margin: 0; color: #e9dde5; font-family: Georgia, serif; font-size: 1.04rem; }
 .scene-card-heading p { max-width: 330px; margin: 0; color: #887a87; font-size: .63rem; text-align: right; }
 .scene-card-heading > label { display: grid; width: min(420px, 52%); gap: 4px; color: #9f919d; font-size: .62rem; font-weight: 800; }
+.scene-card-heading .phase-overflow-toggle { display: flex; width: auto; align-items: center; gap: 8px; color: #b8abb6; cursor: pointer; }
+.phase-overflow-toggle input { width: 16px; height: 16px; accent-color: #c45b7b; }
 .trigger-grid { display: grid; grid-template-columns: repeat(2, minmax(92px, .7fr)) minmax(125px, 1fr) minmax(86px, .65fr); gap: 9px; }
 .trigger-grid.is-secondary { grid-template-columns: repeat(2, minmax(110px, 190px)); }
 .trigger-grid > label, .boss-values label { display: grid; min-width: 0; gap: 4px; color: #a99aa7; font-size: .61rem; font-weight: 800; }
@@ -75,18 +71,28 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
 .inherit-note { margin: -5px 0 10px; color: #817480; font-size: .6rem; }
 .phase-boss-list { display: grid; gap: 9px; }
 .phase-boss { border: 1px solid #42323f; border-radius: 9px; padding: 10px; background: rgba(12, 9, 13, .48); transition: opacity 150ms ease; }
+.phase-boss-card { padding-top: 0; }
+.phase-boss-tabs { display: flex; min-height: 42px; align-items: stretch; gap: 5px; margin: 0 -15px 12px; border-bottom: 1px solid rgba(154, 78, 105, .25); padding: 5px 10px 0; background: rgba(12, 9, 14, .64); }
+.phase-boss-tabs button { display: flex; min-width: 0; max-width: 245px; flex: 1; align-items: center; gap: 7px; border: 1px solid #443442; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 6px 10px; background: #171119; color: #968895; }
+.phase-boss-tabs button > span { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 1px solid #6e4358; border-radius: 50%; color: #c87891; font-size: .57rem; font-weight: 950; }
+.phase-boss-tabs button > strong { overflow: hidden; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+.phase-boss-tabs button.is-selected { border-color: #b85675; background: linear-gradient(145deg, #482336, #652c40); color: #fff; }
+.phase-boss-tabs .scene-add-boss-tab { max-width: 39px; justify-content: center; border-style: dashed; color: #d0839b; font-size: 1rem; }
 .phase-boss.is-absent { opacity: .58; }
 .phase-boss header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .phase-boss header strong { color: #dfd3db; font-size: .72rem; }
 .phase-boss header select { width: 150px; height: 30px; padding-block: 3px; font-size: .62rem; }
 .phase-boss header > div { display: flex; align-items: center; gap: 6px; }
-.boss-appearance-select { display: flex; align-items: center; gap: 5px; color: #9f919d; font-size: .57rem; font-weight: 800; white-space: nowrap; }
-.phase-boss header .boss-appearance-select select { width: 112px; }
 .phase-boss .remove-scene-boss { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #713b48; border-radius: 7px; background: transparent; color: #d87f8a; font-size: 1rem; }
 .phase-boss .remove-scene-boss:hover { border-color: #d35e71; background: rgba(130, 35, 55, .3); color: #ffb1bb; }
 .boss-values { display: grid; grid-template-columns: minmax(125px, 1.35fr) repeat(9, minmax(58px, .6fr)); gap: 6px; }
 .boss-values input { width: 100%; height: 31px; padding: 5px 6px; font-size: .65rem; }
 .boss-values label span { overflow: hidden; padding-left: 1px; font-size: .55rem; text-overflow: ellipsis; white-space: nowrap; }
+.boss-action-values { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; margin-top: 9px; }
+.boss-action-values label { display: grid; min-width: 0; gap: 4px; color: #a99aa7; font-size: .61rem; font-weight: 800; }
+.boss-action-values label span small { color: #756a74; font-size: .52rem; font-weight: 700; }
+.boss-action-values textarea { width: 100%; min-height: 54px; resize: none; border: 1px solid #493746; border-radius: 7px; outline: 0; padding: 7px 9px; background: #100c12; color: #eee7ed; font: inherit; font-size: .67rem; line-height: 1.35; }
+.boss-action-values textarea:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(192, 78, 116, .2); }
 .scene-footer { display: flex; min-height: 60px; align-items: center; justify-content: flex-end; gap: 18px; border-top: 1px solid rgba(184, 94, 123, .3); padding: 10px 22px; background: rgba(12, 9, 14, .94); box-shadow: 0 -10px 28px rgba(0, 0, 0, .2); }
 .scene-footer > button { min-width: 150px; min-height: 38px; border: 1px solid #d07894; border-radius: 8px; background: linear-gradient(145deg, #743248, #b44d6e); color: #fff; font-size: .73rem; font-weight: 900; }
 .scene-footer > button:hover:not(:disabled) { filter: brightness(1.15) saturate(1.08); }

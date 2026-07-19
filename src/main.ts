@@ -42,6 +42,7 @@ import {
   type BackgroundSelectionResult,
   type BackgroundState,
   type BattleState,
+  type BossState,
   type EncounterEffectsState,
   type EncounterGeneralSetting,
   type EncounterSoundCustomizationResult,
@@ -91,6 +92,7 @@ import {
 import {
   adjacentScenePlaylistTrackId,
   applySceneBossPatch,
+  clampSceneOverflowHealth,
   createScenePlan,
   normalizeSceneBossPatch,
   validateSceneRanges,
@@ -280,6 +282,66 @@ let encounterEffectsAudioState = {
   sounds: { ...initialEncounterEffectsState.sounds },
   visuals: { ...initialEncounterEffectsState.visuals },
   revision: initialEncounterEffectsState.revision,
+};
+type AppUndoSnapshot = {
+  battleState: BattleState;
+  scenePlan: ScenePlan;
+  sceneMediaPaths: Array<[string, string]>;
+  scenePlaylistPaths: Array<[string, string]>;
+  sceneBossArchive: Array<[string, BossState]>;
+  activeBackgroundFilePath: string | null;
+  configuredBackgroundFilePath: string | null;
+  configuredBackgroundName: string | null;
+  pendingBackgroundChange:
+    | { type: 'set'; filePath: string; name: string }
+    | { type: 'clear' }
+    | null;
+  linkedLibraryEntryId: string | null;
+  musicTracks: InternalMusicTrack[];
+  musicState: typeof musicState;
+  musicPlaybackState: MusicPlaybackState;
+  soundboardSlots: Array<InternalSoundboardSlot | null>;
+  soundboardAudioState: typeof soundboardAudioState;
+  encounterEffectsAudioState: typeof encounterEffectsAudioState;
+};
+const appUndoHistory: AppUndoSnapshot[] = [];
+const MAX_APP_UNDO_HISTORY = 5;
+let lastAppUndoKey: string | null = null;
+let lastAppUndoRecordedAt = 0;
+
+const captureAppUndoSnapshot = (): AppUndoSnapshot => structuredClone({
+  battleState,
+  scenePlan,
+  sceneMediaPaths: [...sceneMediaPaths],
+  scenePlaylistPaths: [...scenePlaylistPaths],
+  sceneBossArchive: [...sceneBossArchive],
+  activeBackgroundFilePath,
+  configuredBackgroundFilePath,
+  configuredBackgroundName,
+  pendingBackgroundChange,
+  linkedLibraryEntryId,
+  musicTracks,
+  musicState,
+  musicPlaybackState,
+  soundboardSlots,
+  soundboardAudioState,
+  encounterEffectsAudioState,
+});
+
+const rememberAppChange = (
+  snapshot = captureAppUndoSnapshot(),
+  coalesceKey?: string,
+) => {
+  const recordedAt = Date.now();
+  if (
+    coalesceKey &&
+    lastAppUndoKey === coalesceKey &&
+    recordedAt - lastAppUndoRecordedAt <= 600
+  ) return;
+  appUndoHistory.push(snapshot);
+  if (appUndoHistory.length > MAX_APP_UNDO_HISTORY) appUndoHistory.shift();
+  lastAppUndoKey = coalesceKey ?? null;
+  lastAppUndoRecordedAt = recordedAt;
 };
 let masterFocusTimer: ReturnType<typeof setTimeout> | null = null;
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1017,6 +1079,7 @@ const defaultStoredScene = (bosses: StoredLibraryBoss[]): StoredScenePlan => {
       bosses: slots.map((bossSlot) => ({
         bossId: bossSlot.bossId,
         presence: 'inherit' as const,
+        carryOverflowDamage: true,
         patch: {},
       })),
     }],
@@ -1070,6 +1133,7 @@ const normalizeStoredScene = (
       return [{
         bossId: directive.bossId,
         presence: directive.presence as SceneBossDirective['presence'],
+        carryOverflowDamage: directive.carryOverflowDamage !== false,
         patch: normalizeSceneBossPatch(directive.patch),
       }];
     });
@@ -2764,6 +2828,7 @@ const syncSceneBossSlots = () => {
       phase.bosses.find((directive) => directive.bossId === slot.bossId) ?? {
         bossId: slot.bossId,
         presence: 'inherit' as const,
+        carryOverflowDamage: true,
         patch: {},
       },
     ),
@@ -2897,6 +2962,7 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
       return [{
         bossId: rawDirective.bossId,
         presence: rawDirective.presence as SceneBossDirective['presence'],
+        carryOverflowDamage: rawDirective.carryOverflowDamage !== false,
         patch: normalizeSceneBossPatch(rawDirective.patch),
       }];
     });
@@ -3528,6 +3594,16 @@ ipcMain.handle('app:get-version', (event) => {
   assertAuthorizedIpcSender(isMasterSender(event.sender.id));
   return app.getVersion();
 });
+ipcMain.handle('app:undo', (event) => {
+  assertAuthorizedIpcSender(
+    isEncounterControllerSender(event.sender.id) ||
+      isPlayerSender(event.sender.id) ||
+      isSoundboardSender(event.sender.id) ||
+      isLibrarySender(event.sender.id) ||
+      isSceneEditorSender(event.sender.id),
+  );
+  return restoreLastAppChange();
+});
 
 ipcMain.handle('presentation:is-open', (event) => {
   assertAuthorizedIpcSender(isMasterSender(event.sender.id));
@@ -3657,11 +3733,23 @@ ipcMain.handle('scene:open-window', (event) => {
 });
 
 ipcMain.handle('scene:release-blackout', (event) =>
-  isMasterSender(event.sender.id) ? releaseSceneBlackout() : false,
+  isMasterSender(event.sender.id)
+    ? (() => {
+        if (!scenePlan.blackoutActive) return false;
+        rememberAppChange();
+        return releaseSceneBlackout();
+      })()
+    : false,
 );
 
 ipcMain.handle('scene:activate-blackout', (event) =>
-  isMasterSender(event.sender.id) ? activateSceneBlackout() : false,
+  isMasterSender(event.sender.id)
+    ? (() => {
+        if (scenePlan.blackoutActive) return false;
+        rememberAppChange();
+        return activateSceneBlackout();
+      })()
+    : false,
 );
 
 ipcMain.handle(
@@ -3746,11 +3834,15 @@ ipcMain.handle('scene:reset-draft', (event): ScenePlanDraft | null => {
   };
 });
 
-ipcMain.handle('scene:save', (event, value: unknown): SceneSaveResult =>
-  isSceneEditorSender(event.sender.id)
-    ? saveScenePlan(value)
-    : { ok: false, error: 'Ação não autorizada.' },
-);
+ipcMain.handle('scene:save', (event, value: unknown): SceneSaveResult => {
+  if (!isSceneEditorSender(event.sender.id)) {
+    return { ok: false, error: 'Ação não autorizada.' };
+  }
+  const snapshot = captureAppUndoSnapshot();
+  const result = saveScenePlan(value);
+  if (result.ok) rememberAppChange(snapshot);
+  return result;
+});
 
 ipcMain.handle(
   'scene:choose-media',
@@ -3972,21 +4064,26 @@ ipcMain.on('scene-playlist:dispatch', (
   const phaseId = phaseIdValue;
   const slot = slotValue as SceneAudioSlot;
   const pending = ensurePendingScenePlaylist(phaseId, slot);
+  const commandSnapshot = captureAppUndoSnapshot();
   const tracks = [...pending.summary.tracks];
   const next = cloneScenePlaylistSummary(pending.summary);
+  let changed = false;
   switch (command.type) {
     case 'previous':
       if (tracks.length > 1) {
         next.currentTrackId = adjacentScenePlaylistTrackId(next, -1);
+        changed = true;
       }
       break;
     case 'next':
       if (tracks.length > 1) {
         next.currentTrackId = adjacentScenePlaylistTrackId(next, 1);
+        changed = true;
       }
       break;
     case 'select-track':
       if (tracks.some((track) => track.id === command.trackId)) {
+        changed = next.currentTrackId !== command.trackId;
         next.currentTrackId = command.trackId;
       } else return;
       break;
@@ -3995,6 +4092,7 @@ ipcMain.on('scene-playlist:dispatch', (
       if (removedIndex < 0) return;
       pending.paths.delete(command.trackId);
       next.tracks = tracks.filter((track) => track.id !== command.trackId);
+      changed = true;
       if (next.currentTrackId === command.trackId) {
         next.currentTrackId = next.tracks[Math.min(removedIndex, next.tracks.length - 1)]?.id ?? null;
       }
@@ -4004,22 +4102,27 @@ ipcMain.on('scene-playlist:dispatch', (
       pending.paths.clear();
       next.tracks = [];
       next.currentTrackId = null;
+      changed = tracks.length > 0;
       break;
     case 'set-volume':
       if (typeof command.volume !== 'number' || !Number.isFinite(command.volume)) return;
       next.volume = Math.max(0, Math.min(1, command.volume));
+      changed = next.volume !== pending.summary.volume;
       break;
     case 'set-muted':
       if (typeof command.muted !== 'boolean') return;
       next.muted = command.muted;
+      changed = next.muted !== pending.summary.muted;
       break;
     case 'set-loop':
       if (typeof command.loop !== 'boolean') return;
       next.loop = command.loop;
+      changed = next.loop !== pending.summary.loop;
       break;
     default:
       return;
   }
+  if (!changed) return;
   next.revision += 1;
   pending.summary = next;
   const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
@@ -4050,6 +4153,12 @@ ipcMain.on('scene-playlist:dispatch', (
     committed && JSON.stringify(committed.tracks) === JSON.stringify(next.tracks),
   );
   if (playbackOnly && sameCommittedTracks) {
+    rememberAppChange(
+      commandSnapshot,
+      command.type === 'set-volume'
+        ? `scene-volume:${phaseId}:${slot}`
+        : undefined,
+    );
     scenePlan = {
       ...scenePlan,
       phases: scenePlan.phases.map((phase) => phase.id === phaseId
@@ -4076,6 +4185,9 @@ ipcMain.handle('library:has-entries', (event) => {
 
 ipcMain.handle('launcher:new-encounter', (event) => {
   if (!isLauncherSender(event.sender.id)) return false;
+  appUndoHistory.length = 0;
+  lastAppUndoKey = null;
+  lastAppUndoRecordedAt = 0;
   battleState = {
     ...initialBattleState,
     bosses: [createInitialBoss('boss-1')],
@@ -4454,10 +4566,12 @@ ipcMain.handle(
       return { ok: false, missingFiles };
     }
 
+    const snapshot = captureAppUndoSnapshot();
     const loaded = restoreLibraryEntry(
       entry,
       new Set(missingFiles.map((file) => file.key)),
     );
+    rememberAppChange(snapshot);
     if (!masterWindow || masterWindow.isDestroyed()) {
       createEncounterWindows();
       launcherWindow?.close();
@@ -4841,6 +4955,7 @@ ipcMain.handle(
 ipcMain.on('audio:set-universal-muted', (event, muted: unknown) => {
   if (!isMasterSender(event.sender.id) || typeof muted !== 'boolean') return;
   if (musicState.universalMuted === muted) return;
+  rememberAppChange();
   musicState = {
     ...musicState,
     universalMuted: muted,
@@ -4857,9 +4972,12 @@ ipcMain.on('encounter-effects:set-volume', (event, volume: unknown) => {
     typeof volume !== 'number' ||
     !Number.isFinite(volume)
   ) return;
+  const nextVolume = Math.max(0, Math.min(1, volume));
+  if (encounterEffectsAudioState.volume === nextVolume) return;
+  rememberAppChange(undefined, 'encounter-effects-volume');
   encounterEffectsAudioState = {
     ...encounterEffectsAudioState,
-    volume: Math.max(0, Math.min(1, volume)),
+    volume: nextVolume,
     revision: encounterEffectsAudioState.revision + 1,
   };
   broadcastEncounterEffectsState();
@@ -4894,6 +5012,7 @@ ipcMain.on(
     ) return;
     const typedSetting = setting as EncounterGeneralSetting;
     if (encounterEffectsAudioState.general[typedSetting] === enabled) return;
+    rememberAppChange();
     encounterEffectsAudioState = {
       ...encounterEffectsAudioState,
       general: {
@@ -4917,6 +5036,7 @@ ipcMain.on(
     ) return;
     const typedSetting = setting as EncounterSoundSetting;
     if (encounterEffectsAudioState.sounds[typedSetting] === enabled) return;
+    rememberAppChange();
     encounterEffectsAudioState = {
       ...encounterEffectsAudioState,
       sounds: {
@@ -4942,6 +5062,7 @@ ipcMain.on(
     ) return;
     const typedSetting = setting as EncounterVisualEffectSetting;
     if (encounterEffectsAudioState.visuals[typedSetting] === enabled) return;
+    rememberAppChange();
     encounterEffectsAudioState = {
       ...encounterEffectsAudioState,
       visuals: {
@@ -4981,6 +5102,8 @@ ipcMain.handle(
 
     const existingSlot = soundboardSlots[index - 1];
     if (keepExistingFile && existingSlot) {
+      if (existingSlot.name === trimmedName) return { ok: true };
+      rememberAppChange();
       soundboardSlots[index - 1] = { ...existingSlot, name: trimmedName };
       soundboardRevision += 1;
       broadcastSoundboardState();
@@ -5036,6 +5159,7 @@ ipcMain.handle(
     }
 
     stopSoundboardPlayback(index);
+    rememberAppChange();
     soundboardSlots[index - 1] = {
       index,
       name: trimmedName,
@@ -5076,9 +5200,12 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'set-volume') {
+    const nextVolume = Math.max(0, Math.min(1, command.volume));
+    if (soundboardAudioState.volume === nextVolume) return;
+    rememberAppChange(undefined, 'soundboard-volume');
     soundboardAudioState = {
       ...soundboardAudioState,
-      volume: Math.max(0, Math.min(1, command.volume)),
+      volume: nextVolume,
     };
     soundboardRevision += 1;
     broadcastSoundboardState();
@@ -5086,6 +5213,7 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'toggle-mute') {
+    rememberAppChange();
     soundboardAudioState = {
       ...soundboardAudioState,
       muted: !soundboardAudioState.muted,
@@ -5096,6 +5224,7 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'toggle-loop') {
+    rememberAppChange();
     soundboardAudioState = {
       ...soundboardAudioState,
       loop: !soundboardAudioState.loop,
@@ -5106,9 +5235,13 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'remove') {
+    if (!soundboardSlots[command.index - 1]) return;
+    rememberAppChange();
     stopSoundboardPlayback(command.index);
     soundboardSlots[command.index - 1] = null;
   } else {
+    if (!soundboardSlots.some(Boolean)) return;
+    rememberAppChange();
     stopSoundboardPlayback();
     soundboardSlots.fill(null);
   }
@@ -5253,6 +5386,122 @@ ipcMain.on('background:load-error', (event, message: unknown) => {
   }
 });
 
+const clampSceneOverflowDamage = (
+  state: BattleState,
+  previousBoss: BossState,
+) => {
+  if (previousBoss.shield > 0 || !state.battleStarted) return state;
+  const activePhase = scenePlan.phases[scenePlan.activePhaseIndex];
+  const directive = activePhase?.bosses.find(
+    (item) => item.bossId === previousBoss.id,
+  );
+  if (!activePhase || directive?.carryOverflowDamage !== false) return state;
+  const triggerBoss = state.bosses.find(
+    (boss) => boss.id === activePhase.triggerBossId,
+  ) ?? sceneBossArchive.get(activePhase.triggerBossId);
+  const triggerMaximum = Math.max(1, triggerBoss?.maxHealth ?? previousBoss.maxHealth);
+  const damagedBoss = state.bosses.find((boss) => boss.id === previousBoss.id);
+  if (!damagedBoss) return state;
+  const currentHealth = clampSceneOverflowHealth({
+    phase: activePhase,
+    directive,
+    bossId: previousBoss.id,
+    bossMaximum: previousBoss.maxHealth,
+    triggerMaximum,
+    previousHealth: previousBoss.currentHealth,
+    nextHealth: damagedBoss.currentHealth,
+  });
+  if (currentHealth === damagedBoss.currentHealth) return state;
+  return {
+    ...state,
+    bosses: state.bosses.map((boss) => boss.id === previousBoss.id
+      ? { ...boss, currentHealth }
+      : boss),
+  };
+};
+
+const restoreLastAppChange = () => {
+  const snapshot = appUndoHistory.pop();
+  if (!snapshot) return false;
+  lastAppUndoKey = null;
+  lastAppUndoRecordedAt = 0;
+
+  pendingHealthTimers.forEach(clearTimeout);
+  pendingHealthTimers.clear();
+  if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
+  battleMusicStartTimer = null;
+  if (sceneTransitionTimer) clearTimeout(sceneTransitionTimer);
+  sceneTransitionTimer = null;
+  queuedScenePhaseIndexes.length = 0;
+  pendingScenePhaseIndexes.clear();
+  pendingBlackoutPhaseIndex = null;
+  sceneTransitioning = false;
+  resumeMusicAfterManualBlackout = false;
+  stopSoundboardPlayback();
+
+  const nextBattleRevision = battleState.revision + 1;
+  const nextSceneRevision = scenePlan.revision + 1;
+  const nextMusicRevision = musicState.revision + 1;
+  const nextPlaybackVersion = musicState.playbackVersion + 1;
+  const nextSoundboardRevision = soundboardRevision + 1;
+  const nextEffectsRevision = encounterEffectsAudioState.revision + 1;
+
+  battleState = {
+    ...structuredClone(snapshot.battleState),
+    revision: nextBattleRevision,
+  };
+  scenePlan = {
+    ...structuredClone(snapshot.scenePlan),
+    revision: nextSceneRevision,
+  };
+  sceneMediaPaths.clear();
+  snapshot.sceneMediaPaths.forEach(([key, value]) => sceneMediaPaths.set(key, value));
+  scenePlaylistPaths.clear();
+  snapshot.scenePlaylistPaths.forEach(([key, value]) => scenePlaylistPaths.set(key, value));
+  sceneBossArchive.clear();
+  snapshot.sceneBossArchive.forEach(([key, value]) => sceneBossArchive.set(
+    key,
+    structuredClone(value),
+  ));
+  activeBackgroundFilePath = snapshot.activeBackgroundFilePath;
+  configuredBackgroundFilePath = snapshot.configuredBackgroundFilePath;
+  configuredBackgroundName = snapshot.configuredBackgroundName;
+  pendingBackgroundChange = structuredClone(snapshot.pendingBackgroundChange);
+  linkedLibraryEntryId = snapshot.linkedLibraryEntryId;
+  backgroundRevision += 1;
+  musicTracks.splice(
+    0,
+    musicTracks.length,
+    ...structuredClone(snapshot.musicTracks),
+  );
+  musicState = {
+    ...structuredClone(snapshot.musicState),
+    playbackVersion: nextPlaybackVersion,
+    revision: nextMusicRevision,
+  };
+  musicPlaybackState = structuredClone(snapshot.musicPlaybackState);
+  soundboardSlots.splice(
+    0,
+    soundboardSlots.length,
+    ...structuredClone(snapshot.soundboardSlots),
+  );
+  soundboardAudioState = structuredClone(snapshot.soundboardAudioState);
+  soundboardRevision = nextSoundboardRevision;
+  encounterEffectsAudioState = {
+    ...structuredClone(snapshot.encounterEffectsAudioState),
+    revision: nextEffectsRevision,
+  };
+
+  broadcastBattleState();
+  broadcastScenePlan();
+  broadcastBackground();
+  broadcastMusicState();
+  broadcastSoundboardState();
+  broadcastEncounterEffectsState();
+  persistEncounterEffectsSettingsSafely();
+  return true;
+};
+
 const applyHealthMutation = (
   type: 'damage' | 'heal' | 'reset-health',
   bossId: string,
@@ -5266,6 +5515,9 @@ const applyHealthMutation = (
       : ({ type, bossId, amount } as const);
 
   battleState = applyBattleCommand(battleState, command);
+  if (type === 'damage') {
+    battleState = clampSceneOverflowDamage(battleState, previousBoss);
+  }
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!nextBoss) return;
   broadcastBattleState();
@@ -5340,6 +5592,7 @@ ipcMain.handle(
       ignoreDamageReduction: request.ignoreDamageReduction,
     });
 
+    rememberAppChange();
     applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
 
     if (request.hits > 1) {
@@ -5391,12 +5644,13 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
       previousBoss.currentHealth <= 0
     ) return;
 
+    rememberAppChange();
     const advancedTurn = advanceBossTurn(
       battleState,
       command.bossId,
       randomInt,
     );
-    battleState = advancedTurn.state;
+    battleState = clampSceneOverflowDamage(advancedTurn.state, previousBoss);
     broadcastBattleState();
     const nextBoss = battleState.bosses.find((boss) => boss.id === command.bossId);
     if (nextBoss) {
@@ -5409,14 +5663,18 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
 
     if (playerWindow && !playerWindow.isDestroyed()) {
       for (const tick of advancedTurn.ticks) {
+        const visibleFloor = nextBoss?.currentHealth ?? 0;
+        const visibleFrom = Math.max(visibleFloor, tick.from);
+        const visibleTo = Math.max(visibleFloor, tick.to);
+        if (visibleFrom <= visibleTo) continue;
         healthEffectSequence += 1;
         const effect: HealthEffect = {
           id: healthEffectSequence,
           bossId: command.bossId,
           type: 'damage',
           intensity: 'normal',
-          from: tick.from,
-          to: tick.to,
+          from: visibleFrom,
+          to: visibleTo,
           maximum: previousBoss.maxHealth,
           shieldFrom: previousBoss.shield,
           shieldTo: previousBoss.shield,
@@ -5438,6 +5696,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     command.type === 'heal' ||
     command.type === 'reset-health'
   ) {
+    rememberAppChange();
     applyHealthMutation(
       command.type,
       command.bossId,
@@ -5445,6 +5704,14 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     );
     return;
   }
+
+  const commandSnapshot = [
+    'select-boss',
+    'mark-identity-unprepared',
+    'mark-action-unprepared',
+  ].includes(command.type)
+    ? null
+    : captureAppUndoSnapshot();
 
   if (
     ['start-battle', 'end-battle', 'reset-all'].includes(command.type) &&
@@ -5570,6 +5837,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
 
   broadcastBattleState();
   if (backgroundChanged) broadcastBackground();
+  if (commandSnapshot) rememberAppChange(commandSnapshot);
 });
 
 const createMediaResponse = async (

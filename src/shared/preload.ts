@@ -48,6 +48,7 @@ export const bossApiMethodsByRole = {
     'releaseSceneBlackout',
     'activateSceneBlackout',
     'subscribeScenePlan',
+    'undoLastChange',
   ],
   player: [
     'encounterEffectFinished',
@@ -77,6 +78,7 @@ export const bossApiMethodsByRole = {
     'subscribeSoundboard',
     'subscribeSoundboardStop',
     'subscribeSoundEffect',
+    'undoLastChange',
   ],
   control: [
     'applyHealthSequence',
@@ -90,6 +92,7 @@ export const bossApiMethodsByRole = {
     'subscribe',
     'subscribeEncounterEffects',
     'subscribeSoundboard',
+    'undoLastChange',
   ],
   soundboard: [
     'assignSoundboardSlot',
@@ -99,6 +102,7 @@ export const bossApiMethodsByRole = {
     'subscribe',
     'subscribeSoundboard',
     'subscribeSoundboardError',
+    'undoLastChange',
   ],
   library: [
     'closeBossLibrary',
@@ -107,6 +111,7 @@ export const bossApiMethodsByRole = {
     'loadBossFromLibrary',
     'replaceBossLibraryFile',
     'subscribeBossLibraryChanged',
+    'undoLastChange',
   ],
   'scene-editor': [
     'chooseScenePhaseMedia',
@@ -124,5 +129,6 @@ export const bossApiMethodsByRole = {
     'subscribeSceneEditorCloseRequested',
     'subscribeScenePhasePlaylist',
     'subscribeScenePlan',
+    'undoLastChange',
   ],
 } as const satisfies Record<RendererRole, readonly (keyof BossAPI)[]>;

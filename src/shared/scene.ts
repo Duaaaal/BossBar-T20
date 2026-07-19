@@ -48,6 +48,8 @@ export type ScenePlaylistCommand =
 
 export type SceneBossPatch = {
   bossName?: string;
+  nextAction?: string;
+  actionSeverity?: 'normal' | 'grave';
   maxHealth?: number;
   currentHealth?: number;
   attack?: number;
@@ -62,6 +64,7 @@ export type SceneBossPatch = {
 export type SceneBossDirective = {
   bossId: string;
   presence: SceneBossPresence;
+  carryOverflowDamage: boolean;
   patch: SceneBossPatch;
 };
 
@@ -179,6 +182,7 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
       bosses: bossSlots.map((bossSlot) => ({
         bossId: bossSlot.bossId,
         presence: 'inherit',
+        carryOverflowDamage: true,
         patch: {},
       })),
     }],
@@ -220,6 +224,33 @@ export const crossedScenePhaseIndexes = (
       ? [index]
       : [],
   );
+};
+
+export const clampSceneOverflowHealth = ({
+  phase,
+  directive,
+  bossId,
+  bossMaximum,
+  triggerMaximum,
+  previousHealth,
+  nextHealth,
+}: {
+  phase: Pick<ScenePhase, 'triggerBossId' | 'endHealth'>;
+  directive: Pick<SceneBossDirective, 'carryOverflowDamage'> | undefined;
+  bossId: string;
+  bossMaximum: number;
+  triggerMaximum: number;
+  previousHealth: number;
+  nextHealth: number;
+}) => {
+  if (directive?.carryOverflowDamage !== false) return nextHealth;
+  const safeBossMaximum = Math.max(1, Math.round(bossMaximum));
+  const safeTriggerMaximum = Math.max(1, Math.round(triggerMaximum));
+  const threshold = bossId === phase.triggerBossId
+    ? phase.endHealth
+    : Math.round(safeBossMaximum * phase.endHealth / safeTriggerMaximum);
+  const floor = Math.max(0, Math.min(safeBossMaximum, threshold));
+  return previousHealth > floor && nextHealth < floor ? floor : nextHealth;
 };
 
 export const sceneTransitionSourceIndex = (
@@ -279,8 +310,15 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
   const normalized: SceneBossPatch = {};
   const name = typeof patch.bossName === 'string' ? patch.bossName.trim().slice(0, 100) : '';
   if (name) normalized.bossName = name;
+  const nextAction = typeof patch.nextAction === 'string'
+    ? patch.nextAction.trim().slice(0, 100)
+    : '';
+  if (nextAction) {
+    normalized.nextAction = nextAction;
+    normalized.actionSeverity = patch.actionSeverity === 'grave' ? 'grave' : 'normal';
+  }
   const numericRanges: Array<[
-    Exclude<keyof SceneBossPatch, 'bossName'>,
+    Exclude<keyof SceneBossPatch, 'bossName' | 'nextAction' | 'actionSeverity'>,
     number,
     number,
   ]> = [
@@ -315,6 +353,11 @@ export const applySceneBossPatch = (
   return {
     ...boss,
     bossName: normalized.bossName ?? boss.bossName,
+    nextAction: normalized.nextAction ?? boss.nextAction,
+    actionSeverity: normalized.nextAction
+      ? normalized.actionSeverity ?? 'normal'
+      : boss.actionSeverity,
+    actionPrepared: normalized.nextAction ? true : boss.actionPrepared,
     maxHealth,
     currentHealth,
     attack: normalized.attack ?? boss.attack,

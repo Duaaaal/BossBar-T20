@@ -12,10 +12,15 @@ import {
   type EncounterVisualEffectSetting,
 } from './shared/battle';
 import { bundledAssetUrl } from './shared/bundled-assets';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { installUndoShortcut } from './shared/undo-shortcut';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
 import type { ScenePlan } from './shared/scene';
 import './master.css';
 import './scrollbars.css';
+
+installDisabledControlTooltips();
+installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
   activeBossId: state.activeBossId,
@@ -542,6 +547,7 @@ const MasterApp = () => {
             className="presentation-button"
             type="button"
             disabled={presentationOpen}
+            data-disabled-reason="A janela dos jogadores já está aberta"
             onClick={() => void window.bossAPI.openPresentation().then((opened) => {
               if (opened) setPresentationOpen(true);
             })}
@@ -600,7 +606,7 @@ const MasterApp = () => {
         <div className="compact-panel-title"><h2>Biblioteca de Encontros</h2></div>
         <p>Salve ou recupere a luta completa, incluindo mídias e áudio.</p>
         <div className="library-actions">
-          <button className="save-library-button" type="button" disabled={savingLibrary} onClick={() => void saveEncounter()}>{savingLibrary ? 'Salvando...' : 'Salvar encontro'}</button>
+          <button className="save-library-button" type="button" disabled={savingLibrary} data-disabled-reason="Aguarde o salvamento atual" onClick={() => void saveEncounter()}>{savingLibrary ? 'Salvando...' : 'Salvar encontro'}</button>
           <button className="load-library-button" type="button" onClick={() => void window.bossAPI.openBossLibrary()}>Carregar encontro</button>
         </div>
         {libraryMessage && <p className="library-status-message">{libraryMessage}</p>}
@@ -759,6 +765,7 @@ const MasterApp = () => {
                     className="add-category-sound-button"
                     type="button"
                     disabled={soundCustomizationBusy !== null}
+                    data-disabled-reason="Aguarde a personalização atual"
                     onClick={() => void addEncounterSound(selectedSoundCategory)}
                   >
                     {soundCustomizationBusy === `add:${selectedSoundCategory}`
@@ -775,6 +782,7 @@ const MasterApp = () => {
                             type="checkbox"
                             checked={option.enabled}
                             disabled={soundCustomizationBusy !== null}
+                            data-disabled-reason="Aguarde a personalização atual"
                             onChange={(event) => void setSoundOptionEnabled(
                               option.id,
                               event.target.checked,
@@ -790,6 +798,7 @@ const MasterApp = () => {
                           className={`preview-sound-button ${previewingSoundId === option.id ? 'is-playing' : ''}`}
                           type="button"
                           disabled={soundCustomizationBusy !== null}
+                          data-disabled-reason="Aguarde a personalização atual"
                           aria-label={previewingSoundId === option.id
                             ? `Parar amostra de ${option.name}`
                             : `Ouvir amostra de ${option.name}`}
@@ -805,6 +814,7 @@ const MasterApp = () => {
                             className="remove-custom-sound-button"
                             type="button"
                             disabled={soundCustomizationBusy !== null}
+                            data-disabled-reason="Aguarde a personalização atual"
                             aria-label={`Remover ${option.name}`}
                             title="Remover efeito personalizado"
                             onClick={() => {
@@ -848,6 +858,7 @@ const MasterApp = () => {
                 className="modal-cancel-button"
                 type="button"
                 disabled={soundCustomizationBusy !== null}
+                data-disabled-reason="Aguarde a personalização atual"
                 onClick={() => setPendingSoundRemoval(null)}
               >
                 Cancelar
@@ -856,6 +867,7 @@ const MasterApp = () => {
                 className="modal-confirm-button"
                 type="button"
                 disabled={soundCustomizationBusy !== null}
+                data-disabled-reason="Aguarde a personalização atual"
                 onClick={() => void removeEncounterSound()}
               >
                 {soundCustomizationBusy === pendingSoundRemoval.id
@@ -899,8 +911,8 @@ const MasterApp = () => {
             <p className="modal-eyebrow">Encerrar aplicativo</p><h2 id="close-title">Deseja realmente fechar?</h2>
             <p>A apresentação, o painel privado e a trilha sonora também serão fechados.</p>
             <div className="modal-actions">
-              <button className="modal-cancel-button" type="button" disabled={closingApp} onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
-              <button className="modal-confirm-button" type="button" disabled={closingApp} onClick={() => void confirmAppClose()}>{closingApp ? 'Salvando...' : 'Sim, fechar'}</button>
+              <button className="modal-cancel-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
+              <button className="modal-confirm-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => void confirmAppClose()}>{closingApp ? 'Salvando...' : 'Sim, fechar'}</button>
             </div>
           </section>
         </div>
