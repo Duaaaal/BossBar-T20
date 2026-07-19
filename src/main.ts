@@ -93,8 +93,7 @@ import {
   applySceneBossPatch,
   createScenePlan,
   normalizeSceneBossPatch,
-  scenePhasesForBoss,
-  validateScenePhaseTracks,
+  validateSceneRanges,
   type SceneBossDirective,
   type SceneAudioSlot,
   type SceneMediaSelectionResult,
@@ -667,6 +666,10 @@ const loadEncounterEffectsSettings = async () => {
           typeof general.automaticStatusEffects === 'boolean'
             ? general.automaticStatusEffects
             : initialEncounterEffectsState.general.automaticStatusEffects,
+        phaseMarkers:
+          typeof general.phaseMarkers === 'boolean'
+            ? general.phaseMarkers
+            : initialEncounterEffectsState.general.phaseMarkers,
       },
       sounds: {
         heal: typeof sounds.heal === 'boolean'
@@ -999,11 +1002,11 @@ const defaultStoredScene = (bosses: StoredLibraryBoss[]): StoredScenePlan => {
     activePhaseIds: Object.fromEntries(slots.map((slot) => [slot.bossId, null])),
     blackoutActive: false,
     templates: bosses.map((boss) => ({ ...boss })),
-    phases: slots.map((slot, index) => ({
-      id: index === 0 ? 'phase-1' : `phase-1-${slot.bossId}`,
+    phases: [{
+      id: 'phase-1',
       name: 'Fase 1',
-      triggerBossId: slot.bossId,
-      startHealth: bosses[index]?.currentHealth ?? bosses[index]?.maxHealth ?? 500,
+      triggerBossId: slots[0]?.bossId ?? 'boss-1',
+      startHealth: bosses[0]?.currentHealth ?? bosses[0]?.maxHealth ?? 500,
       endHealth: 0,
       transition: 'fade' as const,
       transitionDurationSeconds: 2,
@@ -1016,7 +1019,7 @@ const defaultStoredScene = (bosses: StoredLibraryBoss[]): StoredScenePlan => {
         presence: 'inherit' as const,
         patch: {},
       })),
-    })),
+    }],
   };
 };
 
@@ -1091,10 +1094,7 @@ const normalizeStoredScene = (
     const triggerBoss = storedBossesById.get(rawPhase.triggerBossId);
     const triggerMaximum = triggerBoss?.maxHealth ?? 500;
     const triggerInitialHealth = triggerBoss?.currentHealth ?? triggerMaximum;
-    const trackIndex = rawPhases.slice(0, phaseIndex).filter((candidate) =>
-      isRecord(candidate) && candidate.triggerBossId === rawPhase.triggerBossId,
-    ).length;
-    const legacyStart = trackIndex === 0
+    const legacyStart = phaseIndex === 0
       ? triggerInitialHealth
       : Math.round(triggerInitialHealth * Number(rawPhase.startPercent) / 100);
     const startHealth = isFiniteStoredNumber(rawPhase.startHealth)
@@ -1134,45 +1134,24 @@ const normalizeStoredScene = (
     }];
   });
   if (phases.length !== rawPhases.length) return null;
-  for (const slot of bossSlots) {
-    if (phases.some((phase) => phase.triggerBossId === slot.bossId)) continue;
-    const boss = storedBossesById.get(slot.bossId);
-    phases.push({
-      id: `phase-1-${slot.bossId}`,
-      name: 'Fase 1',
-      triggerBossId: slot.bossId,
-      startHealth: boss?.currentHealth ?? boss?.maxHealth ?? 500,
-      endHealth: 0,
-      transition: 'fade',
-      transitionDurationSeconds: 2,
-      transitionSoundDelaySeconds: 0,
-      background: null,
-      transitionSound: null,
-      music: null,
-      bosses: bossSlots.map((bossSlot) => ({
-        bossId: bossSlot.bossId,
-        presence: 'inherit',
-        patch: {},
-      })),
-    });
-  }
-  if (validateScenePhaseTracks(phases, bossSlots)) return null;
-  const activePhaseIndex = Number.isInteger(value.activePhaseIndex)
-    ? clampInteger(value.activePhaseIndex as number, -1, phases.length - 1)
-    : -1;
+  const primaryBossId = bossSlots[0]?.bossId;
+  const universalPhases = phases.filter(
+    (phase) => phase.triggerBossId === primaryBossId,
+  );
+  if (!primaryBossId || validateSceneRanges(universalPhases)) return null;
   const rawActivePhaseIds = isRecord(value.activePhaseIds) ? value.activePhaseIds : {};
+  const requestedActivePhaseId = rawActivePhaseIds[primaryBossId];
+  const legacyActivePhase = Number.isInteger(value.activePhaseIndex)
+    ? phases[clampInteger(value.activePhaseIndex as number, -1, phases.length - 1)]
+    : null;
+  const activePhaseIndex = typeof requestedActivePhaseId === 'string'
+    ? universalPhases.findIndex((phase) => phase.id === requestedActivePhaseId)
+    : legacyActivePhase
+      ? universalPhases.findIndex((phase) => phase.id === legacyActivePhase.id)
+      : -1;
   const activePhaseIds = Object.fromEntries(bossSlots.map((slot) => {
-    const requested = rawActivePhaseIds[slot.bossId];
-    const fallback = phases[activePhaseIndex]?.triggerBossId === slot.bossId
-      ? phases[activePhaseIndex].id
-      : null;
-    return [
-      slot.bossId,
-      typeof requested === 'string' && phases.some((phase) =>
-        phase.id === requested && phase.triggerBossId === slot.bossId)
-        ? requested
-        : fallback,
-    ];
+    const activeId = universalPhases[activePhaseIndex]?.id ?? null;
+    return [slot.bossId, activeId];
   }));
   const storedBossIds = new Set(bosses.map((boss) => boss.bossId));
   if ([...storedBossIds].some((id) => !knownIds.has(id))) return null;
@@ -1188,7 +1167,7 @@ const normalizeStoredScene = (
   ) return null;
   return {
     bossSlots,
-    phases,
+    phases: universalPhases,
     showPhaseMarkers: value.showPhaseMarkers === true,
     activePhaseIndex,
     activePhaseIds,
@@ -2789,35 +2768,13 @@ const syncSceneBossSlots = () => {
       },
     ),
   }));
-  for (const slot of nextSlots) {
-    if (expandedPhases.some((phase) => phase.triggerBossId === slot.bossId)) continue;
-    const boss = battleState.bosses.find((item) => item.id === slot.bossId) ??
-      sceneBossArchive.get(slot.bossId);
-    expandedPhases.push({
-      id: `phase-1-${slot.bossId}`,
-      name: 'Fase 1',
-      triggerBossId: slot.bossId,
-      startHealth: boss?.currentHealth ?? boss?.maxHealth ?? 500,
-      endHealth: 0,
-      transition: 'fade',
-      transitionDurationSeconds: 2,
-      transitionSoundDelaySeconds: 0,
-      background: null,
-      transitionSound: null,
-      music: null,
-      bosses: nextSlots.map((bossSlot) => ({
-        bossId: bossSlot.bossId,
-        presence: 'inherit',
-        patch: {},
-      })),
-    });
-  }
+  const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id ?? null;
   scenePlan = {
     ...scenePlan,
     bossSlots: nextSlots,
     phases: expandedPhases,
     activePhaseIds: Object.fromEntries(
-      nextSlots.map((slot) => [slot.bossId, scenePlan.activePhaseIds[slot.bossId] ?? null]),
+      nextSlots.map((slot) => [slot.bossId, activePhaseId]),
     ),
     revision: scenePlan.revision + 1,
   };
@@ -3002,25 +2959,27 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
 const saveScenePlan = (value: unknown): SceneSaveResult => {
   const draft = normalizeScenePlanDraft(value);
   if (!draft) return { ok: false, error: 'Os dados da cena são inválidos.' };
-  const rangeError = validateScenePhaseTracks(draft.phases, draft.bossSlots);
+  const rangeError = validateSceneRanges(draft.phases);
   if (rangeError) return { ok: false, error: rangeError };
-  for (const slot of draft.bossSlots) {
-    const firstPhase = scenePhasesForBoss(draft.phases, slot.bossId)[0];
-    const firstTriggerDirective = firstPhase?.bosses.find(
-      (directive) => directive.bossId === slot.bossId,
-    );
-    const firstTriggerBase = battleState.bosses.find(
-      (boss) => boss.id === slot.bossId,
-    ) ?? sceneBossArchive.get(slot.bossId) ?? createInitialBoss(slot.bossId);
-    const firstTrigger = firstTriggerDirective
-      ? applySceneBossPatch(firstTriggerBase, firstTriggerDirective.patch)
-      : firstTriggerBase;
-    if (firstPhase && firstPhase.startHealth !== firstTrigger.currentHealth) {
-      return {
-        ok: false,
-        error: `${slot.label}: a Fase 1 deve começar com a vida atual do chefão (${firstTrigger.currentHealth} PV).`,
-      };
-    }
+  const primaryBossId = draft.bossSlots[0]?.bossId;
+  if (!primaryBossId || draft.phases.some((phase) => phase.triggerBossId !== primaryBossId)) {
+    return { ok: false, error: 'Todas as fases devem seguir a progressão do chefão principal.' };
+  }
+  const firstPhase = draft.phases[0];
+  const firstTriggerDirective = firstPhase.bosses.find(
+    (directive) => directive.bossId === primaryBossId,
+  );
+  const firstTriggerBase = battleState.bosses.find(
+    (boss) => boss.id === primaryBossId,
+  ) ?? sceneBossArchive.get(primaryBossId) ?? createInitialBoss(primaryBossId);
+  const firstTrigger = firstTriggerDirective
+    ? applySceneBossPatch(firstTriggerBase, firstTriggerDirective.patch)
+    : firstTriggerBase;
+  if (firstPhase.startHealth !== firstTrigger.currentHealth) {
+    return {
+      ok: false,
+      error: `A Fase 1 deve começar com a vida atual do chefão (${firstTrigger.currentHealth} PV).`,
+    };
   }
   const previousPhases = new Map(scenePlan.phases.map((phase) => [phase.id, phase]));
   const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
@@ -3099,12 +3058,10 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
       ? Math.max(-1, draft.phases.findIndex((phase) => phase.id === activePhaseId))
       : -1,
     activePhaseIds: Object.fromEntries(draft.bossSlots.map((slot) => {
-      const activeId = scenePlan.activePhaseIds[slot.bossId];
       return [
         slot.bossId,
-        activeId && draft.phases.some((phase) =>
-          phase.id === activeId && phase.triggerBossId === slot.bossId)
-          ? activeId
+        activePhaseId && draft.phases.some((phase) => phase.id === activePhaseId)
+          ? activePhaseId
           : null,
       ];
     })),
@@ -3222,16 +3179,9 @@ function applySavedSceneMediaImmediately() {
 const applyScenePhase = (phaseIndex: number) => {
   const phase = scenePlan.phases[phaseIndex];
   if (!phase) return;
-  const primaryBossId = scenePlan.bossSlots[0]?.bossId;
-  const isPrimaryTrack = phase.triggerBossId === primaryBossId;
-  const track = scenePhasesForBoss(scenePlan.phases, phase.triggerBossId);
-  const trackIndex = track.findIndex((item) => item.id === phase.id);
   battleState.bosses.forEach((boss) => sceneBossArchive.set(boss.id, boss));
   const currentById = new Map(battleState.bosses.map((boss) => [boss.id, boss]));
-  const directives = isPrimaryTrack
-    ? phase.bosses
-    : phase.bosses.filter((directive) => directive.bossId === phase.triggerBossId);
-  for (const directive of directives) {
+  for (const directive of phase.bosses) {
     if (directive.presence === 'absent') {
       currentById.delete(directive.bossId);
       continue;
@@ -3255,7 +3205,7 @@ const applyScenePhase = (phaseIndex: number) => {
       continue;
     }
     const patched = applySceneBossPatch(boss, directive.patch);
-    const currentHealth = trackIndex === 0 || entering
+    const currentHealth = phaseIndex === 0 || entering
       ? patched.currentHealth
       : directive.patch.currentHealth === undefined
         ? patched.currentHealth
@@ -3284,14 +3234,13 @@ const applyScenePhase = (phaseIndex: number) => {
       : bosses[0].id,
     revision: battleState.revision + 1,
   };
-  if (isPrimaryTrack) activateSceneMediaForPhase(phaseIndex, trackIndex > 0);
+  activateSceneMediaForPhase(phaseIndex, phaseIndex > 0);
   scenePlan = {
     ...scenePlan,
-    activePhaseIndex: isPrimaryTrack ? phaseIndex : scenePlan.activePhaseIndex,
-    activePhaseIds: {
-      ...scenePlan.activePhaseIds,
-      [phase.triggerBossId]: phase.id,
-    },
+    activePhaseIndex: phaseIndex,
+    activePhaseIds: Object.fromEntries(
+      scenePlan.bossSlots.map((slot) => [slot.bossId, phase.id]),
+    ),
     bossSlots: scenePlan.bossSlots.map((slot) => {
       const boss = bosses.find((item) => item.id === slot.bossId);
       const patchName = phase.bosses.find((item) => item.bossId === slot.bossId)?.patch.bossName;
@@ -3314,11 +3263,8 @@ const processScenePhaseQueue = () => {
     return;
   }
   sceneTransitioning = true;
-  const phaseTrack = scenePhasesForBoss(scenePlan.phases, phase.triggerBossId);
-  const phaseTrackIndex = phaseTrack.findIndex((item) => item.id === phase.id);
-  const transitionPhase = phaseTrack[phaseTrackIndex - 1] ?? phase;
-  const isPrimaryTrack = phase.triggerBossId === scenePlan.bossSlots[0]?.bossId;
-  const durationMs = !isPrimaryTrack || transitionPhase.transition === 'blackout'
+  const transitionPhase = scenePlan.phases[phaseIndex - 1] ?? phase;
+  const durationMs = transitionPhase.transition === 'blackout'
     ? 0
     : Math.round(transitionPhase.transitionDurationSeconds * 1000);
   sceneTransitionSequence += 1;
@@ -3349,17 +3295,10 @@ const processScenePhaseQueue = () => {
     soundVolume: transitionPlaylist?.volume ?? 0.8,
     soundMuted: transitionPlaylist?.muted ?? false,
     soundLoop: transitionPlaylist?.loop ?? false,
-    visual: isPrimaryTrack,
+    visual: true,
   };
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('scene:transition', event);
-  }
-  if (!isPrimaryTrack) {
-    applyScenePhase(phaseIndex);
-    pendingScenePhaseIndexes.delete(phaseIndex);
-    sceneTransitioning = false;
-    processScenePhaseQueue();
-    return;
   }
   if (musicState.isPlaying) {
     if (durationMs > 0 && playerWindow && !playerWindow.isDestroyed()) {
@@ -3424,13 +3363,9 @@ const releaseSceneBlackout = (resumeManualMusic = true) => {
     battleState.battleStarted &&
     Boolean(musicState.currentTrackId);
   const targetPhase = phaseIndex === null ? null : scenePlan.phases[phaseIndex];
-  const track = targetPhase
-    ? scenePhasesForBoss(scenePlan.phases, targetPhase.triggerBossId)
-    : [];
-  const targetTrackIndex = targetPhase
-    ? track.findIndex((phase) => phase.id === targetPhase.id)
-    : -1;
-  const sourcePhase = targetTrackIndex > 0 ? track[targetTrackIndex - 1] : null;
+  const sourcePhase = phaseIndex !== null && phaseIndex > 0
+    ? scenePlan.phases[phaseIndex - 1]
+    : null;
   const durationMs = sourcePhase?.transition === 'fade-blackout'
     ? Math.round(sourcePhase.transitionDurationSeconds * 1000)
     : 0;
@@ -3520,17 +3455,10 @@ const activateSceneBlackout = () => {
 };
 
 const queueScenePhase = (phaseIndex: number) => {
-  const phase = scenePlan.phases[phaseIndex];
-  if (!phase) return;
-  const track = scenePhasesForBoss(scenePlan.phases, phase.triggerBossId);
-  const targetTrackIndex = track.findIndex((item) => item.id === phase.id);
-  const activePhaseId = scenePlan.activePhaseIds[phase.triggerBossId];
-  const activeTrackIndex = activePhaseId
-    ? track.findIndex((item) => item.id === activePhaseId)
-    : -1;
   if (
-    targetTrackIndex <= activeTrackIndex ||
-    pendingScenePhaseIndexes.has(phaseIndex)
+    phaseIndex <= scenePlan.activePhaseIndex ||
+    pendingScenePhaseIndexes.has(phaseIndex) ||
+    !scenePlan.phases[phaseIndex]
   ) return;
   pendingScenePhaseIndexes.add(phaseIndex);
   queuedScenePhaseIndexes.push(phaseIndex);
@@ -3544,15 +3472,10 @@ const queueCrossedScenePhases = (
   nextHealth: number,
 ) => {
   if (nextHealth >= previousHealth) return;
-  const track = scenePhasesForBoss(scenePlan.phases, bossId);
-  const activePhaseId = scenePlan.activePhaseIds[bossId];
-  const activeTrackIndex = activePhaseId
-    ? track.findIndex((phase) => phase.id === activePhaseId)
-    : -1;
-  track.forEach((phase, trackIndex) => {
-    const index = scenePlan.phases.findIndex((candidate) => candidate.id === phase.id);
+  scenePlan.phases.forEach((phase, index) => {
     if (
-      trackIndex > activeTrackIndex &&
+      index > scenePlan.activePhaseIndex &&
+      phase.triggerBossId === bossId &&
       previousHealth > phase.startHealth &&
       nextHealth <= phase.startHealth
     ) queueScenePhase(index);
@@ -4099,11 +4022,10 @@ ipcMain.on('scene-playlist:dispatch', (
   }
   next.revision += 1;
   pending.summary = next;
-  const primaryBossId = scenePlan.bossSlots[0]?.bossId;
+  const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
   if (
     slot === 'music' &&
-    primaryBossId &&
-    scenePlan.activePhaseIds[primaryBossId] === phaseId &&
+    activePhaseId === phaseId &&
     ['set-volume', 'set-muted', 'set-loop'].includes(command.type)
   ) {
     musicState = {
@@ -4114,6 +4036,28 @@ ipcMain.on('scene-playlist:dispatch', (
       revision: musicState.revision + 1,
     };
     broadcastMusicState();
+  }
+  const committed = scenePlan.phases.find((phase) => phase.id === phaseId)?.[slot];
+  const playbackOnly = [
+    'previous',
+    'next',
+    'select-track',
+    'set-volume',
+    'set-muted',
+    'set-loop',
+  ].includes(command.type);
+  const sameCommittedTracks = Boolean(
+    committed && JSON.stringify(committed.tracks) === JSON.stringify(next.tracks),
+  );
+  if (playbackOnly && sameCommittedTracks) {
+    scenePlan = {
+      ...scenePlan,
+      phases: scenePlan.phases.map((phase) => phase.id === phaseId
+        ? { ...phase, [slot]: cloneScenePlaylistSummary(next) }
+        : phase),
+      revision: scenePlan.revision + 1,
+    };
+    broadcastScenePlan();
   }
   broadcastScenePlaylist(phaseId, slot);
 });
@@ -4928,6 +4872,7 @@ const encounterSoundSettings = new Set<EncounterSoundSetting>([
 ]);
 const encounterGeneralSettings = new Set<EncounterGeneralSetting>([
   'automaticStatusEffects',
+  'phaseMarkers',
 ]);
 const encounterVisualEffectSettings = new Set<EncounterVisualEffectSetting>([
   'screenShake',
@@ -5574,13 +5519,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     battleState = { ...battleState, backgroundName: configuredBackgroundName };
     backgroundRevision += 1;
     backgroundChanged = true;
-    for (const slot of scenePlan.bossSlots) {
-      const firstPhase = scenePhasesForBoss(scenePlan.phases, slot.bossId)[0];
-      const firstPhaseIndex = firstPhase
-        ? scenePlan.phases.findIndex((phase) => phase.id === firstPhase.id)
-        : -1;
-      if (firstPhaseIndex >= 0) applyScenePhase(firstPhaseIndex);
-    }
+    if (scenePlan.phases[0]) applyScenePhase(0);
     if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
     battleMusicStartTimer = setTimeout(() => {
       battleMusicStartTimer = null;

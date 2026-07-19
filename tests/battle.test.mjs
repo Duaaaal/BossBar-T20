@@ -366,6 +366,7 @@ test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () =
 
 test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () => {
   assert.equal(initialEncounterEffectsState.general.automaticStatusEffects, true);
+  assert.equal(initialEncounterEffectsState.general.phaseMarkers, false);
   assert.deepEqual(initialEncounterEffectsState.sounds, {
     heal: true,
     damage: true,

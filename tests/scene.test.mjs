@@ -7,10 +7,8 @@ import {
   createScenePlan,
   createSceneRanges,
   crossedScenePhaseIndexes,
-  scenePhasesForBoss,
   scenePhaseAtHealth,
   sceneTransitionSourceIndex,
-  validateScenePhaseTracks,
   validateSceneRanges,
 } from '../src/shared/scene.ts';
 
@@ -50,35 +48,35 @@ test('inicia a cena com uma fase base e marcadores opcionais desativados', () =>
   assert.equal(plan.showPhaseMarkers, false);
 });
 
-test('cria e valida uma progressão independente para cada chefão', () => {
+test('cria uma progressão universal contendo todos os chefões', () => {
   const plan = createScenePlan([
     createInitialBoss('boss-1'),
     { ...createInitialBoss('boss-2'), currentHealth: 320, maxHealth: 400 },
   ]);
 
-  assert.equal(plan.phases.length, 2);
-  assert.equal(scenePhasesForBoss(plan.phases, 'boss-1').length, 1);
-  assert.equal(scenePhasesForBoss(plan.phases, 'boss-2')[0].startHealth, 320);
+  assert.equal(plan.phases.length, 1);
+  assert.equal(plan.phases[0].triggerBossId, 'boss-1');
+  assert.deepEqual(plan.phases[0].bosses.map((directive) => directive.bossId), [
+    'boss-1',
+    'boss-2',
+  ]);
   assert.deepEqual(plan.activePhaseIds, { 'boss-1': null, 'boss-2': null });
-  assert.equal(validateScenePhaseTracks(plan.phases, plan.bossSlots), null);
+  assert.equal(validateSceneRanges(plan.phases), null);
 });
 
-test('permite até oito fases por chefão, sem misturar as margens', () => {
+test('permite até oito fases na progressão universal', () => {
   const plan = createScenePlan([
     createInitialBoss('boss-1'),
     createInitialBoss('boss-2'),
   ]);
-  const phases = plan.bossSlots.flatMap((slot) =>
-    createSceneRanges(8, 500).map((range, index) => ({
-      ...plan.phases.find((phase) => phase.triggerBossId === slot.bossId),
+  const phases = createSceneRanges(8, 500).map((range, index) => ({
+      ...plan.phases[0],
       ...range,
-      id: `${slot.bossId}-phase-${index + 1}`,
+      id: `phase-${index + 1}`,
       name: `Fase ${index + 1}`,
-      triggerBossId: slot.bossId,
-    })),
-  );
+    }));
 
-  assert.equal(validateScenePhaseTracks(phases, plan.bossSlots), null);
+  assert.equal(validateSceneRanges(phases), null);
 });
 
 test('rejeita lacunas, sobreposições e margens incompletas', () => {
