@@ -37,6 +37,11 @@ import type {
 import type {
   SceneMediaSelectionResult,
   SceneMediaSlot,
+  SceneAudioSlot,
+  ScenePlaylistCommand,
+  ScenePlaylistSelectionResult,
+  ScenePlaylistState,
+  ScenePlaylistSummary,
   ScenePlan,
   ScenePlanDraft,
   SceneSaveResult,
@@ -67,6 +72,19 @@ export type BossAPI = {
     phaseId: string,
     slot: SceneMediaSlot,
   ) => Promise<SceneSaveResult>;
+  openScenePhasePlaylist: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+    phaseName: string,
+    initial: ScenePlaylistSummary | null,
+  ) => Promise<boolean>;
+  getScenePhasePlaylist: () => Promise<ScenePlaylistState | null>;
+  addScenePhasePlaylistTracks: () => Promise<ScenePlaylistSelectionResult>;
+  dispatchScenePhasePlaylist: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+    command: ScenePlaylistCommand,
+  ) => void;
   openBossLibrary: () => Promise<boolean>;
   hasEncounterLibraryEntries: () => Promise<boolean>;
   startNewEncounter: () => Promise<boolean>;
@@ -183,6 +201,9 @@ export type BossAPI = {
   ) => () => void;
   subscribeScenePlan: (callback: (state: ScenePlan) => void) => () => void;
   subscribeSceneEditorCloseRequested: (callback: () => void) => () => void;
+  subscribeScenePhasePlaylist: (
+    callback: (state: ScenePlaylistState) => void,
+  ) => () => void;
   subscribeSceneTransition: (
     callback: (effect: SceneTransitionEvent) => void,
   ) => () => void;

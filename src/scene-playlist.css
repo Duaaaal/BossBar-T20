@@ -1,0 +1,41 @@
+:root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #0d0b11; color: #f3edf5; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 500px; min-height: 540px; overflow: hidden; }
+button, input { font: inherit; }
+button { color: inherit; border: 1px solid #8b5063; border-radius: 8px; background: #24151d; cursor: pointer; }
+button:hover:not(:disabled) { border-color: #d78b9d; background: #38202b; }
+button:disabled { cursor: default; opacity: .38; }
+.scene-playlist-loading { min-height: 100vh; display: grid; place-items: center; }
+.scene-playlist-shell { height: 100vh; min-height: 540px; display: grid; grid-template-rows: auto minmax(150px, 1fr) auto auto; gap: 12px; padding: 20px; background: radial-gradient(circle at top, #24131d 0, #100d13 48%, #0a090d 100%); }
+.scene-playlist-shell > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.scene-playlist-shell header p, .scene-transport > span { margin: 0 0 3px; color: #c99aab; font-size: .76rem; letter-spacing: .12em; text-transform: uppercase; }
+.scene-playlist-shell h1 { margin: 0; font: 600 1.6rem Georgia, serif; color: #f2d7c6; }
+.scene-playlist-shell header > button { padding: 10px 15px; }
+.scene-track-list { min-height: 0; overflow: auto; padding: 8px; border: 1px solid #4e303c; border-radius: 12px; background: rgba(8, 7, 10, .74); }
+.scene-playlist-empty { height: 100%; display: grid; place-content: center; gap: 7px; text-align: center; color: #a998a0; }
+.scene-track-row { display: grid; grid-template-columns: 1fr 34px; gap: 6px; margin-bottom: 6px; }
+.scene-track-row > button:first-child { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 11px; text-align: left; border-color: transparent; background: rgba(44, 30, 38, .7); }
+.scene-track-row.is-current > button:first-child { border-color: #b86378; background: rgba(100, 43, 60, .5); }
+.scene-track-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-track-row small { color: #b8a8ae; }
+.scene-track-remove { font-size: 1.1rem; }
+.scene-transport { display: grid; gap: 8px; padding: 14px; border: 1px solid #694252; border-radius: 12px; background: rgba(24, 16, 21, .92); }
+.scene-transport > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-timeline { display: grid; grid-template-columns: 42px 1fr 42px; align-items: center; gap: 8px; color: #bcaeb3; font-size: .8rem; }
+input[type="range"] { width: 100%; accent-color: #c54b69; }
+.scene-transport-buttons { display: flex; justify-content: center; gap: 8px; }
+.scene-transport-buttons button { min-width: 44px; padding: 7px 10px; }
+.scene-transport-buttons .scene-play-button { min-width: 54px; background: #7f263e; }
+.scene-transport-buttons .is-active { border-color: #e5af73; color: #f6d59c; }
+.scene-volume-row { display: grid; grid-template-columns: 40px 1fr 45px; align-items: center; gap: 8px; }
+.scene-volume-row button { height: 32px; }
+.scene-volume-row span { text-align: right; color: #c8b7bd; font-size: .82rem; }
+.scene-playlist-shell > footer { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #d7b4bd; font-size: .84rem; }
+.scene-playlist-shell > footer button { padding: 7px 11px; }
+.scene-playlist-modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .72); }
+.scene-playlist-modal-backdrop section { width: min(430px, 100%); padding: 22px; border: 1px solid #805163; border-radius: 14px; background: #171118; box-shadow: 0 20px 60px #000; }
+.scene-playlist-modal-backdrop h2 { margin: 0 0 8px; }
+.scene-playlist-modal-backdrop p { color: #c7b9bf; }
+.scene-playlist-modal-backdrop section > div { display: flex; justify-content: flex-end; gap: 9px; }
+.scene-playlist-modal-backdrop button { padding: 8px 12px; }
+.scene-playlist-modal-backdrop .is-destructive { background: #7c2138; border-color: #d25b76; }

@@ -1,14 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createInitialBoss } from '../src/shared/battle.ts';
 import {
+  adjacentScenePlaylistTrackId,
   applySceneBossPatch,
   createScenePlan,
   createSceneRanges,
   crossedScenePhaseIndexes,
   scenePhaseAtHealth,
+  sceneTransitionSourceIndex,
   validateSceneRanges,
 } from '../src/shared/scene.ts';
-import { createInitialBoss } from '../src/shared/battle.ts';
+
+test('usa a fase anterior como origem da transição e não a fase final', () => {
+  assert.equal(sceneTransitionSourceIndex(1, 3), 0);
+  assert.equal(sceneTransitionSourceIndex(2, 3), 1);
+  assert.equal(sceneTransitionSourceIndex(0, 3), -1);
+});
+
+test('navega na playlist da fase em ciclo e preserva playlists unitárias', () => {
+  const tracks = [
+    { id: 'a', name: 'A', duration: 1, url: 'a' },
+    { id: 'b', name: 'B', duration: 1, url: 'b' },
+    { id: 'c', name: 'C', duration: 1, url: 'c' },
+  ];
+  assert.equal(adjacentScenePlaylistTrackId({ tracks, currentTrackId: 'a' }, -1), 'c');
+  assert.equal(adjacentScenePlaylistTrackId({ tracks, currentTrackId: 'c' }, 1), 'a');
+  assert.equal(adjacentScenePlaylistTrackId({ tracks: tracks.slice(0, 1), currentTrackId: 'a' }, 1), 'a');
+});
 
 test('distribui de uma a oito fases por toda a margem de vida', () => {
   assert.deepEqual(createSceneRanges(2), [

@@ -7,7 +7,8 @@ export type RendererRole =
   | 'control'
   | 'music'
   | 'library'
-  | 'scene-editor';
+  | 'scene-editor'
+  | 'scene-playlist';
 
 export const bossApiMethodsByRole = {
   launcher: [
@@ -112,12 +113,21 @@ export const bossApiMethodsByRole = {
     'chooseScenePhaseMedia',
     'clearScenePhaseMedia',
     'confirmSceneEditorClose',
+    'dispatchScenePhasePlaylist',
     'getScenePlan',
     'getState',
+    'openScenePhasePlaylist',
     'saveScenePlan',
     'subscribe',
     'subscribeBackgroundError',
     'subscribeSceneEditorCloseRequested',
+    'subscribeScenePhasePlaylist',
     'subscribeScenePlan',
+  ],
+  'scene-playlist': [
+    'addScenePhasePlaylistTracks',
+    'dispatchScenePhasePlaylist',
+    'getScenePhasePlaylist',
+    'subscribeScenePhasePlaylist',
   ],
 } as const satisfies Record<RendererRole, readonly (keyof BossAPI)[]>;
