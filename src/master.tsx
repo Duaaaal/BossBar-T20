@@ -10,6 +10,7 @@ import {
   type EncounterSoundOption,
   type EncounterSoundSetting,
   type EncounterVisualEffectSetting,
+  type MusicState,
 } from './shared/battle';
 import { bundledAssetUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
@@ -89,6 +90,7 @@ const MasterApp = () => {
   const [appVersion, setAppVersion] = useState('...');
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [universalMuted, setUniversalMuted] = useState(false);
+  const [musicState, setMusicState] = useState<MusicState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [soundCustomizationOpen, setSoundCustomizationOpen] = useState(false);
@@ -228,11 +230,14 @@ const MasterApp = () => {
 
   useEffect(() => {
     let active = true;
-    const updateMute = (musicState: { universalMuted: boolean }) => {
-      if (active) setUniversalMuted(musicState.universalMuted);
+    const updateMusic = (nextMusicState: MusicState) => {
+      if (active) {
+        setMusicState(nextMusicState);
+        setUniversalMuted(nextMusicState.universalMuted);
+      }
     };
-    window.bossAPI.getMusicState().then(updateMute);
-    const unsubscribe = window.bossAPI.subscribeMusic(updateMute);
+    window.bossAPI.getMusicState().then(updateMusic);
+    const unsubscribe = window.bossAPI.subscribeMusic(updateMusic);
     return () => {
       active = false;
       unsubscribe();
@@ -649,7 +654,7 @@ const MasterApp = () => {
                 <SettingsCheckbox checked={encounterEffects.sounds.shield} label="Escudo" onChange={(checked) => setEncounterSoundEnabled('shield', checked)} />
               </div>
               <label className="settings-volume-control">
-                <span>Volume <strong>{Math.round(encounterEffects.volume * 100)}%</strong></span>
+                <span>Efeitos sonoros <strong>{Math.round(encounterEffects.volume * 100)}%</strong></span>
                 <input
                   className="settings-volume-range"
                   type="range"
@@ -659,6 +664,22 @@ const MasterApp = () => {
                   value={encounterEffects.volume}
                   aria-label="Volume dos efeitos sonoros"
                   onChange={(event) => setEncounterEffectsVolume(Number(event.target.value))}
+                />
+              </label>
+              <label className="settings-volume-control">
+                <span>Música <strong>{Math.round((musicState?.volume ?? 0.8) * 100)}%</strong></span>
+                <input
+                  className="settings-volume-range"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={musicState?.volume ?? 0.8}
+                  aria-label="Volume das músicas"
+                  onChange={(event) => window.bossAPI.dispatchMusicControl({
+                    type: 'set-volume',
+                    volume: Number(event.target.value),
+                  })}
                 />
               </label>
             </section>

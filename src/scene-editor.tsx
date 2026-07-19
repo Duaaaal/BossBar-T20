@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createRoot } from 'react-dom/client';
-import { volumeToGain } from './shared/battle';
+import {
+  createInitialBoss,
+  volumeToGain,
+  type BattleState,
+  type BossState,
+} from './shared/battle';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { isUndoEditableTarget } from './shared/undo-shortcut';
 import {
@@ -36,10 +41,26 @@ const mediaLabels: Record<SceneMediaSlot, string> = {
   music: 'Música da fase',
 };
 
-const draftFromPlan = (plan: ScenePlan): ScenePlanDraft => ({
+const identityPatchFromBoss = (boss: BossState): SceneBossPatch => ({
+  bossName: boss.bossName,
+  maxHealth: boss.maxHealth,
+  currentHealth: boss.currentHealth,
+  attack: boss.attack,
+  rangedAttack: boss.rangedAttack,
+  skills: boss.skills,
+  defense: boss.defense,
+  rangedDefense: boss.rangedDefense,
+  damageReduction: boss.damageReduction,
+  shield: boss.shield,
+});
+
+const draftFromPlan = (
+  plan: ScenePlan,
+  battleState?: BattleState | null,
+): ScenePlanDraft => ({
   bossSlots: plan.bossSlots.map((slot) => ({ ...slot })),
   showPhaseMarkers: plan.showPhaseMarkers,
-  phases: plan.phases.map((phase) => ({
+  phases: plan.phases.map((phase, phaseIndex) => ({
     ...phase,
     background: phase.background ? { ...phase.background } : null,
     transitionSound: phase.transitionSound ? {
@@ -52,11 +73,23 @@ const draftFromPlan = (plan: ScenePlan): ScenePlanDraft => ({
     } : null,
     bosses: phase.bosses.map((directive) => ({
       ...directive,
-      presence: plan.bossSlots.find((slot) => slot.bossId === directive.bossId)?.original
-        ? 'inherit'
+      presence: phaseIndex === 0 &&
+        plan.bossSlots.find((slot) => slot.bossId === directive.bossId)?.original
+        ? 'present'
         : directive.presence,
       carryOverflowDamage: directive.carryOverflowDamage !== false,
-      patch: { ...directive.patch },
+      patch: phaseIndex === 0 && directive.presence !== 'absent'
+        ? {
+            ...identityPatchFromBoss(
+              battleState?.bosses.find((boss) => boss.id === directive.bossId) ??
+                createInitialBoss(
+                  directive.bossId,
+                  plan.bossSlots.findIndex((slot) => slot.bossId === directive.bossId),
+                ),
+            ),
+            ...directive.patch,
+          }
+        : { ...directive.patch },
     })),
   })),
 });
@@ -76,7 +109,7 @@ const createPhaseFromPrevious = (
   bosses: previous.bosses.map((directive) => ({
     ...directive,
     presence: 'inherit',
-    patch: { ...directive.patch },
+    patch: {},
   })),
 });
 
@@ -112,6 +145,28 @@ const bossNameInPhase = (
     if (nextName) name = nextName;
   }
   return name;
+};
+
+const resolvedBossInPhase = (
+  draft: ScenePlanDraft,
+  battleState: BattleState | null,
+  bossId: string,
+  phaseIndex: number,
+) => {
+  const slotIndex = draft.bossSlots.findIndex((slot) => slot.bossId === bossId);
+  const slot = draft.bossSlots[slotIndex];
+  const base = battleState?.bosses.find((boss) => boss.id === bossId) ?? {
+    ...createInitialBoss(bossId, Math.max(0, slotIndex)),
+    bossName: slot?.label ?? 'Chefão',
+  };
+  let resolved = identityPatchFromBoss(base);
+  for (let index = 0; index <= phaseIndex; index += 1) {
+    const patch = draft.phases[index]?.bosses.find(
+      (directive) => directive.bossId === bossId,
+    )?.patch;
+    if (patch) resolved = { ...resolved, ...patch };
+  }
+  return resolved;
 };
 
 const usePreviewAudioOutput = (
@@ -429,17 +484,20 @@ const ScenePlaylistModal = ({
 const SceneEditorApp = () => {
   const [plan, setPlan] = useState<ScenePlan | null>(null);
   const [draft, setDraft] = useState<ScenePlanDraft | null>(null);
+  const [savedDraft, setSavedDraft] = useState<ScenePlanDraft | null>(null);
   const [selectedBossId, setSelectedBossId] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [battleState, setBattleState] = useState<Awaited<ReturnType<typeof window.bossAPI.getState>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [playlistModal, setPlaylistModal] = useState<ScenePlaylistState | null>(null);
+  const [requestedPlaylistPhaseId, setRequestedPlaylistPhaseId] = useState<string | null>(null);
   const [phaseToDelete, setPhaseToDelete] = useState<number | null>(null);
   const [bossToDelete, setBossToDelete] = useState<string | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const dirtyRef = useRef(false);
+  const battleStateRef = useRef<BattleState | null>(null);
   const draftHistoryRef = useRef<Array<{
     draft: ScenePlanDraft;
     key: string;
@@ -507,10 +565,17 @@ const SceneEditorApp = () => {
 
   useEffect(() => {
     let active = true;
-    window.bossAPI.getScenePlan().then((state) => {
+    Promise.all([
+      window.bossAPI.getScenePlan(),
+      window.bossAPI.getState(),
+    ]).then(([state, initialBattleState]) => {
       if (!active) return;
+      battleStateRef.current = initialBattleState;
+      setBattleState(initialBattleState);
       setPlan(state);
-      setDraft(draftFromPlan(state));
+      const hydratedDraft = draftFromPlan(state, initialBattleState);
+      setDraft(hydratedDraft);
+      setSavedDraft(hydratedDraft);
       draftHistoryRef.current = [];
       setSelectedBossId((current) => state.bossSlots.some((slot) => slot.bossId === current)
         ? current
@@ -520,7 +585,9 @@ const SceneEditorApp = () => {
       if (!active) return;
       setPlan(state);
       if (!dirtyRef.current) {
-        setDraft(draftFromPlan(state));
+        const hydratedDraft = draftFromPlan(state, battleStateRef.current);
+        setDraft(hydratedDraft);
+        setSavedDraft(hydratedDraft);
         draftHistoryRef.current = [];
         setSelectedBossId((current) => state.bossSlots.some((slot) => slot.bossId === current)
           ? current
@@ -535,11 +602,11 @@ const SceneEditorApp = () => {
 
   useEffect(() => {
     let active = true;
-    window.bossAPI.getState().then((state) => {
-      if (active) setBattleState(state);
-    });
     const unsubscribe = window.bossAPI.subscribe((state) => {
-      if (active) setBattleState(state);
+      if (active) {
+        battleStateRef.current = state;
+        setBattleState(state);
+      }
     });
     return () => {
       active = false;
@@ -557,6 +624,13 @@ const SceneEditorApp = () => {
 
   useEffect(
     () => window.bossAPI.subscribeBackgroundError(setMessage),
+    [],
+  );
+
+  useEffect(
+    () => window.bossAPI.subscribeActivePhasePlaylistRequested(
+      setRequestedPlaylistPhaseId,
+    ),
     [],
   );
 
@@ -590,8 +664,29 @@ const SceneEditorApp = () => {
   );
 
   const currentPhase = draft?.phases[selectedIndex] ?? null;
+
+  useEffect(() => {
+    if (!draft || !requestedPlaylistPhaseId) return;
+    const phaseIndex = draft.phases.findIndex(
+      (phase) => phase.id === requestedPlaylistPhaseId,
+    );
+    const phase = draft.phases[phaseIndex];
+    if (!phase?.music) {
+      setRequestedPlaylistPhaseId(null);
+      return;
+    }
+    setRequestedPlaylistPhaseId(null);
+    setSelectedIndex(phaseIndex);
+    void window.bossAPI.openScenePhasePlaylist(
+      phase.id,
+      'music',
+      phase.name,
+      phase.music,
+    ).then((state) => {
+      if (state) setPlaylistModal(state);
+    });
+  }, [draft, requestedPlaylistPhaseId]);
   const rangeError = draft ? validateSceneRanges(draft.phases) : null;
-  const savedDraft = useMemo(() => plan ? draftFromPlan(plan) : null, [plan]);
   const dirty = useMemo(
     () => Boolean(draft && savedDraft && JSON.stringify(draft) !== JSON.stringify(savedDraft)),
     [draft, savedDraft],
@@ -665,6 +760,13 @@ const SceneEditorApp = () => {
       patch.actionSeverity = value === 'grave' ? 'grave' : 'normal';
     } else {
       (patch as Record<string, string | number>)[key] = Number(value);
+      if (
+        key === 'maxHealth' &&
+        selectedIndex === 0 &&
+        bossId === draft?.bossSlots[0]?.bossId
+      ) {
+        patch.currentHealth = Math.max(1, Number(value));
+      }
     }
     return { ...directive, patch };
   }, `phase:${currentPhase?.id}:boss:${bossId}:${String(key)}`);
@@ -680,7 +782,9 @@ const SceneEditorApp = () => {
       return null;
     }
     setPlan(result.state);
-    setDraft(draftFromPlan(result.state));
+    const hydratedDraft = draftFromPlan(result.state, battleStateRef.current);
+    setDraft(hydratedDraft);
+    setSavedDraft(hydratedDraft);
     draftHistoryRef.current = [];
     setMessage('');
     return result.state;
@@ -718,30 +822,40 @@ const SceneEditorApp = () => {
           patch: { ...directive.patch },
         })),
       }));
+    const removedBossIds = new Set<string>();
     for (const slot of draft.bossSlots.filter((item) => !item.original)) {
       const removedDirective = removedPhase?.bosses.find(
         (directive) => directive.bossId === slot.bossId,
       );
       if (removedDirective?.presence !== 'present') continue;
-      const replacementIndex = Math.min(phaseIndex, remaining.length - 1);
-      remaining.forEach((phase, index) => {
-        phase.bosses = phase.bosses.map((directive) =>
-          directive.bossId === slot.bossId
-            ? {
-                ...directive,
-                presence: index < replacementIndex
-                  ? 'absent'
-                  : index === replacementIndex ? 'present' : directive.presence,
-              }
-            : directive);
-      });
+      const introducedEarlier = draft.phases.slice(0, phaseIndex).some(
+        (phase) => phase.bosses.some(
+          (directive) => directive.bossId === slot.bossId &&
+            directive.presence === 'present',
+        ),
+      );
+      if (!introducedEarlier) {
+        removedBossIds.add(slot.bossId);
+      }
     }
-    const ranges = createSceneRanges(
-      remaining.length,
-      remaining[0]?.startHealth ?? 100,
+    const bossSlots = draft.bossSlots.filter(
+      (slot) => !removedBossIds.has(slot.bossId),
     );
-    const phases = remaining.map((phase, index) => ({ ...phase, ...ranges[index] }));
-    mutateDraft(() => ({ ...draft, phases }), `delete-phase:${removedPhase?.id ?? phaseIndex}`);
+    const phasesWithoutOrphans = remaining.map((phase) => ({
+      ...phase,
+      bosses: phase.bosses.filter(
+        (directive) => !removedBossIds.has(directive.bossId),
+      ),
+    }));
+    const ranges = createSceneRanges(
+      phasesWithoutOrphans.length,
+      phasesWithoutOrphans[0]?.startHealth ?? 100,
+    );
+    const phases = phasesWithoutOrphans.map((phase, index) => ({ ...phase, ...ranges[index] }));
+    mutateDraft(() => ({ ...draft, bossSlots, phases }), `delete-phase:${removedPhase?.id ?? phaseIndex}`);
+    if (removedBossIds.has(selectedBossId)) {
+      setSelectedBossId(bossSlots[0]?.bossId ?? '');
+    }
     setSelectedIndex((index) => Math.min(
       index > phaseIndex ? index - 1 : index,
       phases.length - 1,
@@ -763,10 +877,12 @@ const SceneEditorApp = () => {
       phase.startHealth !== expectedRange?.startHealth ||
       phase.endHealth !== expectedRange?.endHealth ||
       phase.bosses.some((directive) => {
-        const inherited = previous?.bosses.find((item) => item.bossId === directive.bossId);
+        const inherited = previous?.bosses.some(
+          (item) => item.bossId === directive.bossId,
+        );
         return !inherited ||
-          directive.presence !== inherited.presence ||
-          JSON.stringify(directive.patch) !== JSON.stringify(inherited.patch);
+          directive.presence !== 'inherit' ||
+          Object.keys(directive.patch).length > 0;
       });
   };
 
@@ -831,6 +947,10 @@ const SceneEditorApp = () => {
     };
     const bossSlots = [...draft.bossSlots, slot];
     const appearanceIndex = selectedIndex;
+    const defaults = identityPatchFromBoss({
+      ...createInitialBoss(bossId, draft.bossSlots.length),
+      bossName: slot.label,
+    });
     const phases = draft.phases.map((phase, index) => ({
       ...phase,
       bosses: [...phase.bosses, {
@@ -839,7 +959,7 @@ const SceneEditorApp = () => {
           ? 'absent' as const
           : index === appearanceIndex ? 'present' as const : 'inherit' as const,
         carryOverflowDamage: true,
-        patch: {},
+        patch: index === appearanceIndex ? defaults : {},
       }],
     }));
     mutateDraft(() => ({
@@ -958,6 +1078,12 @@ const SceneEditorApp = () => {
     carryOverflowDamage: true,
     patch: {},
   };
+  const resolvedCurrentBoss = resolvedBossInPhase(
+    draft,
+    battleState,
+    selectedBossId,
+    selectedIndex,
+  );
 
   return (
     <main className="scene-shell">
@@ -1149,11 +1275,11 @@ const SceneEditorApp = () => {
                 </div>
               </header>
               <div className="boss-values">
-                <label className="boss-name-override"><span>Nome</span><input maxLength={100} placeholder="Herdar" value={currentDirective.patch.bossName ?? ''} onChange={(event) => setPatchValue(selectedBossId, 'bossName', event.target.value)} /></label>
+                <label className="boss-name-override"><span>Nome</span><input maxLength={100} placeholder="Nome do chefão" value={resolvedCurrentBoss.bossName ?? ''} onChange={(event) => setPatchValue(selectedBossId, 'bossName', event.target.value)} /></label>
                 {([
                   ['maxHealth', 'Vida máx.'], ['currentHealth', 'Vida atual'], ['attack', 'Ataque'], ['rangedAttack', 'Tiro'], ['skills', 'Perícias'],
                   ['defense', 'Def. CaC'], ['rangedDefense', 'Def. AaD'], ['damageReduction', 'RD'], ['shield', 'Escudo'],
-                ] as const).map(([key, label]) => <label key={key}><span>{label}</span><input type="number" placeholder="—" value={currentDirective.patch[key] ?? ''} onChange={(event) => setPatchValue(selectedBossId, key, event.target.value)} /></label>)}
+                ] as const).map(([key, label]) => <label key={key}><span>{label}</span><input type="number" placeholder="—" value={resolvedCurrentBoss[key] ?? ''} onChange={(event) => setPatchValue(selectedBossId, key, event.target.value)} /></label>)}
               </div>
               <div className="boss-action-values">
                 <label>
@@ -1161,7 +1287,7 @@ const SceneEditorApp = () => {
                   <textarea
                     maxLength={100}
                     rows={2}
-                    placeholder="Herdar descrição da fase anterior"
+                    placeholder="Descrever a próxima ação para preparar os jogadores"
                     value={currentDirective.patch.nextAction ?? ''}
                     onChange={(event) => setPatchValue(selectedBossId, 'nextAction', event.target.value)}
                   />

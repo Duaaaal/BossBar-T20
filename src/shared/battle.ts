@@ -246,6 +246,23 @@ export type MusicPlaybackState = {
   duration: number;
 };
 
+export type MusicControlCommand =
+  | { type: 'set-volume'; volume: number }
+  | { type: 'set-muted'; muted: boolean }
+  | { type: 'set-loop'; loop: boolean };
+
+export const isMusicControlCommand = (
+  value: unknown,
+): value is MusicControlCommand => {
+  if (!value || typeof value !== 'object' || !('type' in value)) return false;
+  const command = value as Record<string, unknown>;
+  if (command.type === 'set-volume') {
+    return typeof command.volume === 'number' && Number.isFinite(command.volume);
+  }
+  return (command.type === 'set-muted' && typeof command.muted === 'boolean') ||
+    (command.type === 'set-loop' && typeof command.loop === 'boolean');
+};
+
 export const volumeToGain = (volume: number) => {
   const normalizedVolume = Math.max(0, Math.min(1, volume));
   if (normalizedVolume <= 0.1) return normalizedVolume;

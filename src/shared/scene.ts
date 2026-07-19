@@ -181,7 +181,7 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
       music: null,
       bosses: bossSlots.map((bossSlot) => ({
         bossId: bossSlot.bossId,
-        presence: 'inherit',
+        presence: 'present',
         carryOverflowDamage: true,
         patch: {},
       })),

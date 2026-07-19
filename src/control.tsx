@@ -13,6 +13,7 @@ import {
   calculateHealthSequence,
   type BattleState,
   type EncounterEffectsState,
+  type MusicState,
   type SoundboardState,
   initialEncounterEffectsState,
 } from './shared/battle';
@@ -257,6 +258,7 @@ const ControlApp = () => {
     initialEncounterEffectsState,
   );
   const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
+  const [music, setMusic] = useState<MusicState | null>(null);
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
@@ -303,6 +305,20 @@ const ControlApp = () => {
     });
     const unsubscribe = window.bossAPI.subscribeSoundboard((nextState) => {
       if (active) setSoundboard(nextState);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getMusicState().then((nextState) => {
+      if (active) setMusic(nextState);
+    });
+    const unsubscribe = window.bossAPI.subscribeMusic((nextState) => {
+      if (active) setMusic(nextState);
     });
     return () => {
       active = false;
@@ -1037,6 +1053,48 @@ const ControlApp = () => {
           <button className="control-publish-danger" type="button" onClick={() => publishAction('grave')}>Ação grave</button>
         </div>
 
+        <div className="control-music-row">
+          <div className="control-inline-audio-controls">
+            <span>Música:</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              aria-label="Volume da música"
+              value={Math.round((music?.volume ?? 0.8) * 100)}
+              onChange={(event) => window.bossAPI.dispatchMusicControl({
+                type: 'set-volume',
+                volume: Number(event.target.value) / 100,
+              })}
+            />
+            <button
+              type="button"
+              className={music?.muted ? 'is-active' : ''}
+              title={music?.muted ? 'Ativar música' : 'Mutar música'}
+              onClick={() => window.bossAPI.dispatchMusicControl({
+                type: 'set-muted',
+                muted: !(music?.muted ?? false),
+              })}
+            >{music?.muted ? '🔇' : '🔊'}</button>
+            <button
+              type="button"
+              className={music?.loop ? 'is-active' : ''}
+              title="Repetir faixa"
+              onClick={() => window.bossAPI.dispatchMusicControl({
+                type: 'set-loop',
+                loop: !(music?.loop ?? false),
+              })}
+            >↻</button>
+            <button
+              type="button"
+              title="Abrir playlist da fase atual"
+              disabled={!music?.tracks.length}
+              data-disabled-reason="A fase atual não possui playlist"
+              onClick={() => void window.bossAPI.openActivePhasePlaylist()}
+            >☷</button>
+          </div>
+        </div>
+
         <div className="control-soundboard-row">
           <button className="control-open-soundboard" type="button" onClick={() => void window.bossAPI.openSoundboardWindow()}>Soundboard</button>
           <div className="control-soundboard-shortcuts" aria-label="Atalhos do soundboard">
@@ -1055,7 +1113,8 @@ const ControlApp = () => {
               </button>
             ))}
           </div>
-          <div className="control-soundboard-volume">
+          <div className="control-inline-audio-controls">
+            <span>Soundboard:</span>
             <input
               type="range"
               min="0"
@@ -1071,6 +1130,7 @@ const ControlApp = () => {
             />
             <button type="button" className={soundboard?.muted ? 'is-active' : ''} title={soundboard?.muted ? 'Ativar soundboard' : 'Mutar soundboard'} disabled={!soundboard} data-disabled-reason="O soundboard ainda não está disponível" onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-mute' })}>{soundboard?.muted ? '🔇' : '🔊'}</button>
             <button type="button" className={soundboard?.loop ? 'is-active' : ''} title="Repetir sons" disabled={!soundboard} data-disabled-reason="O soundboard ainda não está disponível" onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-loop' })}>↻</button>
+            <span aria-hidden="true" />
           </div>
         </div>
       </form>

@@ -15,11 +15,20 @@ import {
   isBattleCommand,
   isEncounterSoundEffectKind,
   isHeavyDamageEffect,
+  isMusicControlCommand,
   isEncounterSoundEnabled,
   isShieldBreakEffect,
   isSoundboardCommand,
   volumeToGain,
 } from '../src/shared/battle.ts';
+
+test('valida somente comandos seguros dos controles musicais', () => {
+  assert.equal(isMusicControlCommand({ type: 'set-volume', volume: 0.65 }), true);
+  assert.equal(isMusicControlCommand({ type: 'set-muted', muted: true }), true);
+  assert.equal(isMusicControlCommand({ type: 'set-loop', loop: false }), true);
+  assert.equal(isMusicControlCommand({ type: 'set-volume', volume: Number.NaN }), false);
+  assert.equal(isMusicControlCommand({ type: 'set-muted', muted: 'sim' }), false);
+});
 
 const freshBattle = () => ({
   ...initialBattleState,
