@@ -5,6 +5,7 @@ export const MAX_SCENE_BOSSES = 3;
 
 export type SceneTransitionKind = 'fade' | 'blackout' | 'explosion';
 export type SceneMediaSlot = 'background' | 'transitionSound' | 'music';
+export type SceneAudioSlot = Exclude<SceneMediaSlot, 'background'>;
 export type SceneBossPresence = 'inherit' | 'present' | 'absent';
 
 export type SceneMediaSummary = {
@@ -12,6 +13,38 @@ export type SceneMediaSummary = {
   configured: boolean;
   mediaType: 'image' | 'video' | 'audio';
 };
+
+export type ScenePlaylistTrack = {
+  id: string;
+  name: string;
+  duration: number;
+  url: string;
+};
+
+export type ScenePlaylistSummary = {
+  tracks: ScenePlaylistTrack[];
+  currentTrackId: string | null;
+  volume: number;
+  muted: boolean;
+  loop: boolean;
+  revision: number;
+};
+
+export type ScenePlaylistState = ScenePlaylistSummary & {
+  phaseId: string;
+  phaseName: string;
+  slot: SceneAudioSlot;
+};
+
+export type ScenePlaylistCommand =
+  | { type: 'previous' }
+  | { type: 'next' }
+  | { type: 'select-track'; trackId: string }
+  | { type: 'remove-track'; trackId: string }
+  | { type: 'clear' }
+  | { type: 'set-volume'; volume: number }
+  | { type: 'set-muted'; muted: boolean }
+  | { type: 'set-loop'; loop: boolean };
 
 export type SceneBossPatch = {
   bossName?: string;
@@ -45,8 +78,8 @@ export type ScenePhase = {
   endPercent: number;
   transition: SceneTransitionKind;
   background: SceneMediaSummary | null;
-  transitionSound: SceneMediaSummary | null;
-  music: SceneMediaSummary | null;
+  transitionSound: ScenePlaylistSummary | null;
+  music: ScenePlaylistSummary | null;
   bosses: SceneBossDirective[];
 };
 
@@ -76,6 +109,15 @@ export type SceneMediaSelectionResult = {
   ok: boolean;
   canceled?: boolean;
   media?: SceneMediaSummary;
+  playlist?: ScenePlaylistSummary;
+  error?: string;
+};
+
+export type ScenePlaylistSelectionResult = {
+  ok: boolean;
+  canceled?: boolean;
+  added?: number;
+  state?: ScenePlaylistState;
   error?: string;
 };
 
@@ -85,6 +127,9 @@ export type SceneTransitionEvent = {
   kind: SceneTransitionKind;
   durationMs: number;
   soundUrl: string | null;
+  soundVolume: number;
+  soundMuted: boolean;
+  soundLoop: boolean;
 };
 
 const clampInteger = (value: number, minimum: number, maximum: number) =>
@@ -168,6 +213,34 @@ export const crossedScenePhaseIndexes = (
       ? [index]
       : [],
   );
+};
+
+export const sceneTransitionSourceIndex = (
+  targetPhaseIndex: number,
+  phaseCount: number,
+) => {
+  if (
+    !Number.isInteger(targetPhaseIndex) ||
+    !Number.isInteger(phaseCount) ||
+    phaseCount < 1 ||
+    targetPhaseIndex < 1 ||
+    targetPhaseIndex >= phaseCount
+  ) return -1;
+  return targetPhaseIndex - 1;
+};
+
+export const adjacentScenePlaylistTrackId = (
+  playlist: Pick<ScenePlaylistSummary, 'tracks' | 'currentTrackId'>,
+  offset: -1 | 1,
+) => {
+  if (playlist.tracks.length < 2) return playlist.currentTrackId;
+  const currentIndex = Math.max(
+    0,
+    playlist.tracks.findIndex((track) => track.id === playlist.currentTrackId),
+  );
+  return playlist.tracks[
+    (currentIndex + offset + playlist.tracks.length) % playlist.tracks.length
+  ].id;
 };
 
 export const validateSceneRanges = (

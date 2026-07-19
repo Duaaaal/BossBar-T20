@@ -1187,23 +1187,33 @@ const SceneTransitionPlayer = () => {
     const audios = new Set<HTMLAudioElement>();
     const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
       setEffect(nextEffect);
-      if (nextEffect.soundUrl && !universalMuted.current) {
+      let transitionAudio: HTMLAudioElement | null = null;
+      let releaseTransitionAudio: (() => void) | null = null;
+      if (
+        nextEffect.soundUrl &&
+        !nextEffect.soundMuted &&
+        !universalMuted.current
+      ) {
         const audio = new Audio(nextEffect.soundUrl);
+        transitionAudio = audio;
         audios.add(audio);
         audio.preload = 'auto';
-        audio.volume = 1;
+        audio.volume = Math.max(0, Math.min(1, nextEffect.soundVolume));
+        audio.loop = nextEffect.soundLoop;
         const release = () => {
           audios.delete(audio);
           audio.pause();
           audio.removeAttribute('src');
           audio.load();
         };
+        releaseTransitionAudio = release;
         audio.addEventListener('ended', release, { once: true });
         audio.addEventListener('error', release, { once: true });
         void audio.play().catch(release);
       }
       const timer = setTimeout(() => {
         timers.delete(timer);
+        if (transitionAudio && releaseTransitionAudio) releaseTransitionAudio();
         setEffect((current) => current?.id === nextEffect.id ? null : current);
       }, nextEffect.durationMs + 80);
       timers.add(timer);

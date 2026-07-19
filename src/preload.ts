@@ -41,8 +41,13 @@ import type {
   BossLibrarySaveResult,
 } from './shared/library';
 import type {
+  SceneAudioSlot,
   SceneMediaSelectionResult,
   SceneMediaSlot,
+  ScenePlaylistCommand,
+  ScenePlaylistSelectionResult,
+  ScenePlaylistState,
+  ScenePlaylistSummary,
   ScenePlan,
   ScenePlanDraft,
   SceneSaveResult,
@@ -67,6 +72,10 @@ const encounterEffectsSubscribers = new Set<
 >();
 let latestScenePlan: ScenePlan | null = null;
 const scenePlanSubscribers = new Set<(state: ScenePlan) => void>();
+let latestScenePlaylist: ScenePlaylistState | null = null;
+const scenePlaylistSubscribers = new Set<
+  (state: ScenePlaylistState) => void
+>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -99,6 +108,14 @@ ipcRenderer.on('scene:state-changed', (_event, state: ScenePlan) => {
   latestScenePlan = state;
   for (const subscriber of scenePlanSubscribers) subscriber(state);
 });
+
+ipcRenderer.on(
+  'scene:playlist-changed',
+  (_event, state: ScenePlaylistState) => {
+    latestScenePlaylist = state;
+    for (const subscriber of scenePlaylistSubscribers) subscriber(state);
+  },
+);
 
 ipcRenderer.on('soundboard:state-changed', (_event, state: SoundboardState) => {
   latestSoundboardState = state;
@@ -155,6 +172,29 @@ const bossAPI = {
     slot: SceneMediaSlot,
   ): Promise<SceneSaveResult> =>
     ipcRenderer.invoke('scene:clear-media', phaseId, slot),
+  openScenePhasePlaylist: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+    phaseName: string,
+    initial: ScenePlaylistSummary | null,
+  ): Promise<boolean> =>
+    ipcRenderer.invoke('scene:open-playlist', phaseId, slot, phaseName, initial),
+  getScenePhasePlaylist: async (): Promise<ScenePlaylistState | null> => {
+    const state = (await ipcRenderer.invoke(
+      'scene-playlist:get-state',
+    )) as ScenePlaylistState | null;
+    latestScenePlaylist = state;
+    return state;
+  },
+  addScenePhasePlaylistTracks: (): Promise<ScenePlaylistSelectionResult> =>
+    ipcRenderer.invoke('scene-playlist:add-tracks'),
+  dispatchScenePhasePlaylist: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+    command: ScenePlaylistCommand,
+  ) => {
+    ipcRenderer.send('scene-playlist:dispatch', phaseId, slot, command);
+  },
   openBossLibrary: (): Promise<boolean> =>
     ipcRenderer.invoke('library:open-window'),
   hasEncounterLibraryEntries: (): Promise<boolean> =>
@@ -435,6 +475,13 @@ const bossAPI = {
     const listener = () => callback();
     ipcRenderer.on('scene:close-requested', listener);
     return () => ipcRenderer.removeListener('scene:close-requested', listener);
+  },
+  subscribeScenePhasePlaylist: (
+    callback: (state: ScenePlaylistState) => void,
+  ) => {
+    scenePlaylistSubscribers.add(callback);
+    if (latestScenePlaylist) callback(latestScenePlaylist);
+    return () => scenePlaylistSubscribers.delete(callback);
   },
   subscribeSceneTransition: (
     callback: (effect: SceneTransitionEvent) => void,
