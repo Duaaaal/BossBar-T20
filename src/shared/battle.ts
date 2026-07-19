@@ -295,7 +295,9 @@ export type EncounterEffectsState = {
   revision: number;
 };
 
-export type EncounterGeneralSetting = 'automaticStatusEffects';
+export type EncounterGeneralSetting =
+  | 'automaticStatusEffects'
+  | 'phaseMarkers';
 
 export type EncounterGeneralSettings = Record<EncounterGeneralSetting, boolean>;
 
@@ -322,6 +324,7 @@ export const initialEncounterEffectsState: EncounterEffectsState = {
   universalMuted: false,
   general: {
     automaticStatusEffects: true,
+    phaseMarkers: false,
   },
   sounds: {
     heal: true,

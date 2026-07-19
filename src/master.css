@@ -39,7 +39,7 @@ button { font: inherit; cursor: pointer; }
 .compact-panel-title { display: flex; align-items: center; margin-bottom: 11px; }
 .compact-panel-title h2 { margin: 0; color: #cbbfcd; font-size: .74rem; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
 
-.session-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.session-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .session-actions button, .library-actions button, .modal-actions button { border: 1px solid rgba(171, 112, 130, .28); border-radius: 8px; min-height: 38px; padding: 8px 10px; color: #fff; font-size: .7rem; font-weight: 800; }
 .session-actions button, .library-actions button { background: transparent; box-shadow: none; transition: border-color .15s ease, color .15s ease, filter .15s ease, transform .15s ease; }
 .modal-actions button { box-shadow: inset 0 1px rgba(255, 255, 255, .1), 0 3px 8px rgba(0, 0, 0, .16); transition: filter .15s ease, transform .15s ease; }
@@ -49,10 +49,11 @@ button { font: inherit; cursor: pointer; }
 .reset-button { border-color: #714553 !important; color: #d9a9b6 !important; }
 .hud-toggle-button { border-color: #72455f !important; color: #dfadca !important; }
 .start-battle-button { border-color: #d3495f !important; background: linear-gradient(135deg, #9c263e, #df4358) !important; }
+.start-battle-button { grid-column: span 2; }
 .start-battle-button.is-ending { background: linear-gradient(135deg, #67263a, #a7354c) !important; }
 .blackout-button { border-color: #4e4e56 !important; background: #020203 !important; color: #d5d5dc !important; }
 .blackout-button:disabled { opacity: .4; }
-.release-blackout-button { grid-column: 1 / -1; border-color: #e6a45b !important; background: linear-gradient(135deg, #6f3c18, #bc6d28) !important; color: #fff1d9 !important; }
+.release-blackout-button { border-color: #e6a45b !important; background: linear-gradient(135deg, #6f3c18, #bc6d28) !important; color: #fff1d9 !important; }
 
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
 .scene-customization-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; border-top: 1px solid rgba(77, 64, 80, .5); padding-top: 11px; }

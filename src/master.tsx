@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import {
   type BattleState,
   type EncounterEffectsState,
+  type EncounterGeneralSetting,
   type EncounterSoundCustomizationState,
   type EncounterSoundEffectKind,
   type EncounterSoundOption,
@@ -344,7 +345,7 @@ const MasterApp = () => {
   };
 
   const setEncounterGeneralEnabled = (
-    setting: 'automaticStatusEffects',
+    setting: EncounterGeneralSetting,
     enabled: boolean,
   ) => {
     setEncounterEffects((current) => current
@@ -548,6 +549,19 @@ const MasterApp = () => {
             {presentationOpen ? 'Janela já aberta' : 'Abrir Janela'}
           </button>
           <button className="hud-toggle-button" type="button" onClick={() => window.bossAPI.dispatch({ type: 'set-hud-visible', visible: !state.hudVisible })}>{state.hudVisible ? 'Esconder HUD' : 'Mostrar HUD'}</button>
+          {scenePlan?.blackoutActive ? (
+            <button
+              className="release-blackout-button"
+              type="button"
+              onClick={() => void window.bossAPI.releaseSceneBlackout()}
+            >Liberar blackout</button>
+          ) : (
+            <button
+              className="blackout-button"
+              type="button"
+              onClick={() => void window.bossAPI.activateSceneBlackout()}
+            >Blackout</button>
+          )}
           <button
             className={`start-battle-button ${state.battleStarted ? 'is-ending' : ''}`}
             type="button"
@@ -558,21 +572,6 @@ const MasterApp = () => {
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
           <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
-          <button
-            className="blackout-button"
-            type="button"
-            disabled={scenePlan?.blackoutActive}
-            onClick={() => void window.bossAPI.activateSceneBlackout()}
-          >Blackout</button>
-          {scenePlan?.blackoutActive && (
-            <button
-              className="release-blackout-button"
-              type="button"
-              onClick={() => void window.bossAPI.releaseSceneBlackout()}
-            >
-              Liberar blackout
-            </button>
-          )}
         </div>
       </section>
 
@@ -628,6 +627,11 @@ const MasterApp = () => {
                   checked={encounterEffects.general.automaticStatusEffects}
                   label="Cálculos automáticos de condições"
                   onChange={(checked) => setEncounterGeneralEnabled('automaticStatusEffects', checked)}
+                />
+                <SettingsCheckbox
+                  checked={encounterEffects.general.phaseMarkers}
+                  label="Marcadores de mudança na barra de vida"
+                  onChange={(checked) => setEncounterGeneralEnabled('phaseMarkers', checked)}
                 />
               </div>
             </section>

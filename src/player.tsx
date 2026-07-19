@@ -1607,9 +1607,10 @@ const PlayerApp = () => {
               boss={boss}
               bossCount={visibleBosses.length}
               effects={healthEffects[boss.id] ?? noHealthEffects}
-              phaseMarkers={scenePlan?.showPhaseMarkers
+              phaseMarkers={encounterEffects.general.phaseMarkers &&
+                scenePlan &&
+                scenePlan.phases[0]?.triggerBossId === boss.id
                 ? [...new Set(scenePlan.phases
-                    .filter((phase) => phase.triggerBossId === boss.id)
                     .slice(1)
                     .map((phase) => Math.max(
                       0,

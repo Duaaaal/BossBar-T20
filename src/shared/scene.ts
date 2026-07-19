@@ -160,14 +160,15 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
     label: boss.bossName,
     original: true,
   }));
-  const createInitialPhase = (slot: SceneBossSlot, index: number): ScenePhase => {
-    const boss = bosses.find((item) => item.id === slot.bossId);
-    const initialHealth = boss?.currentHealth ?? boss?.maxHealth ?? 500;
-    return {
-      id: index === 0 ? 'phase-1' : `phase-1-${slot.bossId}`,
+  const primaryBoss = bosses[0];
+  return {
+    bossSlots,
+    showPhaseMarkers: false,
+    phases: [{
+      id: 'phase-1',
       name: 'Fase 1',
-      triggerBossId: slot.bossId,
-      startHealth: initialHealth,
+      triggerBossId: bossSlots[0]?.bossId ?? 'boss-1',
+      startHealth: primaryBoss?.currentHealth ?? primaryBoss?.maxHealth ?? 500,
       endHealth: 0,
       transition: 'fade',
       transitionDurationSeconds: 2,
@@ -180,23 +181,13 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
         presence: 'inherit',
         patch: {},
       })),
-    };
-  };
-  return {
-    bossSlots,
-    showPhaseMarkers: false,
-    phases: bossSlots.map(createInitialPhase),
+    }],
     activePhaseIndex: -1,
     activePhaseIds: Object.fromEntries(bossSlots.map((slot) => [slot.bossId, null])),
     blackoutActive: false,
     revision: 0,
   };
 };
-
-export const scenePhasesForBoss = <T extends Pick<ScenePhase, 'triggerBossId'>>(
-  phases: T[],
-  bossId: string,
-) => phases.filter((phase) => phase.triggerBossId === bossId);
 
 export const scenePhaseAtHealth = (
   phases: Pick<ScenePhase, 'startHealth' | 'endHealth'>[],
@@ -280,23 +271,6 @@ export const validateSceneRanges = (
   }
   if (phases[phases.length - 1].endHealth !== 0) {
     return 'A última fase deve terminar em 0 PV.';
-  }
-  return null;
-};
-
-export const validateScenePhaseTracks = <
-  T extends Pick<ScenePhaseDraft, 'id' | 'triggerBossId' | 'startHealth' | 'endHealth'>,
->(
-  phases: T[],
-  bossSlots: SceneBossSlot[],
-) => {
-  if (new Set(phases.map((phase) => phase.id)).size !== phases.length) {
-    return 'Cada fase precisa ter um identificador exclusivo.';
-  }
-  for (const slot of bossSlots) {
-    const track = scenePhasesForBoss(phases, slot.bossId);
-    const error = validateSceneRanges(track);
-    if (error) return `${slot.label}: ${error}`;
   }
   return null;
 };
