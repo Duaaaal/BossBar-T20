@@ -1,10 +1,18 @@
 {
-  "name": "boss-battle",
+  "name": "bossbar-t20",
   "productName": "BossBar - Tormenta20",
   "version": "1.5.2",
   "description": "Painel local de mestre e apresentação de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Duaaaal/BossBar-T20.git"
+  },
+  "homepage": "https://github.com/Duaaaal/BossBar-T20#readme",
+  "bugs": {
+    "url": "https://github.com/Duaaaal/BossBar-T20/issues"
+  },
   "scripts": {
     "start": "electron-forge start",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
@@ -19,7 +27,7 @@
   "keywords": [
     "electron",
     "rpg",
-    "boss-battle",
+    "bossbar-t20",
     "discord"
   ],
   "author": {

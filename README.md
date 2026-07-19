@@ -76,7 +76,7 @@ Os jogadores não precisam instalar o aplicativo, criar uma conta ou se conectar
 
 ## Instalação para jogadores e mestres
 
-1. Abra a página da [versão mais recente](https://github.com/Duaaaal/boss-battle/releases/latest).
+1. Abra a página da [versão mais recente](https://github.com/Duaaaal/BossBar-T20/releases/latest).
 2. Baixe o instalador `.exe` disponível em **Assets**.
 3. Execute o instalador e abra o **BossBar - Tormenta20**.
 
@@ -115,8 +115,8 @@ Arquivos muito grandes ou muitas mídias simultâneas podem aumentar o consumo d
 ### Executar localmente
 
 ```powershell
-git clone https://github.com/Duaaaal/boss-battle.git
-cd boss-battle
+git clone https://github.com/Duaaaal/BossBar-T20.git
+cd BossBar-T20
 npm ci
 npm start
 ```
@@ -152,7 +152,7 @@ O BossBar foi idealizado e dirigido por **Brian Nascimento** e desenvolvido com 
 ## Estrutura do projeto
 
 ```text
-boss-battle/
+BossBar-T20/
 ├── assets/                  # Recursos internos distribuídos com o aplicativo
 ├── scripts/                 # Scripts auxiliares de build
 ├── src/
@@ -254,7 +254,7 @@ Players do not need to install the application, create an account, or connect to
 
 ## Installation for players and game masters
 
-1. Open the [latest release](https://github.com/Duaaaal/boss-battle/releases/latest) page.
+1. Open the [latest release](https://github.com/Duaaaal/BossBar-T20/releases/latest) page.
 2. Download the `.exe` installer listed under **Assets**.
 3. Run the installer and open **BossBar - Tormenta20**.
 
@@ -293,8 +293,8 @@ Very large files or many simultaneous media assets may increase memory usage and
 ### Run locally
 
 ```powershell
-git clone https://github.com/Duaaaal/boss-battle.git
-cd boss-battle
+git clone https://github.com/Duaaaal/BossBar-T20.git
+cd BossBar-T20
 npm ci
 npm start
 ```
@@ -330,7 +330,7 @@ BossBar was conceived and directed by **Brian Nascimento** and developed with th
 ## Project structure
 
 ```text
-boss-battle/
+BossBar-T20/
 ├── assets/                  # Internal resources shipped with the application
 ├── scripts/                 # Supporting build scripts
 ├── src/

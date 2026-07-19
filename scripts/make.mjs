@@ -116,7 +116,7 @@ const moveOutput = async (source, destination) => {
 
 await assertVersionMatchesGit();
 const temporaryRoot = await mkdtemp(
-  path.join(os.tmpdir(), 'boss-battle-forge-'),
+  path.join(os.tmpdir(), 'bossbar-t20-forge-'),
 );
 const temporaryOutput = path.join(temporaryRoot, 'out');
 
