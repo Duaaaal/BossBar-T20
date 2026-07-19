@@ -152,6 +152,8 @@ const bossAPI = {
     ipcRenderer.invoke('control:set-minimized', minimized),
   openMusicWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('music:open-window'),
+  openSoundboardWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('soundboard:open-window'),
   openSceneEditor: (): Promise<boolean> =>
     ipcRenderer.invoke('scene:open-window'),
   confirmSceneEditorClose: () => ipcRenderer.send('scene:confirm-close'),
@@ -177,17 +179,13 @@ const bossAPI = {
     slot: SceneAudioSlot,
     phaseName: string,
     initial: ScenePlaylistSummary | null,
-  ): Promise<boolean> =>
+  ): Promise<ScenePlaylistState | null> =>
     ipcRenderer.invoke('scene:open-playlist', phaseId, slot, phaseName, initial),
-  getScenePhasePlaylist: async (): Promise<ScenePlaylistState | null> => {
-    const state = (await ipcRenderer.invoke(
-      'scene-playlist:get-state',
-    )) as ScenePlaylistState | null;
-    latestScenePlaylist = state;
-    return state;
-  },
-  addScenePhasePlaylistTracks: (): Promise<ScenePlaylistSelectionResult> =>
-    ipcRenderer.invoke('scene-playlist:add-tracks'),
+  addScenePhasePlaylistTracks: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+  ): Promise<ScenePlaylistSelectionResult> =>
+    ipcRenderer.invoke('scene-playlist:add-tracks', phaseId, slot),
   dispatchScenePhasePlaylist: (
     phaseId: string,
     slot: SceneAudioSlot,
@@ -308,6 +306,8 @@ const bossAPI = {
   },
   setSoundboardOpen: (open: boolean): Promise<boolean> =>
     ipcRenderer.invoke('music:set-soundboard-open', open),
+  releaseSceneBlackout: (): Promise<boolean> =>
+    ipcRenderer.invoke('scene:release-blackout'),
   soundEffectFinished: (effectId: number) => {
     ipcRenderer.send('soundboard:playback-finished', effectId);
   },

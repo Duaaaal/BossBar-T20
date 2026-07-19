@@ -329,7 +329,7 @@ button { font: inherit; }
 .edit-sound-button:hover { background: #4c2c59; color: #f0d9fa; }
 .soundboard-volume-control {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 38px 38px;
+  grid-template-columns: auto minmax(0, 1fr) 38px 38px 38px;
   align-items: center;
   gap: 10px;
   margin-top: 16px;
@@ -341,6 +341,7 @@ button { font: inherit; }
 .soundboard-volume-control strong { color: #cfc3d3; font-size: .68rem; font-variant-numeric: tabular-nums; text-align: right; }
 .soundboard-playback-error { margin: 11px 2px -4px; color: #e87884; font-size: .66rem; line-height: 1.4; }
 .soundboard-help { margin: 15px 2px 0; color: #7f7584; font-size: .66rem; line-height: 1.45; }
+.media-size-warning { margin: 8px 2px 0; color: #8e746f; font-size: .61rem; line-height: 1.35; }
 
 .music-modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(5, 4, 8, .78); backdrop-filter: blur(5px); }
 .music-confirmation-modal { width: min(100%, 390px); border: 1px solid #493843; border-radius: 16px; padding: 22px; background: #1b171d; box-shadow: 0 24px 70px rgba(0, 0, 0, .58); }

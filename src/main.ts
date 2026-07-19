@@ -152,9 +152,9 @@ let playerWindow: BrowserWindow | null = null;
 let controlWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
 let musicWindow: BrowserWindow | null = null;
+let soundboardWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
-let scenePlaylistWindow: BrowserWindow | null = null;
 let playerWindowReady = false;
 let battleState: BattleState = initialBattleState;
 let scenePlan: ScenePlan = createScenePlan(battleState.bosses);
@@ -166,17 +166,13 @@ type PendingScenePlaylist = {
   paths: Map<string, string>;
 };
 const pendingScenePlaylists = new Map<string, PendingScenePlaylist>();
-let scenePlaylistContext: {
-  phaseId: string;
-  phaseName: string;
-  slot: SceneAudioSlot;
-} | null = null;
 const sceneBossArchive = new Map(battleState.bosses.map((boss) => [boss.id, boss]));
 const queuedScenePhaseIndexes: number[] = [];
 const pendingScenePhaseIndexes = new Set<number>();
 let sceneTransitioning = false;
 let sceneTransitionSequence = 0;
 let sceneTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingBlackoutPhaseIndex: number | null = null;
 let activeBackgroundFilePath: string | null = null;
 let configuredBackgroundFilePath: string | null = null;
 let configuredBackgroundName: string | null = null;
@@ -280,6 +276,7 @@ let musicPlaybackState: MusicPlaybackState = {
 let soundboardAudioState = {
   volume: 0.8,
   muted: false,
+  loop: false,
 };
 let encounterEffectsAudioState = {
   volume: initialEncounterEffectsState.volume,
@@ -302,17 +299,18 @@ let synchronizingDockedWindows = false;
 let synchronizingDockedFocus = false;
 const CONTROL_PANEL_MINIMIZED_HEIGHT = 32;
 const CONTROL_PANEL_DOCK_OVERLAP = 1;
-const CONTROL_PANEL_MIN_EXPANDED_HEIGHT = 350;
-const CONTROL_PANEL_PREFERRED_HEIGHT = 360;
-const CONTROL_PANEL_MAX_EXPANDED_HEIGHT = 430;
+const CONTROL_PANEL_MIN_EXPANDED_HEIGHT = 390;
+const CONTROL_PANEL_PREFERRED_HEIGHT = 420;
+const CONTROL_PANEL_MAX_EXPANDED_HEIGHT = 470;
 const PLAYER_MIN_CONTENT_WIDTH = 960;
 const PLAYER_PREFERRED_CONTENT_WIDTH = 1280;
 const PLAYER_MAX_OUTER_WIDTH = 1920;
 const PLAYER_MAX_OUTER_HEIGHT = 1040;
 const PLAYER_NATIVE_FRAME_BUDGET = 48;
 const DOCKED_WINDOW_GAP = 12;
+const MAX_USER_MEDIA_BYTES = 100 * 1024 * 1024;
 let controlPanelMinimized = false;
-let controlPanelExpandedHeight = 390;
+let controlPanelExpandedHeight = 420;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -361,7 +359,7 @@ type StoredScenePhase = Omit<ScenePhase, 'background' | 'transitionSound' | 'mus
 
 type StoredScenePlan = Pick<
   ScenePlan,
-  'bossSlots' | 'showPhaseMarkers' | 'activePhaseIndex'
+  'bossSlots' | 'showPhaseMarkers' | 'activePhaseIndex' | 'blackoutActive'
 > & {
   phases: StoredScenePhase[];
   templates: StoredLibraryBoss[];
@@ -387,6 +385,7 @@ type BossLibraryEntry = {
     slots: Array<StoredMediaFile & { index: number }>;
     volume: number;
     muted: boolean;
+    loop?: boolean;
   };
   scene: StoredScenePlan;
 };
@@ -852,7 +851,8 @@ const isStoredLibraryEnvelope = (
     typeof value.music.muted === 'boolean' &&
     slotsAreValid &&
     isFiniteStoredNumber(value.soundboard.volume) &&
-    typeof value.soundboard.muted === 'boolean'
+    typeof value.soundboard.muted === 'boolean' &&
+    (value.soundboard.loop === undefined || typeof value.soundboard.loop === 'boolean')
   );
 };
 
@@ -999,14 +999,17 @@ const defaultStoredScene = (bosses: StoredLibraryBoss[]): StoredScenePlan => {
     bossSlots: slots,
     showPhaseMarkers: false,
     activePhaseIndex: -1,
+    blackoutActive: false,
     templates: bosses.map((boss) => ({ ...boss })),
     phases: [{
       id: 'phase-1',
       name: 'Fase 1',
       triggerBossId: slots[0]?.bossId ?? 'boss-1',
-      startPercent: 100,
-      endPercent: 0,
+      startHealth: bosses[0]?.currentHealth ?? bosses[0]?.maxHealth ?? 500,
+      endHealth: 0,
       transition: 'fade',
+      transitionDurationSeconds: 2,
+      transitionSoundDelaySeconds: 0,
       background: null,
       transitionSound: null,
       music: null,
@@ -1041,16 +1044,17 @@ const normalizeStoredScene = (
     new Set(bossSlots.map((slot) => slot.bossId)).size !== bossSlots.length
   ) return null;
   const knownIds = new Set(bossSlots.map((slot) => slot.bossId));
-  const phases = value.phases.flatMap((rawPhase): StoredScenePhase[] => {
+  const storedBossesById = new Map(bosses.map((boss) => [boss.bossId, boss]));
+  const phases = value.phases.flatMap((rawPhase, phaseIndex): StoredScenePhase[] => {
     if (
       !isRecord(rawPhase) ||
       !isSafeSceneIdentifier(rawPhase.id) ||
       typeof rawPhase.name !== 'string' ||
       typeof rawPhase.triggerBossId !== 'string' ||
       !knownIds.has(rawPhase.triggerBossId) ||
-      !isFiniteStoredNumber(rawPhase.startPercent) ||
-      !isFiniteStoredNumber(rawPhase.endPercent) ||
-      !['fade', 'blackout', 'explosion'].includes(String(rawPhase.transition)) ||
+      (!isFiniteStoredNumber(rawPhase.startHealth) && !isFiniteStoredNumber(rawPhase.startPercent)) ||
+      (!isFiniteStoredNumber(rawPhase.endHealth) && !isFiniteStoredNumber(rawPhase.endPercent)) ||
+      !['fade', 'fade-blackout', 'blackout', 'explosion'].includes(String(rawPhase.transition)) ||
       !Array.isArray(rawPhase.bosses)
     ) return [];
     const directives = rawPhase.bosses.flatMap((directive): SceneBossDirective[] => {
@@ -1085,13 +1089,42 @@ const normalizeStoredScene = (
       'music',
     );
     if (background === undefined || transitionSound === undefined || music === undefined) return [];
+    const triggerBoss = storedBossesById.get(rawPhase.triggerBossId);
+    const triggerMaximum = triggerBoss?.maxHealth ?? 500;
+    const triggerInitialHealth = triggerBoss?.currentHealth ?? triggerMaximum;
+    const legacyStart = phaseIndex === 0
+      ? triggerInitialHealth
+      : Math.round(triggerInitialHealth * Number(rawPhase.startPercent) / 100);
+    const startHealth = isFiniteStoredNumber(rawPhase.startHealth)
+      ? Math.round(rawPhase.startHealth)
+      : legacyStart;
+    const endHealth = isFiniteStoredNumber(rawPhase.endHealth)
+      ? Math.round(rawPhase.endHealth)
+      : Math.round(triggerInitialHealth * Number(rawPhase.endPercent) / 100);
+    const transition = rawPhase.transition === 'explosion'
+      ? 'fade'
+      : rawPhase.transition as SceneTransitionKind;
+    const requestedDuration = isFiniteStoredNumber(rawPhase.transitionDurationSeconds)
+      ? rawPhase.transitionDurationSeconds
+      : transition === 'blackout' ? 0 : 2;
+    const transitionDurationSeconds = transition === 'blackout'
+      ? 0
+      : Math.max(0.01, Math.min(10, requestedDuration));
+    const requestedDelay = isFiniteStoredNumber(rawPhase.transitionSoundDelaySeconds)
+      ? rawPhase.transitionSoundDelaySeconds
+      : 0;
     return [{
       id: rawPhase.id,
       name: rawPhase.name,
       triggerBossId: rawPhase.triggerBossId,
-      startPercent: rawPhase.startPercent,
-      endPercent: rawPhase.endPercent,
-      transition: rawPhase.transition as SceneTransitionKind,
+      startHealth,
+      endHealth,
+      transition,
+      transitionDurationSeconds,
+      transitionSoundDelaySeconds: Math.max(
+        0,
+        Math.min(transitionDurationSeconds, requestedDelay),
+      ),
       background,
       transitionSound,
       music,
@@ -1119,6 +1152,7 @@ const normalizeStoredScene = (
     phases,
     showPhaseMarkers: value.showPhaseMarkers === true,
     activePhaseIndex,
+    blackoutActive: false,
     templates,
   };
 };
@@ -1341,6 +1375,7 @@ const captureLibraryEntry = (
     bossSlots: scenePlan.bossSlots.map((slot) => ({ ...slot })),
     showPhaseMarkers: scenePlan.showPhaseMarkers,
     activePhaseIndex: scenePlan.activePhaseIndex,
+    blackoutActive: false,
     templates: scenePlan.bossSlots.flatMap((slot): StoredLibraryBoss[] => {
       const boss = battleState.bosses.find((item) => item.id === slot.bossId) ??
         sceneBossArchive.get(slot.bossId);
@@ -1445,6 +1480,7 @@ const captureLibraryEntry = (
       slots: soundboardSlots.flatMap((slot) => slot ? [{ ...slot }] : []),
       volume: soundboardAudioState.volume,
       muted: soundboardAudioState.muted,
+      loop: soundboardAudioState.loop,
     },
     scene: storedScene,
   };
@@ -1574,7 +1610,7 @@ const broadcastMusicPlayback = () => {
 
 const broadcastSoundboardState = () => {
   const state = getSoundboardState();
-  for (const window of [musicWindow, playerWindow]) {
+  for (const window of [musicWindow, soundboardWindow, playerWindow, controlWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('soundboard:state-changed', state);
     }
@@ -1704,6 +1740,52 @@ const createMusicWindow = () => {
   return window;
 };
 
+const createSoundboardWindow = () => {
+  if (soundboardWindow && !soundboardWindow.isDestroyed()) {
+    if (soundboardWindow.isMinimized()) soundboardWindow.restore();
+    soundboardWindow.show();
+    soundboardWindow.focus();
+    return soundboardWindow;
+  }
+
+  const anchor = controlWindow?.getBounds() ?? playerWindow?.getBounds() ??
+    screen.getPrimaryDisplay().bounds;
+  const { workArea } = screen.getDisplayMatching(anchor);
+  const width = Math.min(720, workArea.width);
+  const height = Math.min(690, workArea.height);
+  const window = new BrowserWindow({
+    icon: applicationIcon(),
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    minWidth: Math.min(560, width),
+    minHeight: Math.min(560, height),
+    title: 'Soundboard - BossBar T20',
+    backgroundColor: '#111117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: preloadFile('soundboard'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  soundboardWindow = window;
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('battle:state-changed', battleState);
+      window.webContents.send('soundboard:state-changed', getSoundboardState());
+    }
+  });
+  loadRenderer(window, 'soundboard');
+  window.on('closed', () => {
+    if (soundboardWindow === window) soundboardWindow = null;
+  });
+  return window;
+};
+
 const createLibraryWindow = () => {
   if (libraryWindow && !libraryWindow.isDestroyed()) {
     if (libraryWindow.isMinimized()) libraryWindow.restore();
@@ -1798,71 +1880,11 @@ const createSceneEditorWindow = () => {
   loadRenderer(window, 'scene-editor');
   window.on('closed', () => {
     if (sceneEditorWindow === window) {
-      scenePlaylistWindow?.close();
-      scenePlaylistContext = null;
       sceneEditorWindow = null;
       allowSceneEditorClose = false;
       pendingSceneMediaPaths.clear();
       pendingScenePlaylists.clear();
     }
-  });
-  return window;
-};
-
-const createScenePlaylistWindow = () => {
-  if (!scenePlaylistContext) return null;
-  const title = scenePlaylistContext.slot === 'music'
-    ? 'Playlist da Fase - BossBar T20'
-    : 'Playlist da Transição - BossBar T20';
-  if (scenePlaylistWindow && !scenePlaylistWindow.isDestroyed()) {
-    scenePlaylistWindow.setTitle(title);
-    if (scenePlaylistWindow.isMinimized()) scenePlaylistWindow.restore();
-    scenePlaylistWindow.show();
-    scenePlaylistWindow.focus();
-    const state = getScenePlaylistState(
-      scenePlaylistContext.phaseId,
-      scenePlaylistContext.slot,
-    );
-    if (state) scenePlaylistWindow.webContents.send('scene:playlist-changed', state);
-    return scenePlaylistWindow;
-  }
-
-  const { workArea } = screen.getDisplayMatching(
-    sceneEditorWindow?.getBounds() ?? screen.getPrimaryDisplay().bounds,
-  );
-  const width = Math.min(640, workArea.width);
-  const height = Math.min(720, workArea.height);
-  const window = new BrowserWindow({
-    icon: applicationIcon(),
-    width,
-    height,
-    x: workArea.x + Math.round((workArea.width - width) / 2),
-    y: workArea.y + Math.round((workArea.height - height) / 2),
-    minWidth: Math.min(500, width),
-    minHeight: Math.min(540, height),
-    maxHeight: workArea.height,
-    title,
-    backgroundColor: '#100d13',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: preloadFile('scene-playlist'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  scenePlaylistWindow = window;
-  window.webContents.on('did-finish-load', () => {
-    if (window.isDestroyed() || !scenePlaylistContext) return;
-    const state = getScenePlaylistState(
-      scenePlaylistContext.phaseId,
-      scenePlaylistContext.slot,
-    );
-    if (state) window.webContents.send('scene:playlist-changed', state);
-  });
-  loadRenderer(window, 'scene-playlist');
-  window.on('closed', () => {
-    if (scenePlaylistWindow === window) scenePlaylistWindow = null;
   });
   return window;
 };
@@ -2572,6 +2594,7 @@ const createEncounterWindows = () => {
     masterWindow = null;
     libraryWindow?.close();
     musicWindow?.close();
+    soundboardWindow?.close();
     allowSceneEditorClose = true;
     sceneEditorWindow?.close();
     playerWindow?.close();
@@ -2629,7 +2652,7 @@ const broadcastBattleState = () => {
     playerWindow,
     controlWindow,
     sceneEditorWindow,
-    scenePlaylistWindow,
+    soundboardWindow,
   ]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('battle:state-changed', battleState);
@@ -2724,9 +2747,7 @@ const getScenePlaylistState = (
 ): ScenePlaylistState | null => {
   const summary = getScenePlaylistSummary(phaseId, slot);
   if (!summary) return null;
-  const phaseName = scenePlaylistContext?.phaseId === phaseId
-    ? scenePlaylistContext.phaseName
-    : getScenePlaylistPhase(phaseId)?.name ?? 'Fase';
+  const phaseName = getScenePlaylistPhase(phaseId)?.name ?? 'Fase';
   return {
     ...cloneScenePlaylistSummary(summary),
     phaseId,
@@ -2738,7 +2759,7 @@ const getScenePlaylistState = (
 const broadcastScenePlaylist = (phaseId: string, slot: SceneAudioSlot) => {
   const state = getScenePlaylistState(phaseId, slot);
   if (!state) return;
-  for (const window of [sceneEditorWindow, scenePlaylistWindow]) {
+  for (const window of [sceneEditorWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('scene:playlist-changed', state);
     }
@@ -2759,11 +2780,11 @@ const resetScenePlan = () => {
   queuedScenePhaseIndexes.length = 0;
   pendingScenePhaseIndexes.clear();
   sceneTransitioning = false;
+  pendingBlackoutPhaseIndex = null;
   sceneMediaPaths.clear();
   pendingSceneMediaPaths.clear();
   scenePlaylistPaths.clear();
   pendingScenePlaylists.clear();
-  scenePlaylistContext = null;
   sceneBossArchive.clear();
   battleState.bosses.forEach((boss) => sceneBossArchive.set(boss.id, boss));
   scenePlan = createScenePlan(battleState.bosses);
@@ -2906,9 +2927,9 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
       typeof rawPhase.name !== 'string' ||
       typeof rawPhase.triggerBossId !== 'string' ||
       !knownBossIds.has(rawPhase.triggerBossId) ||
-      typeof rawPhase.startPercent !== 'number' ||
-      typeof rawPhase.endPercent !== 'number' ||
-      !['fade', 'blackout', 'explosion'].includes(String(rawPhase.transition)) ||
+      typeof rawPhase.startHealth !== 'number' ||
+      typeof rawPhase.endHealth !== 'number' ||
+      !['fade', 'fade-blackout', 'blackout'].includes(String(rawPhase.transition)) ||
       !Array.isArray(rawPhase.bosses)
     ) return [];
     const bosses = rawPhase.bosses.flatMap((rawDirective): SceneBossDirective[] => {
@@ -2942,13 +2963,30 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
       transitionSound === undefined ||
       music === undefined
     ) return [];
+    const transition = rawPhase.transition as SceneTransitionKind;
+    const requestedDuration = typeof rawPhase.transitionDurationSeconds === 'number' &&
+      Number.isFinite(rawPhase.transitionDurationSeconds)
+      ? rawPhase.transitionDurationSeconds
+      : transition === 'blackout' ? 0 : 2;
+    const transitionDurationSeconds = transition === 'blackout'
+      ? 0
+      : Math.max(0.01, Math.min(10, Math.round(requestedDuration * 100) / 100));
+    const requestedDelay = typeof rawPhase.transitionSoundDelaySeconds === 'number' &&
+      Number.isFinite(rawPhase.transitionSoundDelaySeconds)
+      ? rawPhase.transitionSoundDelaySeconds
+      : 0;
     return [{
       id: phaseId,
       name: rawPhase.name.trim().slice(0, 60) || 'Fase',
       triggerBossId: rawPhase.triggerBossId,
-      startPercent: Math.round(rawPhase.startPercent),
-      endPercent: Math.round(rawPhase.endPercent),
-      transition: rawPhase.transition as SceneTransitionKind,
+      startHealth: Math.round(rawPhase.startHealth),
+      endHealth: Math.round(rawPhase.endHealth),
+      transition,
+      transitionDurationSeconds,
+      transitionSoundDelaySeconds: Math.max(
+        0,
+        Math.min(transitionDurationSeconds, Math.round(requestedDelay * 100) / 100),
+      ),
       background,
       transitionSound,
       music,
@@ -2969,6 +3007,23 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
   if (!draft) return { ok: false, error: 'Os dados da cena são inválidos.' };
   const rangeError = validateSceneRanges(draft.phases);
   if (rangeError) return { ok: false, error: rangeError };
+  const firstPhase = draft.phases[0];
+  const firstTriggerDirective = firstPhase.bosses.find(
+    (directive) => directive.bossId === firstPhase.triggerBossId,
+  );
+  const firstTriggerBase = battleState.bosses.find(
+    (boss) => boss.id === firstPhase.triggerBossId,
+  ) ?? sceneBossArchive.get(firstPhase.triggerBossId) ??
+    createInitialBoss(firstPhase.triggerBossId);
+  const firstTrigger = firstTriggerBase && firstTriggerDirective
+    ? applySceneBossPatch(firstTriggerBase, firstTriggerDirective.patch)
+    : firstTriggerBase;
+  if (firstTrigger && firstPhase.startHealth !== firstTrigger.currentHealth) {
+    return {
+      ok: false,
+      error: `A Fase 1 deve começar com a vida atual do chefão (${firstTrigger.currentHealth} PV).`,
+    };
+  }
   const previousPhases = new Map(scenePlan.phases.map((phase) => [phase.id, phase]));
   const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
   for (const [index, slot] of draft.bossSlots.entries()) {
@@ -3064,9 +3119,6 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
   broadcastScenePlan();
   return { ok: true, state: scenePlan };
 };
-
-const sceneTransitionDuration = (kind: SceneTransitionKind) =>
-  kind === 'blackout' ? 1800 : kind === 'explosion' ? 1600 : 1400;
 
 const activatePhaseMusic = (phase: ScenePhase, playImmediately = true) => {
   const playlist = phase.music;
@@ -3179,13 +3231,16 @@ const applyScenePhase = (phaseIndex: number) => {
     }
     if (!boss) continue;
     const patched = applySceneBossPatch(boss, directive.patch);
+    const currentHealth = phaseIndex === 0 || entering
+      ? patched.currentHealth
+      : directive.patch.currentHealth === undefined
+        ? patched.currentHealth
+        : Math.min(boss.currentHealth, patched.currentHealth);
     currentById.set(directive.bossId, {
       ...patched,
       setupStatus: 'ready',
       identityPrepared: true,
-      currentHealth: entering && directive.patch.maxHealth !== undefined
-        ? patched.maxHealth
-        : patched.currentHealth,
+      currentHealth,
     });
   }
   let bosses = scenePlan.bossSlots.flatMap((slot) => {
@@ -3236,7 +3291,9 @@ const processScenePhaseQueue = () => {
     scenePlan.phases.length,
   );
   const transitionPhase = scenePlan.phases[transitionSourceIndex] ?? phase;
-  const durationMs = sceneTransitionDuration(transitionPhase.transition);
+  const durationMs = transitionPhase.transition === 'blackout'
+    ? 0
+    : Math.round(transitionPhase.transitionDurationSeconds * 1000);
   sceneTransitionSequence += 1;
   const transitionPlaylist = transitionPhase.transitionSound;
   const selectedTrack = transitionPlaylist?.tracks.find(
@@ -3249,7 +3306,12 @@ const processScenePhaseQueue = () => {
     id: sceneTransitionSequence,
     phaseId: phase.id,
     kind: transitionPhase.transition,
+    stage: 'enter',
     durationMs,
+    soundDelayMs: Math.min(
+      durationMs,
+      Math.max(0, Math.round(transitionPhase.transitionSoundDelaySeconds * 1000)),
+    ),
     soundUrl: selectedTrackKey && scenePlaylistPaths.has(selectedTrackKey)
       ? scenePlaylistTrackUrl(
           transitionPhase.id,
@@ -3264,16 +3326,100 @@ const processScenePhaseQueue = () => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('scene:transition', event);
   }
-  sceneTransitionTimer = setTimeout(() => {
-    sceneTransitionTimer = null;
-    applyScenePhase(phaseIndex);
+  if (musicState.isPlaying) {
+    if (durationMs > 0 && playerWindow && !playerWindow.isDestroyed()) {
+      playerWindow.webContents.send('music:fade-out', Math.max(100, Math.floor(durationMs / 2)));
+    } else {
+      musicState = {
+        ...musicState,
+        isPlaying: false,
+        revision: musicState.revision + 1,
+      };
+      broadcastMusicState();
+    }
+  }
+
+  if (transitionPhase.transition === 'fade') {
     sceneTransitionTimer = setTimeout(() => {
       sceneTransitionTimer = null;
-      pendingScenePhaseIndexes.delete(phaseIndex);
-      sceneTransitioning = false;
-      processScenePhaseQueue();
-    }, Math.ceil(durationMs / 2));
-  }, Math.floor(durationMs / 2));
+      applyScenePhase(phaseIndex);
+      sceneTransitionTimer = setTimeout(() => {
+        sceneTransitionTimer = null;
+        pendingScenePhaseIndexes.delete(phaseIndex);
+        sceneTransitioning = false;
+        processScenePhaseQueue();
+      }, Math.max(0, durationMs - Math.floor(durationMs / 2)));
+    }, Math.floor(durationMs / 2));
+    return;
+  }
+
+  const enterBlackout = () => {
+    sceneTransitionTimer = null;
+    pendingBlackoutPhaseIndex = phaseIndex;
+    if (musicState.isPlaying) {
+      musicState = {
+        ...musicState,
+        isPlaying: false,
+        revision: musicState.revision + 1,
+      };
+      broadcastMusicState();
+    }
+    scenePlan = {
+      ...scenePlan,
+      blackoutActive: true,
+      revision: scenePlan.revision + 1,
+    };
+    broadcastScenePlan();
+  };
+  if (durationMs > 0) {
+    sceneTransitionTimer = setTimeout(enterBlackout, durationMs);
+  } else {
+    enterBlackout();
+  }
+};
+
+const releaseSceneBlackout = () => {
+  const phaseIndex = pendingBlackoutPhaseIndex;
+  if (phaseIndex === null || !scenePlan.blackoutActive) return false;
+  const sourceIndex = sceneTransitionSourceIndex(phaseIndex, scenePlan.phases.length);
+  const sourcePhase = scenePlan.phases[sourceIndex];
+  if (!sourcePhase) return false;
+  const durationMs = sourcePhase.transition === 'fade-blackout'
+    ? Math.round(sourcePhase.transitionDurationSeconds * 1000)
+    : 0;
+  pendingBlackoutPhaseIndex = null;
+  scenePlan = {
+    ...scenePlan,
+    blackoutActive: false,
+    revision: scenePlan.revision + 1,
+  };
+  applyScenePhase(phaseIndex);
+  sceneTransitionSequence += 1;
+  const event: SceneTransitionEvent = {
+    id: sceneTransitionSequence,
+    phaseId: scenePlan.phases[phaseIndex]?.id ?? sourcePhase.id,
+    kind: sourcePhase.transition,
+    stage: 'release',
+    durationMs,
+    soundDelayMs: 0,
+    soundUrl: null,
+    soundVolume: 0,
+    soundMuted: true,
+    soundLoop: false,
+  };
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('scene:transition', event);
+  }
+  const finish = () => {
+    sceneTransitionTimer = null;
+    pendingScenePhaseIndexes.delete(phaseIndex);
+    sceneTransitioning = false;
+    broadcastScenePlan();
+    processScenePhaseQueue();
+  };
+  if (durationMs > 0) sceneTransitionTimer = setTimeout(finish, durationMs);
+  else finish();
+  return true;
 };
 
 const queueScenePhase = (phaseIndex: number) => {
@@ -3292,17 +3438,14 @@ const queueCrossedScenePhases = (
   bossId: string,
   previousHealth: number,
   nextHealth: number,
-  maximumHealth: number,
 ) => {
-  if (nextHealth >= previousHealth || maximumHealth <= 0) return;
-  const previousPercent = (previousHealth / maximumHealth) * 100;
-  const nextPercent = (nextHealth / maximumHealth) * 100;
+  if (nextHealth >= previousHealth) return;
   scenePlan.phases.forEach((phase, index) => {
     if (
       index > scenePlan.activePhaseIndex &&
       phase.triggerBossId === bossId &&
-      previousPercent > phase.startPercent &&
-      nextPercent <= phase.startPercent
+      previousHealth > phase.startHealth &&
+      nextHealth <= phase.startHealth
     ) queueScenePhase(index);
   });
 };
@@ -3331,8 +3474,8 @@ const isLibrarySender = (senderId: number) =>
 const isSceneEditorSender = (senderId: number) =>
   Boolean(sceneEditorWindow && senderId === sceneEditorWindow.webContents.id);
 
-const isScenePlaylistSender = (senderId: number) =>
-  Boolean(scenePlaylistWindow && senderId === scenePlaylistWindow.webContents.id);
+const isSoundboardSender = (senderId: number) =>
+  Boolean(soundboardWindow && senderId === soundboardWindow.webContents.id);
 
 const assertAuthorizedIpcSender = (authorized: boolean) => {
   if (!authorized) throw new Error('Ação não autorizada.');
@@ -3342,8 +3485,8 @@ const isBattleStateReader = (senderId: number) =>
   isEncounterControllerSender(senderId) ||
   isPlayerSender(senderId) ||
   isMusicSender(senderId) ||
-  isSceneEditorSender(senderId) ||
-  isScenePlaylistSender(senderId);
+  isSoundboardSender(senderId) ||
+  isSceneEditorSender(senderId);
 
 const isMusicStateReader = (senderId: number) =>
   isMasterSender(senderId) ||
@@ -3446,8 +3589,8 @@ ipcMain.handle(
       if (!fileInfo.isFile()) {
         return { ok: false, error: 'O item selecionado não é um arquivo.' };
       }
-      if (fileInfo.size > 25 * 1024 * 1024) {
-        return { ok: false, error: 'O arquivo deve ter no máximo 25 MB.' };
+      if (fileInfo.size > MAX_USER_MEDIA_BYTES) {
+        return { ok: false, error: 'O arquivo deve ter no máximo 100 MB.' };
       }
     } catch {
       return { ok: false, error: 'Não foi possível ler o arquivo selecionado.' };
@@ -3492,6 +3635,10 @@ ipcMain.handle('scene:open-window', (event) => {
   return true;
 });
 
+ipcMain.handle('scene:release-blackout', (event) =>
+  isMasterSender(event.sender.id) ? releaseSceneBlackout() : false,
+);
+
 ipcMain.handle(
   'scene:open-playlist',
   (
@@ -3506,19 +3653,14 @@ ipcMain.handle(
       !isSafeSceneIdentifier(phaseId) ||
       !['transitionSound', 'music'].includes(String(slot)) ||
       typeof phaseName !== 'string'
-    ) return false;
+    ) return null;
     const audioSlot = slot as SceneAudioSlot;
     const normalizedInitial = normalizeScenePlaylistSummary(
       initial,
       phaseId,
       audioSlot,
     );
-    if (normalizedInitial === undefined) return false;
-    scenePlaylistContext = {
-      phaseId,
-      phaseName: phaseName.trim().slice(0, 60) || 'Fase',
-      slot: audioSlot,
-    };
+    if (normalizedInitial === undefined) return null;
     const key = sceneMediaKey(phaseId, audioSlot);
     if (!pendingScenePlaylists.has(key)) {
       const pending = ensurePendingScenePlaylist(phaseId, audioSlot);
@@ -3526,7 +3668,11 @@ ipcMain.handle(
         pending.summary = cloneScenePlaylistSummary(normalizedInitial);
       }
     }
-    return Boolean(createScenePlaylistWindow());
+    const state = getScenePlaylistState(phaseId, audioSlot);
+    return state ? {
+      ...state,
+      phaseName: phaseName.trim().slice(0, 60) || 'Fase',
+    } : null;
   },
 );
 
@@ -3534,15 +3680,15 @@ ipcMain.on('scene:confirm-close', (event) => {
   if (!isSceneEditorSender(event.sender.id) || !sceneEditorWindow) return;
   pendingSceneMediaPaths.clear();
   pendingScenePlaylists.clear();
-  scenePlaylistWindow?.close();
-  scenePlaylistContext = null;
   allowSceneEditorClose = true;
   sceneEditorWindow.close();
 });
 
 ipcMain.handle('scene:get-state', (event) => {
   assertAuthorizedIpcSender(
-    isSceneEditorSender(event.sender.id) || isPlayerSender(event.sender.id),
+    isSceneEditorSender(event.sender.id) ||
+      isPlayerSender(event.sender.id) ||
+      isMasterSender(event.sender.id),
   );
   return scenePlan;
 });
@@ -3601,8 +3747,8 @@ ipcMain.handle(
     let audioDuration = 0;
     try {
       const info = await stat(filePath);
-      if (!info.isFile() || info.size > 25 * 1024 * 1024) {
-        return { ok: false, error: 'O arquivo deve ter no máximo 25 MB.' };
+      if (!info.isFile() || info.size > MAX_USER_MEDIA_BYTES) {
+        return { ok: false, error: 'O arquivo deve ter no máximo 100 MB.' };
       }
       if (!background) {
         const metadata = await parseFile(filePath, { duration: true });
@@ -3679,30 +3825,34 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle('scene-playlist:get-state', (event) => {
-  assertAuthorizedIpcSender(isScenePlaylistSender(event.sender.id));
-  if (!scenePlaylistContext) return null;
-  return getScenePlaylistState(
-    scenePlaylistContext.phaseId,
-    scenePlaylistContext.slot,
-  );
+ipcMain.handle('soundboard:open-window', (event) => {
+  if (!isControlSender(event.sender.id) && !isMasterSender(event.sender.id)) return false;
+  createSoundboardWindow();
+  return true;
 });
 
 ipcMain.handle(
   'scene-playlist:add-tracks',
-  async (event): Promise<ScenePlaylistSelectionResult> => {
+  async (
+    event,
+    phaseIdValue: unknown,
+    slotValue: unknown,
+  ): Promise<ScenePlaylistSelectionResult> => {
     if (
-      !isScenePlaylistSender(event.sender.id) ||
-      !scenePlaylistWindow ||
-      scenePlaylistWindow.isDestroyed() ||
-      !scenePlaylistContext
+      !isSceneEditorSender(event.sender.id) ||
+      !sceneEditorWindow ||
+      sceneEditorWindow.isDestroyed() ||
+      !isSafeSceneIdentifier(phaseIdValue) ||
+      !['transitionSound', 'music'].includes(String(slotValue))
     ) return { ok: false, error: 'Ação não autorizada.' };
-    const selection = await dialog.showOpenDialog(scenePlaylistWindow, {
-      title: scenePlaylistContext.slot === 'music'
+    const phaseId = phaseIdValue;
+    const slot = slotValue as SceneAudioSlot;
+    const selection = await dialog.showOpenDialog(sceneEditorWindow, {
+      title: slot === 'music'
         ? 'Adicionar músicas à fase'
         : 'Adicionar sons à transição',
       defaultPath: defaultMediaDirectory(
-        scenePlaylistContext.slot === 'music' ? 'Musica' : 'SFX',
+        slot === 'music' ? 'Musica' : 'SFX',
         'music',
       ),
       properties: ['openFile', 'multiSelections'],
@@ -3711,14 +3861,13 @@ ipcMain.handle(
     if (selection.canceled || selection.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
-    const { phaseId, slot } = scenePlaylistContext;
     const pending = ensurePendingScenePlaylist(phaseId, slot);
     const additions: ScenePlaylistSummary['tracks'] = [];
     for (const filePath of selection.filePaths) {
       if (path.extname(filePath).toLowerCase() !== '.mp3') continue;
       try {
         const info = await stat(filePath);
-        if (!info.isFile() || info.size > 25 * 1024 * 1024) continue;
+        if (!info.isFile() || info.size > MAX_USER_MEDIA_BYTES) continue;
         const metadata = await parseFile(filePath, { duration: true });
         const id = randomUUID();
         additions.push({
@@ -3735,7 +3884,7 @@ ipcMain.handle(
     if (additions.length === 0) {
       return {
         ok: false,
-        error: 'Nenhum MP3 válido de até 25 MB foi selecionado.',
+        error: 'Nenhum MP3 válido de até 100 MB foi selecionado.',
       };
     }
     pending.summary = {
@@ -3760,7 +3909,7 @@ ipcMain.on('scene-playlist:dispatch', (
   value: unknown,
 ) => {
   if (
-    (!isScenePlaylistSender(event.sender.id) && !isSceneEditorSender(event.sender.id)) ||
+    !isSceneEditorSender(event.sender.id) ||
     !isSafeSceneIdentifier(phaseIdValue) ||
     !['transitionSound', 'music'].includes(String(slotValue)) ||
     !isRecord(value) ||
@@ -3769,10 +3918,6 @@ ipcMain.on('scene-playlist:dispatch', (
   const command = value as ScenePlaylistCommand;
   const phaseId = phaseIdValue;
   const slot = slotValue as SceneAudioSlot;
-  if (
-    isScenePlaylistSender(event.sender.id) &&
-    (scenePlaylistContext?.phaseId !== phaseId || scenePlaylistContext.slot !== slot)
-  ) return;
   const pending = ensurePendingScenePlaylist(phaseId, slot);
   const tracks = [...pending.summary.tracks];
   const next = cloneScenePlaylistSummary(pending.summary);
@@ -4101,6 +4246,7 @@ const restoreLibraryEntry = (
     phases: restoredScenePhases,
     showPhaseMarkers: entry.scene.showPhaseMarkers,
     activePhaseIndex: -1,
+    blackoutActive: false,
     revision: scenePlan.revision + 1,
   };
   sceneBossArchive.clear();
@@ -4178,6 +4324,7 @@ const restoreLibraryEntry = (
   soundboardAudioState = {
     volume: Math.max(0, Math.min(1, entry.soundboard.volume)),
     muted: Boolean(entry.soundboard.muted),
+    loop: Boolean(entry.soundboard.loop),
   };
   soundboardRevision += 1;
 
@@ -4280,8 +4427,8 @@ ipcMain.handle(
     try {
       const fileInfo = await stat(replacementPath);
       if (!fileInfo.isFile()) throw new Error('not-file');
-      if (isBackground && fileInfo.size > 25 * 1024 * 1024) {
-        return { ok: false, error: 'O fundo deve ter no máximo 25 MB.' };
+      if (fileInfo.size > MAX_USER_MEDIA_BYTES) {
+        return { ok: false, error: 'O arquivo deve ter no máximo 100 MB.' };
       }
     } catch {
       return { ok: false, error: 'Não foi possível ler o arquivo selecionado.' };
@@ -4437,7 +4584,10 @@ ipcMain.handle(
 );
 ipcMain.handle('soundboard:get-state', (event): SoundboardState => {
   assertAuthorizedIpcSender(
-    isMusicSender(event.sender.id) || isPlayerSender(event.sender.id),
+    isMusicSender(event.sender.id) ||
+      isSoundboardSender(event.sender.id) ||
+      isControlSender(event.sender.id) ||
+      isPlayerSender(event.sender.id),
   );
   return getSoundboardState();
 });
@@ -4480,7 +4630,9 @@ ipcMain.handle(
     }
     try {
       const fileInfo = await stat(sourcePath);
-      if (!fileInfo.isFile()) throw new Error('not-file');
+      if (!fileInfo.isFile() || fileInfo.size > MAX_USER_MEDIA_BYTES) {
+        return { ok: false, error: 'O arquivo deve ter no máximo 100 MB.' };
+      }
       const metadata = await parseFile(sourcePath, { duration: true });
       const container = metadata.format.container?.toLowerCase() ?? '';
       const codec = metadata.format.codec?.toLowerCase() ?? '';
@@ -4734,8 +4886,7 @@ ipcMain.handle(
     keepExistingFile: unknown,
   ): Promise<SoundboardAssignmentResult> => {
     if (
-      !musicWindow ||
-      !isMusicSender(event.sender.id) ||
+      (!isMusicSender(event.sender.id) && !isSoundboardSender(event.sender.id)) ||
       typeof index !== 'number' ||
       !Number.isInteger(index) ||
       index < 1 ||
@@ -4759,7 +4910,13 @@ ipcMain.handle(
       return { ok: true };
     }
 
-    const selection = await dialog.showOpenDialog(musicWindow, {
+    const dialogOwner = isSoundboardSender(event.sender.id)
+      ? soundboardWindow
+      : musicWindow;
+    if (!dialogOwner || dialogOwner.isDestroyed()) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const selection = await dialog.showOpenDialog(dialogOwner, {
       title: `Atribuir som ao botão ${index}`,
       defaultPath: defaultMediaDirectory('SFX', 'music'),
       properties: ['openFile'],
@@ -4775,7 +4932,9 @@ ipcMain.handle(
     }
     try {
       const fileInfo = await stat(filePath);
-      if (!fileInfo.isFile()) throw new Error('not-file');
+      if (!fileInfo.isFile() || fileInfo.size > MAX_USER_MEDIA_BYTES) {
+        return { ok: false, error: 'O arquivo deve ter no máximo 100 MB.' };
+      }
     } catch {
       return { ok: false, error: 'Não foi possível ler o arquivo selecionado.' };
     }
@@ -4814,7 +4973,12 @@ ipcMain.handle(
 );
 
 ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
-  if (!isMusicSender(event.sender.id) || !isSoundboardCommand(command)) return;
+  if (
+    (!isMusicSender(event.sender.id) &&
+      !isSoundboardSender(event.sender.id) &&
+      !isControlSender(event.sender.id)) ||
+    !isSoundboardCommand(command)
+  ) return;
 
   if (command.type === 'play') {
     const slot = soundboardSlots[command.index - 1];
@@ -4851,6 +5015,16 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
     soundboardAudioState = {
       ...soundboardAudioState,
       muted: !soundboardAudioState.muted,
+    };
+    soundboardRevision += 1;
+    broadcastSoundboardState();
+    return;
+  }
+
+  if (command.type === 'toggle-loop') {
+    soundboardAudioState = {
+      ...soundboardAudioState,
+      loop: !soundboardAudioState.loop,
     };
     soundboardRevision += 1;
     broadcastSoundboardState();
@@ -4902,11 +5076,13 @@ ipcMain.on(
       !Number.isInteger(index)
     ) return;
     soundEffectSources.delete(effectId);
-    if (musicWindow && !musicWindow.isDestroyed()) {
-      musicWindow.webContents.send(
-        'soundboard:error',
-        `O Atalho ${index} não pôde ser reproduzido. Verifique se o arquivo usa MP3 (MPEG Layer III).`,
-      );
+    for (const window of [musicWindow, soundboardWindow]) {
+      if (window && !window.isDestroyed()) {
+        window.webContents.send(
+          'soundboard:error',
+          `O Atalho ${index} não pôde ser reproduzido. Verifique se o arquivo usa MP3 (MPEG Layer III).`,
+        );
+      }
     }
   },
 );
@@ -4939,7 +5115,7 @@ ipcMain.handle(
 
       try {
         const fileInfo = await stat(filePath);
-        if (!fileInfo.isFile()) continue;
+        if (!fileInfo.isFile() || fileInfo.size > MAX_USER_MEDIA_BYTES) continue;
       } catch {
         continue;
       }
@@ -5158,6 +5334,7 @@ ipcMain.on('music:progress', (event, playback: unknown) => {
 
 ipcMain.on('music:fadeout-complete', (event) => {
   if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
+  if (sceneTransitioning) return;
   if (!musicState.isPlaying) return;
   musicState = {
     ...musicState,
@@ -5217,7 +5394,6 @@ const applyHealthMutation = (
     bossId,
     previousBoss.currentHealth,
     nextBoss.currentHealth,
-    previousBoss.maxHealth,
   );
 
   if (playerWindow && !playerWindow.isDestroyed()) {
@@ -5349,7 +5525,6 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
         command.bossId,
         previousBoss.currentHealth,
         nextBoss.currentHealth,
-        previousBoss.maxHealth,
       );
     }
 
@@ -5436,7 +5611,8 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     queuedScenePhaseIndexes.length = 0;
     pendingScenePhaseIndexes.clear();
     sceneTransitioning = false;
-    scenePlan = { ...scenePlan, activePhaseIndex: -1 };
+    pendingBlackoutPhaseIndex = null;
+    scenePlan = { ...scenePlan, activePhaseIndex: -1, blackoutActive: false };
     activeBackgroundFilePath = configuredBackgroundFilePath;
     battleState = { ...battleState, backgroundName: configuredBackgroundName };
     backgroundRevision += 1;
@@ -5463,6 +5639,22 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   ) syncSceneBossSlots();
 
   if (command.type === 'end-battle' || command.type === 'reset-all') {
+    if (sceneTransitionTimer) {
+      clearTimeout(sceneTransitionTimer);
+      sceneTransitionTimer = null;
+    }
+    queuedScenePhaseIndexes.length = 0;
+    pendingScenePhaseIndexes.clear();
+    pendingBlackoutPhaseIndex = null;
+    sceneTransitioning = false;
+    if (scenePlan.blackoutActive) {
+      scenePlan = {
+        ...scenePlan,
+        blackoutActive: false,
+        revision: scenePlan.revision + 1,
+      };
+      broadcastScenePlan();
+    }
     if (battleMusicStartTimer) {
       clearTimeout(battleMusicStartTimer);
       battleMusicStartTimer = null;

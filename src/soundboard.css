@@ -1,0 +1,45 @@
+:root { color-scheme: dark; color: #f2edf4; background: #0d0b10; font-family: Inter, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 560px; min-height: 560px; overflow: hidden; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .38; }
+.soundboard-loading { display: grid; min-height: 100vh; place-items: center; color: #9d929f; }
+.soundboard-shell { display: grid; height: 100vh; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; gap: 10px; overflow: hidden; padding: 20px; background: radial-gradient(circle at 75% -10%, rgba(103, 52, 124, .3), transparent 42%), linear-gradient(145deg, #18131c, #0c0a0f 72%); }
+.soundboard-shell > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.soundboard-shell header p { margin: 0 0 3px; color: #a979bb; font-size: .67rem; font-weight: 900; letter-spacing: .13em; text-transform: uppercase; }
+.soundboard-shell h1 { margin: 0; color: #eeddf2; font: 600 1.65rem Georgia, serif; }
+.soundboard-header-actions { display: flex; gap: 7px; }
+.soundboard-header-actions button, .soundboard-controls button { min-height: 34px; border: 1px solid #695078; border-radius: 8px; padding: 6px 11px; background: transparent; color: #d8c4df; font-size: .68rem; font-weight: 800; }
+.soundboard-mute-warning { display: grid; gap: 2px; border: 1px solid #a34958; border-radius: 9px; padding: 9px 12px; background: rgba(100, 28, 43, .48); color: #ffc4cf; }
+.soundboard-mute-warning strong { font-size: .72rem; }
+.soundboard-mute-warning span { font-size: .62rem; }
+.soundboard-mute-warning { grid-row: 2; }
+.soundboard-grid { grid-row: 3; display: grid; min-height: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(78px, 1fr)); gap: 9px; }
+.sound-slot { position: relative; min-width: 0; }
+.sound-trigger { display: grid; width: 100%; height: 100%; place-content: center; gap: 4px; border: 1px solid #49384f; border-radius: 11px; background: linear-gradient(145deg, #211923, #171219); color: #817486; }
+.sound-slot.is-assigned .sound-trigger { border-color: #85529a; background: linear-gradient(145deg, #492957, #2d1d35); color: #f2dafa; box-shadow: inset 0 1px rgba(255,255,255,.05); }
+.sound-trigger strong { font-size: 1.05rem; }
+.sound-trigger span { font-size: .7rem; }
+.sound-trigger:hover { border-color: #b86bd1; filter: brightness(1.14); }
+.edit-sound, .remove-sound { position: absolute; top: 5px; display: grid; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px; background: rgba(12, 8, 14, .72); color: #c9abcF; font-size: .72rem; }
+.edit-sound { left: 5px; }
+.remove-sound { right: 5px; color: #e58a99; font-size: .95rem; }
+.soundboard-controls { grid-row: 4; display: grid; grid-template-columns: auto minmax(0, 1fr) 45px 38px 38px; align-items: center; gap: 8px; border: 1px solid #3d3242; border-radius: 10px; padding: 10px 12px; background: rgba(23, 18, 26, .9); }
+.soundboard-controls > span, .soundboard-controls > strong { color: #c5b7c9; font-size: .68rem; }
+.soundboard-controls input { width: 100%; accent-color: #a65dc2; }
+.soundboard-controls button { min-width: 0; padding: 4px; }
+.soundboard-controls button.is-active { border-color: #dc9475; color: #ffd5bd; background: rgba(121, 53, 44, .45); }
+.soundboard-error { grid-row: 6; margin: 0; color: #eb8b9b; font-size: .67rem; }
+.soundboard-size-warning { grid-row: 5; margin: 0; color: #8f746f; font-size: .61rem; }
+.soundboard-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(3, 2, 4, .78); backdrop-filter: blur(4px); }
+.soundboard-modal-backdrop > section { width: min(430px, 100%); border: 1px solid #654c6c; border-radius: 13px; padding: 19px; background: #1d171f; box-shadow: 0 22px 65px #000; }
+.soundboard-modal-backdrop section > p:first-child { margin: 0 0 5px; color: #b377c3; font-size: .65rem; font-weight: 900; text-transform: uppercase; }
+.soundboard-modal-backdrop h2 { margin: 0 0 12px; color: #efe4f1; font: 600 1.1rem Georgia, serif; }
+.soundboard-modal-backdrop p { color: #b7aab9; font-size: .72rem; line-height: 1.45; }
+.soundboard-modal-backdrop label { display: grid; gap: 6px; color: #b8aabb; font-size: .68rem; }
+.soundboard-modal-backdrop input[type="text"] { height: 37px; border: 1px solid #59465f; border-radius: 8px; outline: 0; padding: 7px 9px; background: #0f0c11; color: #eee7ef; }
+.soundboard-modal-backdrop section > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }
+.soundboard-modal-backdrop section > div button { min-height: 34px; border: 1px solid #624d68; border-radius: 7px; padding: 6px 11px; background: transparent; color: #ded2e1; font-size: .67rem; font-weight: 800; }
+.soundboard-modal-backdrop button.is-primary { border-color: #965cac; background: #67397a; }
+.soundboard-modal-backdrop button.is-destructive { border-color: #c45167; background: #7a293c; }

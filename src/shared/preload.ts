@@ -6,9 +6,9 @@ export type RendererRole =
   | 'player'
   | 'control'
   | 'music'
+  | 'soundboard'
   | 'library'
-  | 'scene-editor'
-  | 'scene-playlist';
+  | 'scene-editor';
 
 export const bossApiMethodsByRole = {
   launcher: [
@@ -46,6 +46,9 @@ export const bossApiMethodsByRole = {
     'subscribeEncounterEffects',
     'subscribeMusic',
     'subscribePresentationOpen',
+    'getScenePlan',
+    'releaseSceneBlackout',
+    'subscribeScenePlan',
   ],
   player: [
     'encounterEffectFinished',
@@ -82,8 +85,12 @@ export const bossApiMethodsByRole = {
     'getEncounterEffectsState',
     'getState',
     'setControlPanelMinimized',
+    'openSoundboardWindow',
+    'getSoundboardState',
+    'dispatchSoundboard',
     'subscribe',
     'subscribeEncounterEffects',
+    'subscribeSoundboard',
   ],
   music: [
     'addMusicTracks',
@@ -101,6 +108,15 @@ export const bossApiMethodsByRole = {
     'subscribeSoundboard',
     'subscribeSoundboardError',
   ],
+  soundboard: [
+    'assignSoundboardSlot',
+    'dispatchSoundboard',
+    'getSoundboardState',
+    'getState',
+    'subscribe',
+    'subscribeSoundboard',
+    'subscribeSoundboardError',
+  ],
   library: [
     'closeBossLibrary',
     'deleteBossLibraryEntry',
@@ -114,6 +130,7 @@ export const bossApiMethodsByRole = {
     'clearScenePhaseMedia',
     'confirmSceneEditorClose',
     'dispatchScenePhasePlaylist',
+    'addScenePhasePlaylistTracks',
     'getScenePlan',
     'getState',
     'openScenePhasePlaylist',
@@ -123,11 +140,5 @@ export const bossApiMethodsByRole = {
     'subscribeSceneEditorCloseRequested',
     'subscribeScenePhasePlaylist',
     'subscribeScenePlan',
-  ],
-  'scene-playlist': [
-    'addScenePhasePlaylistTracks',
-    'dispatchScenePhasePlaylist',
-    'getScenePhasePlaylist',
-    'subscribeScenePhasePlaylist',
   ],
 } as const satisfies Record<RendererRole, readonly (keyof BossAPI)[]>;

@@ -60,6 +60,7 @@ export type BossAPI = {
   isPresentationOpen: () => Promise<boolean>;
   setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
   openMusicWindow: () => Promise<boolean>;
+  openSoundboardWindow: () => Promise<boolean>;
   openSceneEditor: () => Promise<boolean>;
   confirmSceneEditorClose: () => void;
   getScenePlan: () => Promise<ScenePlan>;
@@ -77,9 +78,11 @@ export type BossAPI = {
     slot: SceneAudioSlot,
     phaseName: string,
     initial: ScenePlaylistSummary | null,
-  ) => Promise<boolean>;
-  getScenePhasePlaylist: () => Promise<ScenePlaylistState | null>;
-  addScenePhasePlaylistTracks: () => Promise<ScenePlaylistSelectionResult>;
+  ) => Promise<ScenePlaylistState | null>;
+  addScenePhasePlaylistTracks: (
+    phaseId: string,
+    slot: SceneAudioSlot,
+  ) => Promise<ScenePlaylistSelectionResult>;
   dispatchScenePhasePlaylist: (
     phaseId: string,
     slot: SceneAudioSlot,
@@ -146,6 +149,7 @@ export type BossAPI = {
   ) => Promise<SoundboardAssignmentResult>;
   dispatchSoundboard: (command: SoundboardCommand) => void;
   setSoundboardOpen: (open: boolean) => Promise<boolean>;
+  releaseSceneBlackout: () => Promise<boolean>;
   soundEffectFinished: (effectId: number) => void;
   reportSoundEffectError: (effectId: number, index: number) => void;
   encounterEffectFinished: (effectId: number) => void;

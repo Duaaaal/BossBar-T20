@@ -241,6 +241,7 @@ test('valida comandos limitados aos 20 botões do soundboard', () => {
   assert.equal(isSoundboardCommand({ type: 'remove', index: 1.5 }), false);
   assert.equal(isSoundboardCommand({ type: 'stop-all' }), true);
   assert.equal(isSoundboardCommand({ type: 'toggle-mute' }), true);
+  assert.equal(isSoundboardCommand({ type: 'toggle-loop' }), true);
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: 0.75 }), true);
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: Number.NaN }), false);
   assert.equal(isMusicCommand({ type: 'toggle-mute' }), true);

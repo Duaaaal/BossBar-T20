@@ -12,6 +12,7 @@ import {
 } from './shared/battle';
 import { bundledAssetUrl } from './shared/bundled-assets';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
+import type { ScenePlan } from './shared/scene';
 import './master.css';
 import './scrollbars.css';
 
@@ -78,6 +79,7 @@ type SoundCategoryMenuPosition = {
 
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
+  const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
   const [appVersion, setAppVersion] = useState('...');
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [universalMuted, setUniversalMuted] = useState(false);
@@ -184,6 +186,20 @@ const MasterApp = () => {
 
   useEffect(() => {
     window.bossAPI.getAppVersion().then(setAppVersion);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getScenePlan().then((nextPlan) => {
+      if (active) setScenePlan(nextPlan);
+    });
+    const unsubscribe = window.bossAPI.subscribeScenePlan((nextPlan) => {
+      if (active) setScenePlan(nextPlan);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -550,6 +566,15 @@ const MasterApp = () => {
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
           <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
+          {scenePlan?.blackoutActive && (
+            <button
+              className="release-blackout-button"
+              type="button"
+              onClick={() => void window.bossAPI.releaseSceneBlackout()}
+            >
+              Liberar blackout
+            </button>
+          )}
         </div>
       </section>
 
