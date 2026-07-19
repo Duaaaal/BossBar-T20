@@ -49,6 +49,7 @@ import type {
 export type BossAPI = {
   getState: () => Promise<BattleState>;
   getAppVersion: () => Promise<string>;
+  undoLastChange: () => Promise<boolean>;
   confirmAppClose: () => void;
   dispatch: (command: BattleCommand) => void;
   applyHealthSequence: (

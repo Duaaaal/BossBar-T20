@@ -4,6 +4,7 @@ import { createInitialBoss } from '../src/shared/battle.ts';
 import {
   adjacentScenePlaylistTrackId,
   applySceneBossPatch,
+  clampSceneOverflowHealth,
   createScenePlan,
   createSceneRanges,
   crossedScenePhaseIndexes,
@@ -46,6 +47,7 @@ test('inicia a cena com uma fase base e marcadores opcionais desativados', () =>
   assert.equal(plan.phases[0].transitionDurationSeconds, 2);
   assert.equal(plan.blackoutActive, false);
   assert.equal(plan.showPhaseMarkers, false);
+  assert.equal(plan.phases[0].bosses[0].carryOverflowDamage, true);
 });
 
 test('cria uma progressão universal contendo todos os chefões', () => {
@@ -116,4 +118,46 @@ test('aplica apenas valores preenchidos e preserva zero como valor válido', () 
   });
   assert.equal(capped.maxHealth, 300);
   assert.equal(capped.currentHealth, 300);
+});
+
+test('publica a descrição e a gravidade configuradas para a fase', () => {
+  const boss = createInitialBoss('boss-1');
+  const changed = applySceneBossPatch(boss, {
+    nextAction: 'O dragão prepara uma explosão.',
+    actionSeverity: 'grave',
+  });
+  assert.equal(changed.nextAction, 'O dragão prepara uma explosão.');
+  assert.equal(changed.actionSeverity, 'grave');
+  assert.equal(changed.actionPrepared, true);
+});
+
+test('limita ou preserva o dano excedente conforme a fase e o chefão', () => {
+  const phase = { triggerBossId: 'boss-1', endHealth: 250 };
+  assert.equal(clampSceneOverflowHealth({
+    phase,
+    directive: { carryOverflowDamage: false },
+    bossId: 'boss-1',
+    bossMaximum: 1000,
+    triggerMaximum: 1000,
+    previousHealth: 300,
+    nextHealth: 180,
+  }), 250);
+  assert.equal(clampSceneOverflowHealth({
+    phase,
+    directive: { carryOverflowDamage: false },
+    bossId: 'boss-2',
+    bossMaximum: 400,
+    triggerMaximum: 1000,
+    previousHealth: 140,
+    nextHealth: 50,
+  }), 100);
+  assert.equal(clampSceneOverflowHealth({
+    phase,
+    directive: { carryOverflowDamage: true },
+    bossId: 'boss-1',
+    bossMaximum: 1000,
+    triggerMaximum: 1000,
+    previousHealth: 300,
+    nextHealth: 180,
+  }), 180);
 });

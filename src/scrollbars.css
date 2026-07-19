@@ -4,6 +4,34 @@
   --scrollbar-thumb-hover: #765081;
 }
 
+:where(button, input, select, textarea):disabled,
+[aria-disabled="true"] {
+  border-color: rgba(111, 108, 116, .34) !important;
+  background: rgba(56, 55, 60, .38) !important;
+  box-shadow: none !important;
+  color: rgba(203, 199, 207, .48) !important;
+  cursor: not-allowed !important;
+  filter: grayscale(1) saturate(.15) !important;
+  opacity: .4 !important;
+}
+
+.disabled-control-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(280px, calc(100vw - 16px));
+  border: 1px solid rgba(142, 127, 145, .55);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: rgba(20, 18, 23, .96);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .42);
+  color: #d4cbd5;
+  font-size: .64rem;
+  font-weight: 700;
+  line-height: 1.2;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 * {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-width: thin;

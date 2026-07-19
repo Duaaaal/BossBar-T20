@@ -5,8 +5,13 @@ import type {
   BossLibraryBossSummary,
   MissingLibraryFile,
 } from './shared/library';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { installUndoShortcut } from './shared/undo-shortcut';
 import './library.css';
 import './scrollbars.css';
+
+installDisabledControlTooltips();
+installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 type MissingFileState = {
   entryId: string;
@@ -229,6 +234,7 @@ const LibraryApp = () => {
                 <button
                   type="button"
                   disabled={loadingEntryId !== null || deletingEntryId !== null}
+                  data-disabled-reason="Aguarde a operação da biblioteca"
                   onClick={() => void loadEntry(entry.id)}
                 >
                   {loadingEntryId === entry.id ? 'Carregando...' : 'Carregar'}
@@ -239,6 +245,7 @@ const LibraryApp = () => {
                   title={`Excluir encontro: ${encounterLabel(entry)}`}
                   aria-label={`Excluir encontro: ${encounterLabel(entry)}`}
                   disabled={loadingEntryId !== null || deletingEntryId !== null}
+                  data-disabled-reason="Aguarde a operação da biblioteca"
                   onClick={() => setDeleteTarget(entry)}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -265,17 +272,17 @@ const LibraryApp = () => {
                     <small>{file.kind === 'background' ? 'Fundo' : file.kind === 'music' ? 'Playlist' : 'Soundboard'}</small>
                     <strong>{file.label}</strong>
                   </div>
-                  <button type="button" disabled={replacingFileKey !== null} onClick={() => void replaceMissingFile(file)}>
+                  <button type="button" disabled={replacingFileKey !== null} data-disabled-reason="Aguarde a seleção de arquivo" onClick={() => void replaceMissingFile(file)}>
                     {replacingFileKey === file.key ? 'Localizando...' : 'Localizar substituto'}
                   </button>
                 </div>
               ))}
             </div>
             <div className="library-modal-actions">
-              <button className="library-cancel" type="button" disabled={replacingFileKey !== null} onClick={() => setMissingState(null)}>
+              <button className="library-cancel" type="button" disabled={replacingFileKey !== null} data-disabled-reason="Feche o seletor de arquivo primeiro" onClick={() => setMissingState(null)}>
                 Cancelar carregamento
               </button>
-              <button type="button" disabled={replacingFileKey !== null} onClick={() => void loadEntry(missingState.entryId, true)}>
+              <button type="button" disabled={replacingFileKey !== null} data-disabled-reason="Feche o seletor de arquivo primeiro" onClick={() => void loadEntry(missingState.entryId, true)}>
                 Continuar sem os arquivos
               </button>
             </div>
@@ -290,10 +297,10 @@ const LibraryApp = () => {
             <h2 id="delete-title">Excluir este encontro da biblioteca?</h2>
             <p>“{encounterLabel(deleteTarget)}” será removido permanentemente.</p>
             <div className="library-modal-actions">
-              <button className="library-cancel" type="button" disabled={deletingEntryId !== null} onClick={() => setDeleteTarget(null)}>
+              <button className="library-cancel" type="button" disabled={deletingEntryId !== null} data-disabled-reason="Aguarde a exclusão atual" onClick={() => setDeleteTarget(null)}>
                 Cancelar
               </button>
-              <button className="library-delete-confirm" type="button" disabled={deletingEntryId !== null} onClick={() => void deleteEntry()}>
+              <button className="library-delete-confirm" type="button" disabled={deletingEntryId !== null} data-disabled-reason="Aguarde a exclusão atual" onClick={() => void deleteEntry()}>
                 {deletingEntryId ? 'Excluindo...' : 'Sim, excluir'}
               </button>
             </div>

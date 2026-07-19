@@ -123,6 +123,7 @@ const bossAPI = {
     return state;
   },
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+  undoLastChange: (): Promise<boolean> => ipcRenderer.invoke('app:undo'),
   confirmAppClose: () => ipcRenderer.send('app:confirm-close'),
   dispatch: (command: BattleCommand) => {
     ipcRenderer.send('battle:dispatch', command);

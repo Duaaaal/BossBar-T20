@@ -27,6 +27,8 @@ import {
 } from './shared/battle';
 import type { ScenePlan, SceneTransitionEvent } from './shared/scene';
 import { bundledAssetUrl, statusIconUrl } from './shared/bundled-assets';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { installUndoShortcut } from './shared/undo-shortcut';
 import {
   getDamageFormulaRange,
   getActiveStatusDescription,
@@ -40,6 +42,9 @@ import {
 } from './StatusRichText';
 import './player.css';
 import './scrollbars.css';
+
+installDisabledControlTooltips();
+installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));

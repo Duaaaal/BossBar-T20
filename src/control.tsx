@@ -17,6 +17,8 @@ import {
   initialEncounterEffectsState,
 } from './shared/battle';
 import { statusIconUrl } from './shared/bundled-assets';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { installUndoShortcut } from './shared/undo-shortcut';
 import {
   deriveStatusAttributes,
   getStatusSkillAnnotations,
@@ -37,6 +39,9 @@ import {
 } from './StatusRichText';
 import './control.css';
 import './scrollbars.css';
+
+installDisabledControlTooltips();
+installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 const parseHealthExpression = (value: string) => {
   const parts = value.trim().replace(',', '.').split('/');
@@ -769,6 +774,7 @@ const ControlApp = () => {
           className="control-minimize-button"
           type="button"
           disabled={panelTransitioning}
+          data-disabled-reason="Aguarde o painel terminar de ajustar"
           aria-expanded={!panelMinimized}
           title={panelMinimized ? 'Expandir painel' : 'Minimizar painel'}
           onClick={() => void togglePanel()}
@@ -947,6 +953,11 @@ const ControlApp = () => {
                   <input
                     aria-label="Dano da condição"
                     disabled={!selectedStatusDefinition?.damageCapable || selectedStatusDefinition.customizable}
+                    data-disabled-reason={!selectedStatusDefinition
+                      ? 'Selecione uma condição'
+                      : selectedStatusDefinition.customizable
+                        ? 'Defina o dano no modal personalizado'
+                        : 'Esta condição não causa dano'}
                     maxLength={128}
                     placeholder={selectedStatusDefinition?.damageCapable && !selectedStatusDefinition.customizable ? '1d6' : '—'}
                     value={statusDamage}
@@ -969,6 +980,9 @@ const ControlApp = () => {
                   className="control-status-apply"
                   type="button"
                   disabled={!selectedStatusDefinition || selectedStatusDefinition.customizable}
+                  data-disabled-reason={!selectedStatusDefinition
+                    ? 'Selecione uma condição'
+                    : 'Use o modal do status personalizado'}
                   onClick={applyStatus}
                 >
                   Aplicar
@@ -977,6 +991,7 @@ const ControlApp = () => {
                   className="control-status-remove"
                   type="button"
                   disabled={!selectedActiveStatus}
+                  data-disabled-reason="A condição selecionada não está ativa"
                   onClick={removeStatus}
                 >
                   Remover
@@ -988,6 +1003,13 @@ const ControlApp = () => {
                   className="control-start-turn"
                   type="button"
                   disabled={!canAdvanceTurn}
+                  data-disabled-reason={
+                    !state.battleStarted
+                      ? 'Inicie a batalha primeiro'
+                      : activeBoss.setupStatus !== 'ready'
+                        ? 'Salve os dados deste chefão'
+                        : 'Chefão derrotado não inicia turno'
+                  }
                   title={
                     !state.battleStarted
                       ? 'Inicie a batalha para avançar os turnos.'
@@ -1025,6 +1047,7 @@ const ControlApp = () => {
                 title={slot.name ?? `Atalho ${slot.index}`}
                 aria-label={slot.assigned ? `Reproduzir ${slot.name}` : `Atalho ${slot.index} vazio`}
                 disabled={!slot.assigned}
+                data-disabled-reason="Nenhum som atribuído a este atalho"
                 key={slot.index}
                 onClick={() => window.bossAPI.dispatchSoundboard({ type: 'play', index: slot.index })}
               >
@@ -1039,14 +1062,15 @@ const ControlApp = () => {
               max="100"
               aria-label="Volume do soundboard"
               disabled={!soundboard}
+              data-disabled-reason="O soundboard ainda não está disponível"
               value={Math.round((soundboard?.volume ?? 0.8) * 100)}
               onChange={(event) => window.bossAPI.dispatchSoundboard({
                 type: 'set-volume',
                 volume: Number(event.target.value) / 100,
               })}
             />
-            <button type="button" className={soundboard?.muted ? 'is-active' : ''} title={soundboard?.muted ? 'Ativar soundboard' : 'Mutar soundboard'} disabled={!soundboard} onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-mute' })}>{soundboard?.muted ? '🔇' : '🔊'}</button>
-            <button type="button" className={soundboard?.loop ? 'is-active' : ''} title="Repetir sons" disabled={!soundboard} onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-loop' })}>↻</button>
+            <button type="button" className={soundboard?.muted ? 'is-active' : ''} title={soundboard?.muted ? 'Ativar soundboard' : 'Mutar soundboard'} disabled={!soundboard} data-disabled-reason="O soundboard ainda não está disponível" onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-mute' })}>{soundboard?.muted ? '🔇' : '🔊'}</button>
+            <button type="button" className={soundboard?.loop ? 'is-active' : ''} title="Repetir sons" disabled={!soundboard} data-disabled-reason="O soundboard ainda não está disponível" onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-loop' })}>↻</button>
           </div>
         </div>
       </form>
