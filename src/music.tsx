@@ -229,6 +229,7 @@ const MusicApp = () => {
           )}
         </div>
         {message && <p className="music-message">{message}</p>}
+        <p className="media-size-warning">Até 100 MB por arquivo. Muitas faixas grandes podem deixar o aplicativo lento.</p>
       </section>
 
       <section className="transport-panel" aria-label="Controles de reprodução">
@@ -422,6 +423,16 @@ const MusicApp = () => {
               onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-mute' })}
             >
               {soundboard.muted ? '🔇' : '🔊'}
+            </button>
+            <button
+              className={soundboard.loop ? 'is-muted' : ''}
+              type="button"
+              title="Repetir sons do soundboard"
+              aria-label="Repetir sons do soundboard"
+              aria-pressed={soundboard.loop}
+              onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-loop' })}
+            >
+              ↻
             </button>
           </div>
           {soundboardPlaybackError && (

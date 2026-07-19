@@ -3,7 +3,7 @@ import type { BossState } from './battle';
 export const MAX_SCENE_PHASES = 8;
 export const MAX_SCENE_BOSSES = 3;
 
-export type SceneTransitionKind = 'fade' | 'blackout' | 'explosion';
+export type SceneTransitionKind = 'fade' | 'fade-blackout' | 'blackout';
 export type SceneMediaSlot = 'background' | 'transitionSound' | 'music';
 export type SceneAudioSlot = Exclude<SceneMediaSlot, 'background'>;
 export type SceneBossPresence = 'inherit' | 'present' | 'absent';
@@ -49,6 +49,7 @@ export type ScenePlaylistCommand =
 export type SceneBossPatch = {
   bossName?: string;
   maxHealth?: number;
+  currentHealth?: number;
   attack?: number;
   rangedAttack?: number;
   skills?: number;
@@ -74,9 +75,11 @@ export type ScenePhase = {
   id: string;
   name: string;
   triggerBossId: string;
-  startPercent: number;
-  endPercent: number;
+  startHealth: number;
+  endHealth: number;
   transition: SceneTransitionKind;
+  transitionDurationSeconds: number;
+  transitionSoundDelaySeconds: number;
   background: SceneMediaSummary | null;
   transitionSound: ScenePlaylistSummary | null;
   music: ScenePlaylistSummary | null;
@@ -88,6 +91,7 @@ export type ScenePlan = {
   bossSlots: SceneBossSlot[];
   showPhaseMarkers: boolean;
   activePhaseIndex: number;
+  blackoutActive: boolean;
   revision: number;
 };
 
@@ -125,7 +129,9 @@ export type SceneTransitionEvent = {
   id: number;
   phaseId: string;
   kind: SceneTransitionKind;
+  stage: 'enter' | 'release';
   durationMs: number;
+  soundDelayMs: number;
   soundUrl: string | null;
   soundVolume: number;
   soundMuted: boolean;
@@ -135,13 +141,14 @@ export type SceneTransitionEvent = {
 const clampInteger = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Math.round(value)));
 
-export const createSceneRanges = (count: number) => {
+export const createSceneRanges = (count: number, initialHealth = 100) => {
   const normalizedCount = clampInteger(count, 1, MAX_SCENE_PHASES);
+  const normalizedHealth = clampInteger(initialHealth, 1, 1_000_000);
   return Array.from({ length: normalizedCount }, (_, index) => ({
-    startPercent: Math.round(100 - (index * 100) / normalizedCount),
-    endPercent: index === normalizedCount - 1
+    startHealth: Math.round(normalizedHealth - (index * normalizedHealth) / normalizedCount),
+    endHealth: index === normalizedCount - 1
       ? 0
-      : Math.round(100 - ((index + 1) * 100) / normalizedCount),
+      : Math.round(normalizedHealth - ((index + 1) * normalizedHealth) / normalizedCount),
   }));
 };
 
@@ -152,6 +159,7 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
     original: true,
   }));
   const triggerBossId = bossSlots[0]?.bossId ?? 'boss-1';
+  const initialHealth = bosses[0]?.currentHealth ?? bosses[0]?.maxHealth ?? 500;
   return {
     bossSlots,
     showPhaseMarkers: false,
@@ -159,9 +167,11 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
       id: 'phase-1',
       name: 'Fase 1',
       triggerBossId,
-      startPercent: 100,
-      endPercent: 0,
+      startHealth: initialHealth,
+      endHealth: 0,
       transition: 'fade',
+      transitionDurationSeconds: 2,
+      transitionSoundDelaySeconds: 0,
       background: null,
       transitionSound: null,
       music: null,
@@ -172,44 +182,39 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
       })),
     }],
     activePhaseIndex: -1,
+    blackoutActive: false,
     revision: 0,
   };
 };
 
 export const scenePhaseAtHealth = (
-  phases: Pick<ScenePhase, 'startPercent' | 'endPercent'>[],
+  phases: Pick<ScenePhase, 'startHealth' | 'endHealth'>[],
   currentHealth: number,
-  maximumHealth: number,
 ) => {
-  if (!Number.isFinite(currentHealth) || !Number.isFinite(maximumHealth) || maximumHealth <= 0) {
+  if (!Number.isFinite(currentHealth)) {
     return -1;
   }
-  const percent = Math.max(0, Math.min(100, (currentHealth / maximumHealth) * 100));
   return phases.findIndex((phase, index) =>
-    percent <= phase.startPercent &&
-    (percent > phase.endPercent || (index === phases.length - 1 && percent >= 0)),
+    currentHealth <= phase.startHealth &&
+    (currentHealth > phase.endHealth || (index === phases.length - 1 && currentHealth >= 0)),
   );
 };
 
 export const crossedScenePhaseIndexes = (
-  phases: Pick<ScenePhase, 'startPercent'>[],
+  phases: Pick<ScenePhase, 'startHealth'>[],
   previousHealth: number,
   nextHealth: number,
-  maximumHealth: number,
   activePhaseIndex: number,
 ) => {
   if (
-    maximumHealth <= 0 ||
     nextHealth >= previousHealth ||
     !Number.isFinite(previousHealth) ||
     !Number.isFinite(nextHealth)
   ) return [];
-  const previousPercent = (previousHealth / maximumHealth) * 100;
-  const nextPercent = (nextHealth / maximumHealth) * 100;
   return phases.flatMap((phase, index) =>
     index > activePhaseIndex &&
-    previousPercent > phase.startPercent &&
-    nextPercent <= phase.startPercent
+    previousHealth > phase.startHealth &&
+    nextHealth <= phase.startHealth
       ? [index]
       : [],
   );
@@ -244,7 +249,7 @@ export const adjacentScenePlaylistTrackId = (
 };
 
 export const validateSceneRanges = (
-  phases: Pick<ScenePhaseDraft, 'startPercent' | 'endPercent'>[],
+  phases: Pick<ScenePhaseDraft, 'startHealth' | 'endHealth'>[],
 ) => {
   if (phases.length < 1 || phases.length > MAX_SCENE_PHASES) {
     return `A cena deve ter entre 1 e ${MAX_SCENE_PHASES} fases.`;
@@ -252,21 +257,18 @@ export const validateSceneRanges = (
   for (let index = 0; index < phases.length; index += 1) {
     const phase = phases[index];
     if (
-      !Number.isFinite(phase.startPercent) ||
-      !Number.isFinite(phase.endPercent) ||
-      phase.startPercent > 100 ||
-      phase.endPercent < 0 ||
-      phase.startPercent <= phase.endPercent
+      !Number.isFinite(phase.startHealth) ||
+      !Number.isFinite(phase.endHealth) ||
+      phase.startHealth > 1_000_000 ||
+      phase.endHealth < 0 ||
+      phase.startHealth <= phase.endHealth
     ) return `A margem de vida da Fase ${index + 1} é inválida.`;
-    if (index === 0 && phase.startPercent !== 100) {
-      return 'A primeira fase deve começar em 100% de vida.';
-    }
-    if (index > 0 && phase.startPercent !== phases[index - 1].endPercent) {
+    if (index > 0 && phase.startHealth !== phases[index - 1].endHealth) {
       return `As Fases ${index} e ${index + 1} precisam compartilhar a mesma margem.`;
     }
   }
-  if (phases[phases.length - 1].endPercent !== 0) {
-    return 'A última fase deve terminar em 0% de vida.';
+  if (phases[phases.length - 1].endHealth !== 0) {
+    return 'A última fase deve terminar em 0 PV.';
   }
   return null;
 };
@@ -281,6 +283,7 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
     number,
   ]> = [
     ['maxHealth', 1, 1_000_000],
+    ['currentHealth', 0, 1_000_000],
     ['attack', -999, 999],
     ['rangedAttack', -999, 999],
     ['skills', -999, 999],
@@ -304,11 +307,14 @@ export const applySceneBossPatch = (
 ): BossState => {
   const normalized = normalizeSceneBossPatch(patch);
   const maxHealth = normalized.maxHealth ?? boss.maxHealth;
+  const currentHealth = normalized.currentHealth === undefined
+    ? Math.min(boss.currentHealth, maxHealth)
+    : Math.min(normalized.currentHealth, maxHealth);
   return {
     ...boss,
     bossName: normalized.bossName ?? boss.bossName,
     maxHealth,
-    currentHealth: Math.min(boss.currentHealth, maxHealth),
+    currentHealth,
     attack: normalized.attack ?? boss.attack,
     rangedAttack: normalized.rangedAttack ?? boss.rangedAttack,
     skills: normalized.skills ?? boss.skills,

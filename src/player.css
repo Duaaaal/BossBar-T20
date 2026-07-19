@@ -83,44 +83,23 @@ body {
 }
 .scene-transition-blackout {
   background: #000;
-  animation: scene-blackout-transition var(--scene-transition-duration) cubic-bezier(.5, 0, .5, 1) both;
+  opacity: 1;
 }
-.scene-transition-explosion {
-  background: radial-gradient(circle, rgba(255, 225, 165, .98) 0, rgba(231, 67, 34, .92) 14%, rgba(87, 8, 14, .86) 36%, rgba(2, 1, 3, .96) 67%);
-  animation: scene-explosion-transition var(--scene-transition-duration) cubic-bezier(.2, .7, .25, 1) both;
+.scene-transition-fade-blackout {
+  background: #000;
 }
-.scene-transition-explosion .scene-transition-burst,
-.scene-transition-explosion .scene-transition-burst::before,
-.scene-transition-explosion .scene-transition-burst::after {
-  position: absolute;
-  width: 120vmax;
-  height: 120vmax;
-  border-radius: 50%;
-  background: repeating-conic-gradient(from 4deg, transparent 0 5deg, rgba(255, 151, 71, .34) 6deg 7deg, transparent 8deg 14deg);
-  content: '';
-  animation: scene-burst-spin var(--scene-transition-duration) ease-out both;
+.scene-transition-fade-blackout[data-stage="enter"] {
+  animation: scene-fade-to-black var(--scene-transition-duration) ease-in both;
 }
-.scene-transition-explosion .scene-transition-burst::before { transform: rotate(19deg) scale(.78); }
-.scene-transition-explosion .scene-transition-burst::after { transform: rotate(-13deg) scale(.58); }
+.scene-transition-fade-blackout[data-stage="release"] {
+  animation: scene-fade-from-black var(--scene-transition-duration) ease-out both;
+}
 @keyframes scene-fade-transition {
   0%, 100% { opacity: 0; }
   42%, 58% { opacity: 1; }
 }
-@keyframes scene-blackout-transition {
-  0%, 100% { opacity: 0; }
-  28%, 72% { opacity: 1; }
-}
-@keyframes scene-explosion-transition {
-  0% { opacity: 0; transform: scale(.72); filter: brightness(2.5); }
-  12% { opacity: 1; transform: scale(1.08); filter: brightness(1.8); }
-  42%, 58% { opacity: 1; transform: scale(1); filter: brightness(1); }
-  100% { opacity: 0; transform: scale(1.16); filter: brightness(.7); }
-}
-@keyframes scene-burst-spin {
-  0% { opacity: 0; transform: rotate(-8deg) scale(.35); }
-  18% { opacity: 1; }
-  100% { opacity: 0; transform: rotate(18deg) scale(1.2); }
-}
+@keyframes scene-fade-to-black { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scene-fade-from-black { from { opacity: 1; } to { opacity: 0; } }
 
 .ambient {
   position: absolute;

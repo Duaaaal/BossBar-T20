@@ -800,6 +800,7 @@ const SoundboardPlayer = () => {
   const audioSettingsRef = useRef({
     volume: 0.8,
     muted: false,
+    loop: false,
     universalMuted: false,
   });
   const activeSounds = useRef(new Map<
@@ -835,6 +836,7 @@ const SoundboardPlayer = () => {
       audioSettingsRef.current = {
         volume: state.volume,
         muted: state.muted,
+        loop: state.loop,
         universalMuted: state.universalMuted,
       };
       if (active) setSoundboard(state);
@@ -852,10 +854,14 @@ const SoundboardPlayer = () => {
     audioSettingsRef.current = {
       volume: soundboard.volume,
       muted: soundboard.muted,
+      loop: soundboard.loop,
       universalMuted: soundboard.universalMuted,
     };
     const context = audioContextRef.current;
     const gain = masterGainRef.current;
+    activeSounds.current.forEach(({ audio }) => {
+      audio.loop = soundboard.loop;
+    });
     if (!context || !gain) return;
     gain.gain.setValueAtTime(
       soundboard.muted || soundboard.universalMuted
@@ -863,7 +869,7 @@ const SoundboardPlayer = () => {
         : volumeToGain(soundboard.volume),
       context.currentTime,
     );
-  }, [soundboard?.muted, soundboard?.universalMuted, soundboard?.volume]);
+  }, [soundboard?.loop, soundboard?.muted, soundboard?.universalMuted, soundboard?.volume]);
 
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeSoundEffect((effect) => {
@@ -880,6 +886,7 @@ const SoundboardPlayer = () => {
       audio.crossOrigin = 'anonymous';
       audio.preload = 'auto';
       audio.src = effect.url;
+      audio.loop = audioSettings.loop;
       const source = graph.context.createMediaElementSource(audio);
       source.connect(graph.gain);
 
@@ -1187,36 +1194,44 @@ const SceneTransitionPlayer = () => {
     const audios = new Set<HTMLAudioElement>();
     const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
       setEffect(nextEffect);
-      let transitionAudio: HTMLAudioElement | null = null;
-      let releaseTransitionAudio: (() => void) | null = null;
+      audios.forEach((audio) => {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      });
+      audios.clear();
       if (
+        nextEffect.stage === 'enter' &&
         nextEffect.soundUrl &&
         !nextEffect.soundMuted &&
         !universalMuted.current
       ) {
-        const audio = new Audio(nextEffect.soundUrl);
-        transitionAudio = audio;
-        audios.add(audio);
-        audio.preload = 'auto';
-        audio.volume = Math.max(0, Math.min(1, nextEffect.soundVolume));
-        audio.loop = nextEffect.soundLoop;
-        const release = () => {
-          audios.delete(audio);
-          audio.pause();
-          audio.removeAttribute('src');
-          audio.load();
-        };
-        releaseTransitionAudio = release;
-        audio.addEventListener('ended', release, { once: true });
-        audio.addEventListener('error', release, { once: true });
-        void audio.play().catch(release);
+        const soundTimer = setTimeout(() => {
+          timers.delete(soundTimer);
+          const audio = new Audio(nextEffect.soundUrl ?? undefined);
+          audios.add(audio);
+          audio.preload = 'auto';
+          audio.volume = Math.max(0, Math.min(1, nextEffect.soundVolume));
+          audio.loop = nextEffect.soundLoop;
+          const release = () => {
+            audios.delete(audio);
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          };
+          audio.addEventListener('ended', release, { once: true });
+          audio.addEventListener('error', release, { once: true });
+          void audio.play().catch(release);
+        }, nextEffect.soundDelayMs);
+        timers.add(soundTimer);
       }
-      const timer = setTimeout(() => {
-        timers.delete(timer);
-        if (transitionAudio && releaseTransitionAudio) releaseTransitionAudio();
-        setEffect((current) => current?.id === nextEffect.id ? null : current);
-      }, nextEffect.durationMs + 80);
-      timers.add(timer);
+      if (nextEffect.kind === 'fade' || nextEffect.stage === 'release') {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          setEffect((current) => current?.id === nextEffect.id ? null : current);
+        }, nextEffect.durationMs + 80);
+        timers.add(timer);
+      }
     });
     return () => {
       active = false;
@@ -1234,11 +1249,11 @@ const SceneTransitionPlayer = () => {
   return effect ? (
     <div
       className={`scene-transition scene-transition-${effect.kind}`}
+      data-stage={effect.stage}
       key={effect.id}
       style={{ '--scene-transition-duration': `${effect.durationMs}ms` } as CSSProperties}
       aria-hidden="true"
     >
-      <div className="scene-transition-burst" />
     </div>
   ) : null;
 };
@@ -1576,7 +1591,10 @@ const PlayerApp = () => {
                 ? [...new Set(scenePlan.phases
                     .slice(1)
                     .filter((phase) => phase.triggerBossId === boss.id)
-                    .map((phase) => phase.startPercent)
+                    .map((phase) => Math.max(
+                      0,
+                      Math.min(100, (phase.startHealth / boss.maxHealth) * 100),
+                    ))
                     .filter((percent) => percent > 0 && percent < 100))]
                 : []}
               visuals={encounterEffects.visuals}

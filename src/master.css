@@ -51,6 +51,7 @@ button { font: inherit; cursor: pointer; }
 .hud-toggle-button { border-color: #72455f !important; color: #dfadca !important; }
 .start-battle-button { border-color: #d3495f !important; background: linear-gradient(135deg, #9c263e, #df4358) !important; }
 .start-battle-button.is-ending { background: linear-gradient(135deg, #67263a, #a7354c) !important; }
+.release-blackout-button { grid-column: 1 / -1; border-color: #e6a45b !important; background: linear-gradient(135deg, #6f3c18, #bc6d28) !important; color: #fff1d9 !important; }
 
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
 .scene-customization-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; border-top: 1px solid rgba(77, 64, 80, .5); padding-top: 11px; }

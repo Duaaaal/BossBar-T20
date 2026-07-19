@@ -13,6 +13,7 @@ import {
   calculateHealthSequence,
   type BattleState,
   type EncounterEffectsState,
+  type SoundboardState,
   initialEncounterEffectsState,
 } from './shared/battle';
 import { statusIconUrl } from './shared/bundled-assets';
@@ -250,6 +251,7 @@ const ControlApp = () => {
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState>(
     initialEncounterEffectsState,
   );
+  const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
@@ -283,6 +285,20 @@ const ControlApp = () => {
       if (active) setState(initialState);
     });
     const unsubscribe = window.bossAPI.subscribe(setState);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getSoundboardState().then((nextState) => {
+      if (active) setSoundboard(nextState);
+    });
+    const unsubscribe = window.bossAPI.subscribeSoundboard((nextState) => {
+      if (active) setSoundboard(nextState);
+    });
     return () => {
       active = false;
       unsubscribe();
@@ -997,6 +1013,41 @@ const ControlApp = () => {
           </label>
           <button className="control-publish" type="button" onClick={() => publishAction('normal')}>Ação padrão</button>
           <button className="control-publish-danger" type="button" onClick={() => publishAction('grave')}>Ação grave</button>
+        </div>
+
+        <div className="control-soundboard-row">
+          <button className="control-open-soundboard" type="button" onClick={() => void window.bossAPI.openSoundboardWindow()}>Soundboard</button>
+          <div className="control-soundboard-shortcuts" aria-label="Atalhos do soundboard">
+            {(soundboard?.slots ?? []).map((slot) => (
+              <button
+                className={slot.assigned ? 'is-assigned' : ''}
+                type="button"
+                title={slot.name ?? `Atalho ${slot.index}`}
+                aria-label={slot.assigned ? `Reproduzir ${slot.name}` : `Atalho ${slot.index} vazio`}
+                disabled={!slot.assigned}
+                key={slot.index}
+                onClick={() => window.bossAPI.dispatchSoundboard({ type: 'play', index: slot.index })}
+              >
+                {slot.index}
+              </button>
+            ))}
+          </div>
+          <div className="control-soundboard-volume">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              aria-label="Volume do soundboard"
+              disabled={!soundboard}
+              value={Math.round((soundboard?.volume ?? 0.8) * 100)}
+              onChange={(event) => window.bossAPI.dispatchSoundboard({
+                type: 'set-volume',
+                volume: Number(event.target.value) / 100,
+              })}
+            />
+            <button type="button" className={soundboard?.muted ? 'is-active' : ''} title={soundboard?.muted ? 'Ativar soundboard' : 'Mutar soundboard'} disabled={!soundboard} onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-mute' })}>{soundboard?.muted ? '🔇' : '🔊'}</button>
+            <button type="button" className={soundboard?.loop ? 'is-active' : ''} title="Repetir sons" disabled={!soundboard} onClick={() => window.bossAPI.dispatchSoundboard({ type: 'toggle-loop' })}>↻</button>
+          </div>
         </div>
       </form>
       {statusTooltip && (() => {

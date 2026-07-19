@@ -75,7 +75,7 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/preload-scene-playlist.ts',
+          entry: 'src/preload-soundboard.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

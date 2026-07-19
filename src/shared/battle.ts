@@ -274,6 +274,7 @@ export type SoundboardState = {
   slots: SoundboardSlot[];
   volume: number;
   muted: boolean;
+  loop: boolean;
   universalMuted: boolean;
   revision: number;
 };
@@ -394,6 +395,7 @@ export type SoundboardCommand =
   | { type: 'clear' }
   | { type: 'stop-all' }
   | { type: 'toggle-mute' }
+  | { type: 'toggle-loop' }
   | { type: 'set-volume'; volume: number };
 
 export const isSoundboardCommand = (
@@ -404,7 +406,8 @@ export const isSoundboardCommand = (
   if (
     command.type === 'clear' ||
     command.type === 'stop-all' ||
-    command.type === 'toggle-mute'
+    command.type === 'toggle-mute' ||
+    command.type === 'toggle-loop'
   ) return true;
   if (command.type === 'set-volume') {
     return typeof command.volume === 'number' && Number.isFinite(command.volume);
