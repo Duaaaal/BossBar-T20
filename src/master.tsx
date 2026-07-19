@@ -523,14 +523,6 @@ const MasterApp = () => {
       >
         {universalMuted ? '🔇' : '🔊'}
       </button>
-      <button
-        className="music-window-button"
-        type="button"
-        onClick={() => void window.bossAPI.openMusicWindow()}
-      >
-        Trilha
-      </button>
-
       {autosaveNoticeVisible && (
         <button className="autosave-notification" type="button" onClick={() => setAutosaveNoticeVisible(false)}>
           Salvamento automático concluído
@@ -566,6 +558,12 @@ const MasterApp = () => {
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
           <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
+          <button
+            className="blackout-button"
+            type="button"
+            disabled={scenePlan?.blackoutActive}
+            onClick={() => void window.bossAPI.activateSceneBlackout()}
+          >Blackout</button>
           {scenePlan?.blackoutActive && (
             <button
               className="release-blackout-button"

@@ -248,20 +248,15 @@ export type MusicPlaybackState = {
 
 export const volumeToGain = (volume: number) => {
   const normalizedVolume = Math.max(0, Math.min(1, volume));
-  if (normalizedVolume <= 0.8) {
-    return (normalizedVolume / 0.8) ** 2.2;
+  if (normalizedVolume <= 0.1) return normalizedVolume;
+  if (normalizedVolume <= 0.2) {
+    return 0.1 + ((normalizedVolume - 0.1) / 0.1) * 0.15;
   }
+  if (normalizedVolume <= 0.8) return normalizedVolume / 0.8;
 
   const boostProgress = (normalizedVolume - 0.8) / 0.2;
   const boostDecibels = boostProgress * 6;
   return 10 ** (boostDecibels / 20);
-};
-
-export type MusicSelectionResult = {
-  ok: boolean;
-  added?: number;
-  error?: string;
-  canceled?: boolean;
 };
 
 export type SoundboardSlot = {
@@ -419,44 +414,6 @@ export const isSoundboardCommand = (
     command.index >= 1 &&
     command.index <= 20
   );
-};
-
-export type MusicCommand =
-  | { type: 'toggle-play' }
-  | { type: 'restart' }
-  | { type: 'previous' }
-  | { type: 'next' }
-  | { type: 'toggle-loop' }
-  | { type: 'toggle-mute' }
-  | { type: 'set-volume'; volume: number }
-  | { type: 'seek'; time: number }
-  | { type: 'remove-track'; trackId: string }
-  | { type: 'clear-tracks' }
-  | { type: 'play-track'; trackId: string };
-
-export const isMusicCommand = (value: unknown): value is MusicCommand => {
-  if (!value || typeof value !== 'object' || !('type' in value)) return false;
-
-  const command = value as Record<string, unknown>;
-  if (command.type === 'play-track' || command.type === 'remove-track') {
-    return typeof command.trackId === 'string';
-  }
-  if (command.type === 'set-volume') {
-    return typeof command.volume === 'number' && Number.isFinite(command.volume);
-  }
-  if (command.type === 'seek') {
-    return typeof command.time === 'number' && Number.isFinite(command.time);
-  }
-
-  return [
-    'toggle-play',
-    'restart',
-    'previous',
-    'next',
-    'toggle-loop',
-    'toggle-mute',
-    'clear-tracks',
-  ].includes(String(command.type));
 };
 
 export type BattleCommand =

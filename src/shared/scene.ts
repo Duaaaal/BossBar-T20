@@ -91,6 +91,7 @@ export type ScenePlan = {
   bossSlots: SceneBossSlot[];
   showPhaseMarkers: boolean;
   activePhaseIndex: number;
+  activePhaseIds: Record<string, string | null>;
   blackoutActive: boolean;
   revision: number;
 };
@@ -136,6 +137,7 @@ export type SceneTransitionEvent = {
   soundVolume: number;
   soundMuted: boolean;
   soundLoop: boolean;
+  visual: boolean;
 };
 
 const clampInteger = (value: number, minimum: number, maximum: number) =>
@@ -158,15 +160,13 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
     label: boss.bossName,
     original: true,
   }));
-  const triggerBossId = bossSlots[0]?.bossId ?? 'boss-1';
-  const initialHealth = bosses[0]?.currentHealth ?? bosses[0]?.maxHealth ?? 500;
-  return {
-    bossSlots,
-    showPhaseMarkers: false,
-    phases: [{
-      id: 'phase-1',
+  const createInitialPhase = (slot: SceneBossSlot, index: number): ScenePhase => {
+    const boss = bosses.find((item) => item.id === slot.bossId);
+    const initialHealth = boss?.currentHealth ?? boss?.maxHealth ?? 500;
+    return {
+      id: index === 0 ? 'phase-1' : `phase-1-${slot.bossId}`,
       name: 'Fase 1',
-      triggerBossId,
+      triggerBossId: slot.bossId,
       startHealth: initialHealth,
       endHealth: 0,
       transition: 'fade',
@@ -175,17 +175,28 @@ export const createScenePlan = (bosses: BossState[]): ScenePlan => {
       background: null,
       transitionSound: null,
       music: null,
-      bosses: bossSlots.map((slot) => ({
-        bossId: slot.bossId,
+      bosses: bossSlots.map((bossSlot) => ({
+        bossId: bossSlot.bossId,
         presence: 'inherit',
         patch: {},
       })),
-    }],
+    };
+  };
+  return {
+    bossSlots,
+    showPhaseMarkers: false,
+    phases: bossSlots.map(createInitialPhase),
     activePhaseIndex: -1,
+    activePhaseIds: Object.fromEntries(bossSlots.map((slot) => [slot.bossId, null])),
     blackoutActive: false,
     revision: 0,
   };
 };
+
+export const scenePhasesForBoss = <T extends Pick<ScenePhase, 'triggerBossId'>>(
+  phases: T[],
+  bossId: string,
+) => phases.filter((phase) => phase.triggerBossId === bossId);
 
 export const scenePhaseAtHealth = (
   phases: Pick<ScenePhase, 'startHealth' | 'endHealth'>[],
@@ -269,6 +280,23 @@ export const validateSceneRanges = (
   }
   if (phases[phases.length - 1].endHealth !== 0) {
     return 'A última fase deve terminar em 0 PV.';
+  }
+  return null;
+};
+
+export const validateScenePhaseTracks = <
+  T extends Pick<ScenePhaseDraft, 'id' | 'triggerBossId' | 'startHealth' | 'endHealth'>,
+>(
+  phases: T[],
+  bossSlots: SceneBossSlot[],
+) => {
+  if (new Set(phases.map((phase) => phase.id)).size !== phases.length) {
+    return 'Cada fase precisa ter um identificador exclusivo.';
+  }
+  for (const slot of bossSlots) {
+    const track = scenePhasesForBoss(phases, slot.bossId);
+    const error = validateSceneRanges(track);
+    if (error) return `${slot.label}: ${error}`;
   }
   return null;
 };

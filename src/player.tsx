@@ -1184,6 +1184,7 @@ const SceneTransitionPlayer = () => {
 
   useEffect(() => {
     let active = true;
+    const audioContext = new AudioContext();
     window.bossAPI.getMusicState().then((state) => {
       if (active) universalMuted.current = state.universalMuted;
     });
@@ -1192,14 +1193,17 @@ const SceneTransitionPlayer = () => {
     });
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const audios = new Set<HTMLAudioElement>();
+    const audioNodes = new Map<HTMLAudioElement, MediaElementAudioSourceNode>();
     const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
-      setEffect(nextEffect);
+      setEffect(nextEffect.visual ? nextEffect : null);
       audios.forEach((audio) => {
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
+        audioNodes.get(audio)?.disconnect();
       });
       audios.clear();
+      audioNodes.clear();
       if (
         nextEffect.stage === 'enter' &&
         nextEffect.soundUrl &&
@@ -1211,13 +1215,26 @@ const SceneTransitionPlayer = () => {
           const audio = new Audio(nextEffect.soundUrl ?? undefined);
           audios.add(audio);
           audio.preload = 'auto';
-          audio.volume = Math.max(0, Math.min(1, nextEffect.soundVolume));
+          audio.volume = 1;
           audio.loop = nextEffect.soundLoop;
+          const source = audioContext.createMediaElementSource(audio);
+          const gain = audioContext.createGain();
+          gain.gain.setValueAtTime(
+            volumeToGain(nextEffect.soundVolume),
+            audioContext.currentTime,
+          );
+          source.connect(gain);
+          gain.connect(audioContext.destination);
+          audioNodes.set(audio, source);
+          if (audioContext.state === 'suspended') void audioContext.resume();
           const release = () => {
             audios.delete(audio);
+            audioNodes.delete(audio);
             audio.pause();
             audio.removeAttribute('src');
             audio.load();
+            source.disconnect();
+            gain.disconnect();
           };
           audio.addEventListener('ended', release, { once: true });
           audio.addEventListener('error', release, { once: true });
@@ -1242,7 +1259,10 @@ const SceneTransitionPlayer = () => {
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
+        audioNodes.get(audio)?.disconnect();
       });
+      audioNodes.clear();
+      void audioContext.close();
     };
   }, []);
 
@@ -1589,8 +1609,8 @@ const PlayerApp = () => {
               effects={healthEffects[boss.id] ?? noHealthEffects}
               phaseMarkers={scenePlan?.showPhaseMarkers
                 ? [...new Set(scenePlan.phases
-                    .slice(1)
                     .filter((phase) => phase.triggerBossId === boss.id)
+                    .slice(1)
                     .map((phase) => Math.max(
                       0,
                       Math.min(100, (phase.startHealth / boss.maxHealth) * 100),

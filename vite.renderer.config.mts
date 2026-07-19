@@ -33,7 +33,6 @@ export default defineConfig({
         master: path.resolve(projectRoot, 'master.html'),
         player: path.resolve(projectRoot, 'player.html'),
         control: path.resolve(projectRoot, 'control.html'),
-        music: path.resolve(projectRoot, 'music.html'),
         library: path.resolve(projectRoot, 'library.html'),
         sceneEditor: path.resolve(projectRoot, 'scene-editor.html'),
         soundboard: path.resolve(projectRoot, 'soundboard.html'),

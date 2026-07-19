@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createRoot } from 'react-dom/client';
+import { volumeToGain } from './shared/battle';
 import {
   createSceneRanges,
   MAX_SCENE_PHASES,
+  scenePhasesForBoss,
   type SceneAudioSlot,
   type SceneBossDirective,
   type SceneBossPatch,
@@ -14,7 +16,7 @@ import {
   type ScenePlan,
   type ScenePlanDraft,
   type SceneTransitionKind,
-  validateSceneRanges,
+  validateScenePhaseTracks,
 } from './shared/scene';
 import './scene-editor.css';
 import './scrollbars.css';
@@ -73,6 +75,54 @@ const createPhaseFromPrevious = (
   })),
 });
 
+const usePreviewAudioOutput = (
+  audioRef: RefObject<HTMLAudioElement | null>,
+  volume: number,
+  muted: boolean,
+) => {
+  const contextRef = useRef<AudioContext | null>(null);
+  const gainRef = useRef<GainNode | null>(null);
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+
+  const ensureGraph = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!contextRef.current) {
+      const context = new AudioContext();
+      const source = context.createMediaElementSource(audio);
+      const gain = context.createGain();
+      source.connect(gain);
+      gain.connect(context.destination);
+      audio.volume = 1;
+      audio.muted = false;
+      contextRef.current = context;
+      sourceRef.current = source;
+      gainRef.current = gain;
+    }
+    const context = contextRef.current;
+    const gain = gainRef.current;
+    if (context && gain) {
+      gain.gain.setValueAtTime(muted ? 0 : volumeToGain(volume), context.currentTime);
+      if (context.state === 'suspended') void context.resume();
+    }
+  }, [audioRef, muted, volume]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    const gain = gainRef.current;
+    if (!context || !gain) return;
+    gain.gain.setValueAtTime(muted ? 0 : volumeToGain(volume), context.currentTime);
+  }, [muted, volume]);
+
+  useEffect(() => () => {
+    sourceRef.current?.disconnect();
+    gainRef.current?.disconnect();
+    if (contextRef.current) void contextRef.current.close();
+  }, []);
+
+  return ensureGraph;
+};
+
 const PhasePlaylistCard = ({
   busy,
   label,
@@ -80,6 +130,7 @@ const PhasePlaylistCard = ({
   playlist,
   slot,
   onOpen,
+  extraControl,
   disabled = false,
 }: {
   busy: boolean;
@@ -88,6 +139,7 @@ const PhasePlaylistCard = ({
   playlist: ScenePlaylistSummary | null;
   slot: SceneAudioSlot;
   onOpen: () => void;
+  extraControl?: ReactNode;
   disabled?: boolean;
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -96,13 +148,16 @@ const PhasePlaylistCard = ({
     (track) => track.id === playlist.currentTrackId,
   ) ?? playlist?.tracks[0] ?? null;
   const canNavigate = (playlist?.tracks.length ?? 0) > 1;
+  const prepareAudio = usePreviewAudioOutput(
+    audioRef,
+    playlist?.volume ?? 0.8,
+    playlist?.muted ?? false,
+  );
   const dispatch = (command: Parameters<typeof window.bossAPI.dispatchScenePhasePlaylist>[2]) =>
     window.bossAPI.dispatchScenePhasePlaylist(phaseId, slot, command);
 
   useEffect(() => {
     if (!audioRef.current || !playlist) return;
-    audioRef.current.volume = Math.max(0, Math.min(1, playlist.volume));
-    audioRef.current.muted = playlist.muted;
     audioRef.current.loop = playlist.loop;
   }, [playlist?.loop, playlist?.muted, playlist?.volume]);
 
@@ -114,6 +169,7 @@ const PhasePlaylistCard = ({
   const togglePlayback = async () => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
+    prepareAudio();
     if (!audio.paused) {
       audio.pause();
       return;
@@ -152,6 +208,7 @@ const PhasePlaylistCard = ({
           onChange={(event) => dispatch({ type: 'set-volume', volume: Number(event.target.value) })}
         />
       </div>
+      {extraControl}
       <audio
         ref={audioRef}
         src={currentTrack?.url}
@@ -184,6 +241,7 @@ const ScenePlaylistModal = ({
   const [clearOpen, setClearOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const playAfterSelection = useRef(false);
+  const prepareAudio = usePreviewAudioOutput(audioRef, state.volume, state.muted);
   const currentTrack = state.tracks.find(
     (track) => track.id === state.currentTrackId,
   ) ?? state.tracks[0] ?? null;
@@ -195,16 +253,15 @@ const ScenePlaylistModal = ({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.volume = Math.max(0, Math.min(1, state.volume));
-    audio.muted = state.muted;
     audio.loop = state.loop;
-  }, [state.loop, state.muted, state.volume]);
+  }, [state.loop]);
 
   useEffect(() => {
     setTime(0);
     setPlaying(false);
     if (!playAfterSelection.current || !audioRef.current || !currentTrack) return;
     playAfterSelection.current = false;
+    prepareAudio();
     void audioRef.current.play().catch(() => {
       setMessage('Não foi possível reproduzir esta faixa.');
     });
@@ -213,6 +270,7 @@ const ScenePlaylistModal = ({
   const togglePlayback = async () => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
+    prepareAudio();
     if (!audio.paused) {
       audio.pause();
       return;
@@ -300,12 +358,8 @@ const ScenePlaylistModal = ({
             <button type="button" disabled={!canNavigate} title="Faixa anterior" onClick={() => dispatch({ type: 'previous' })}>&#9198;</button>
             <button className="scene-playlist-play" type="button" disabled={!currentTrack} onClick={() => void togglePlayback()}>{playing ? '\u23F8' : '\u25B6'}</button>
             <button type="button" disabled={!canNavigate} title="Próxima faixa" onClick={() => dispatch({ type: 'next' })}>&#9197;</button>
-            <button className={state.loop ? 'is-active' : ''} type="button" disabled={!currentTrack} onClick={() => dispatch({ type: 'set-loop', loop: !state.loop })}>Loop</button>
-          </div>
-          <div className="scene-playlist-volume">
-            <button type="button" aria-label={state.muted ? 'Ativar som' : 'Mutar'} onClick={() => dispatch({ type: 'set-muted', muted: !state.muted })}>{state.muted ? '\uD83D\uDD07' : '\uD83D\uDD0A'}</button>
-            <input type="range" aria-label="Volume" min="0" max="1" step="0.01" value={state.volume} onChange={(event) => dispatch({ type: 'set-volume', volume: Number(event.target.value) })} />
-            <span>{Math.round(state.volume * 100)}%</span>
+            <button className={state.loop ? 'is-active' : ''} type="button" title="Repetir playlist" aria-label="Repetir playlist" disabled={!currentTrack} onClick={() => dispatch({ type: 'set-loop', loop: !state.loop })}>&#8635;</button>
+            <button type="button" title={state.muted ? 'Ativar som' : 'Mutar'} aria-label={state.muted ? 'Ativar som' : 'Mutar'} disabled={!currentTrack} onClick={() => dispatch({ type: 'set-muted', muted: !state.muted })}>{state.muted ? '\uD83D\uDD07' : '\uD83D\uDD0A'}</button>
           </div>
           {message && <p className="scene-playlist-message" role="alert">{message}</p>}
         </section>
@@ -332,6 +386,7 @@ const ScenePlaylistModal = ({
 const SceneEditorApp = () => {
   const [plan, setPlan] = useState<ScenePlan | null>(null);
   const [draft, setDraft] = useState<ScenePlanDraft | null>(null);
+  const [selectedBossId, setSelectedBossId] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [battleState, setBattleState] = useState<Awaited<ReturnType<typeof window.bossAPI.getState>> | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -340,6 +395,7 @@ const SceneEditorApp = () => {
   const [playlistModal, setPlaylistModal] = useState<ScenePlaylistState | null>(null);
   const [phaseToDelete, setPhaseToDelete] = useState<number | null>(null);
   const [bossToDelete, setBossToDelete] = useState<string | null>(null);
+  const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const dirtyRef = useRef(false);
 
@@ -353,11 +409,19 @@ const SceneEditorApp = () => {
       if (!active) return;
       setPlan(state);
       setDraft(draftFromPlan(state));
+      setSelectedBossId((current) => state.bossSlots.some((slot) => slot.bossId === current)
+        ? current
+        : state.bossSlots[0]?.bossId ?? '');
     });
     const unsubscribe = window.bossAPI.subscribeScenePlan((state) => {
       if (!active) return;
       setPlan(state);
-      if (!dirtyRef.current) setDraft(draftFromPlan(state));
+      if (!dirtyRef.current) {
+        setDraft(draftFromPlan(state));
+        setSelectedBossId((current) => state.bossSlots.some((slot) => slot.bossId === current)
+          ? current
+          : state.bossSlots[0]?.bossId ?? '');
+      }
     });
     return () => {
       active = false;
@@ -423,8 +487,14 @@ const SceneEditorApp = () => {
     [],
   );
 
-  const currentPhase = draft?.phases[selectedIndex] ?? null;
-  const rangeError = draft ? validateSceneRanges(draft.phases) : null;
+  const bossPhases = useMemo(
+    () => draft ? scenePhasesForBoss(draft.phases, selectedBossId) : [],
+    [draft, selectedBossId],
+  );
+  const currentPhase = bossPhases[selectedIndex] ?? null;
+  const primaryBossId = draft?.bossSlots[0]?.bossId ?? '';
+  const isPrimaryBoss = selectedBossId === primaryBossId;
+  const rangeError = draft ? validateScenePhaseTracks(draft.phases, draft.bossSlots) : null;
   const markDirty = () => {
     dirtyRef.current = true;
     setDirty(true);
@@ -433,8 +503,8 @@ const SceneEditorApp = () => {
   const updatePhase = (updater: (phase: ScenePhaseDraft) => ScenePhaseDraft) => {
     setDraft((current) => current ? {
       ...current,
-      phases: current.phases.map((phase, index) =>
-        index === selectedIndex ? updater(phase) : phase),
+      phases: current.phases.map((phase) =>
+        phase.id === currentPhase?.id ? updater(phase) : phase),
     } : current);
     markDirty();
     setMessage('');
@@ -443,9 +513,9 @@ const SceneEditorApp = () => {
   const setPhaseStartHealth = (value: number) => {
     setDraft((current) => current ? {
       ...current,
-      phases: current.phases.map((phase, index) => {
-        if (index === selectedIndex) return { ...phase, startHealth: value };
-        if (index === selectedIndex - 1) return { ...phase, endHealth: value };
+      phases: current.phases.map((phase) => {
+        if (phase.id === bossPhases[selectedIndex]?.id) return { ...phase, startHealth: value };
+        if (phase.id === bossPhases[selectedIndex - 1]?.id) return { ...phase, endHealth: value };
         return phase;
       }),
     } : current);
@@ -456,9 +526,9 @@ const SceneEditorApp = () => {
   const setPhaseEndHealth = (value: number) => {
     setDraft((current) => current ? {
       ...current,
-      phases: current.phases.map((phase, index) => {
-        if (index === selectedIndex) return { ...phase, endHealth: value };
-        if (index === selectedIndex + 1) return { ...phase, startHealth: value };
+      phases: current.phases.map((phase) => {
+        if (phase.id === bossPhases[selectedIndex]?.id) return { ...phase, endHealth: value };
+        if (phase.id === bossPhases[selectedIndex + 1]?.id) return { ...phase, startHealth: value };
         return phase;
       }),
     } : current);
@@ -510,38 +580,48 @@ const SceneEditorApp = () => {
   };
 
   const addPhase = () => {
-    if (!draft || draft.phases.length >= MAX_SCENE_PHASES) return;
+    if (!draft || bossPhases.length >= MAX_SCENE_PHASES) return;
     const ranges = createSceneRanges(
-      draft.phases.length + 1,
-      draft.phases[0]?.startHealth ?? 100,
+      bossPhases.length + 1,
+      bossPhases[0]?.startHealth ?? 100,
     );
-    const lastPhase = draft.phases[draft.phases.length - 1];
-    const phases = [
-      ...draft.phases.map((phase, index) => ({ ...phase, ...ranges[index] })),
+    const lastPhase = bossPhases[bossPhases.length - 1];
+    const nextTrack = [
+      ...bossPhases.map((phase, index) => ({ ...phase, ...ranges[index] })),
       createPhaseFromPrevious(
-        draft.phases.length,
+        bossPhases.length,
         lastPhase,
         ranges[ranges.length - 1],
       ),
     ];
+    const phases = draft.bossSlots.flatMap((slot) =>
+      slot.bossId === selectedBossId
+        ? nextTrack
+        : scenePhasesForBoss(draft.phases, slot.bossId),
+    );
     setDraft({ ...draft, phases });
-    setSelectedIndex(phases.length - 1);
+    setSelectedIndex(nextTrack.length - 1);
     markDirty();
     setMessage('');
   };
 
   const deletePhase = () => {
-    if (!draft || phaseToDelete === null || draft.phases.length === 1) return;
-    const remaining = draft.phases.filter((_, index) => index !== phaseToDelete);
+    if (!draft || phaseToDelete === null || phaseToDelete === 0) return;
+    const remaining = bossPhases.filter((_, index) => index !== phaseToDelete);
     const ranges = createSceneRanges(
       remaining.length,
       remaining[0]?.startHealth ?? 100,
     );
-    const phases = remaining.map((phase, index) => ({ ...phase, ...ranges[index] }));
+    const nextTrack = remaining.map((phase, index) => ({ ...phase, ...ranges[index] }));
+    const phases = draft.bossSlots.flatMap((slot) =>
+      slot.bossId === selectedBossId
+        ? nextTrack
+        : scenePhasesForBoss(draft.phases, slot.bossId),
+    );
     setDraft({ ...draft, phases });
     setSelectedIndex((index) => Math.min(
       index > phaseToDelete ? index - 1 : index,
-      phases.length - 1,
+      nextTrack.length - 1,
     ));
     setPhaseToDelete(null);
     markDirty();
@@ -597,18 +677,40 @@ const SceneEditorApp = () => {
       label: `Novo Chefão ${draft.bossSlots.length + 1}`,
       original: false,
     };
+    const bossSlots = [...draft.bossSlots, slot];
+    const expandedPhases = draft.phases.map((phase) => ({
+      ...phase,
+      bosses: [...phase.bosses, {
+        bossId,
+        presence: 'inherit' as const,
+        patch: {},
+      }],
+    }));
+    const initialPhase: ScenePhaseDraft = {
+      id: `phase-1-${bossId}`,
+      name: 'Fase 1',
+      triggerBossId: bossId,
+      startHealth: 500,
+      endHealth: 0,
+      transition: 'fade',
+      transitionDurationSeconds: 2,
+      transitionSoundDelaySeconds: 0,
+      background: null,
+      transitionSound: null,
+      music: null,
+      bosses: bossSlots.map((bossSlot) => ({
+        bossId: bossSlot.bossId,
+        presence: bossSlot.bossId === bossId ? 'present' : 'inherit',
+        patch: {},
+      })),
+    };
     setDraft({
       ...draft,
-      bossSlots: [...draft.bossSlots, slot],
-      phases: draft.phases.map((phase) => ({
-        ...phase,
-        bosses: [...phase.bosses, {
-          bossId,
-          presence: 'inherit' as const,
-          patch: {},
-        }],
-      })),
+      bossSlots,
+      phases: [...expandedPhases, initialPhase],
     });
+    setSelectedBossId(bossId);
+    setSelectedIndex(0);
     markDirty();
     setMessage('Novo chefão adicionado ao rascunho da cena.');
   };
@@ -621,14 +723,17 @@ const SceneEditorApp = () => {
     setDraft({
       ...draft,
       bossSlots,
-      phases: draft.phases.map((phase) => ({
-        ...phase,
-        triggerBossId: phase.triggerBossId === bossToDelete
-          ? bossSlots[0]?.bossId ?? phase.triggerBossId
-          : phase.triggerBossId,
-        bosses: phase.bosses.filter((directive) => directive.bossId !== bossToDelete),
-      })),
+      phases: draft.phases
+        .filter((phase) => phase.triggerBossId !== bossToDelete)
+        .map((phase) => ({
+          ...phase,
+          bosses: phase.bosses.filter((directive) => directive.bossId !== bossToDelete),
+        })),
     });
+    if (selectedBossId === bossToDelete) {
+      setSelectedBossId(bossSlots[0]?.bossId ?? '');
+      setSelectedIndex(0);
+    }
     setBossToDelete(null);
     markDirty();
     setMessage('Chefão removido do rascunho da cena.');
@@ -637,67 +742,82 @@ const SceneEditorApp = () => {
   const resolvedMedia = useMemo(() => {
     if (!draft || !currentPhase) return {} as Partial<Record<SceneMediaSlot, string>>;
     const values: Partial<Record<SceneMediaSlot, string>> = {};
-    const targetIndex = draft.phases.findIndex((phase) => phase.id === currentPhase.id);
-    for (let index = 0; index <= targetIndex; index += 1) {
-      const phase = draft.phases[index];
+    for (let index = 0; index <= selectedIndex; index += 1) {
+      const phase = bossPhases[index];
       if (phase.background) values.background = phase.background.name;
     }
     return values;
-  }, [currentPhase, draft]);
+  }, [bossPhases, currentPhase, draft, selectedIndex]);
 
-  const phaseVitals = useMemo(() => {
-    if (!draft) return [];
-    const vitals = new Map(
-      battleState?.bosses.map((boss) => [boss.id, {
-        maximum: boss.maxHealth,
-        current: boss.currentHealth,
-      }]) ?? [],
-    );
-    draft.bossSlots.forEach((slot) => {
-      if (!vitals.has(slot.bossId)) vitals.set(slot.bossId, { maximum: 500, current: 500 });
+  const selectedPhaseVitals = useMemo(() => {
+    const base = battleState?.bosses.find((boss) => boss.id === selectedBossId);
+    let maximum = base?.maxHealth ?? 500;
+    let current = base?.currentHealth ?? maximum;
+    return bossPhases.map((phase) => {
+      const patch = phase.bosses.find(
+        (directive) => directive.bossId === selectedBossId,
+      )?.patch ?? {};
+      maximum = Math.max(1, patch.maxHealth ?? maximum);
+      current = Math.max(0, Math.min(maximum, patch.currentHealth ?? current));
+      return { maximum, current };
     });
-    return draft.phases.map((phase) => {
-      phase.bosses.forEach((directive) => {
-        const previous = vitals.get(directive.bossId) ?? { maximum: 500, current: 500 };
-        const maximum = Math.max(1, directive.patch.maxHealth ?? previous.maximum);
-        const current = Math.max(
-          0,
-          Math.min(maximum, directive.patch.currentHealth ?? previous.current),
-        );
-        vitals.set(directive.bossId, { maximum, current });
-      });
-      return new Map(vitals);
-    });
-  }, [battleState, draft]);
+  }, [battleState, bossPhases, selectedBossId]);
 
-  const currentTriggerVitals = phaseVitals[selectedIndex]?.get(
-    currentPhase?.triggerBossId ?? '',
-  ) ?? { maximum: 500, current: 500 };
-  const firstPhaseExpectedStart = draft
-    ? phaseVitals[0]?.get(draft.phases[0].triggerBossId)?.current ?? 500
-    : 500;
+  const currentTriggerVitals = selectedPhaseVitals[selectedIndex] ?? {
+    maximum: 500,
+    current: 500,
+  };
+  const firstPhaseExpectedStart = selectedPhaseVitals[0]?.current ?? 500;
 
   useEffect(() => {
     setDraft((current) => {
-      if (!current || current.phases[0].startHealth === firstPhaseExpectedStart) {
+      const track = current ? scenePhasesForBoss(current.phases, selectedBossId) : [];
+      if (!current || track[0]?.startHealth === firstPhaseExpectedStart) {
         return current;
       }
       dirtyRef.current = true;
       setDirty(true);
-      const ranges = createSceneRanges(current.phases.length, firstPhaseExpectedStart);
+      const ranges = createSceneRanges(track.length, firstPhaseExpectedStart);
+      const rangeById = new Map(track.map((phase, index) => [phase.id, ranges[index]]));
       return {
         ...current,
-        phases: current.phases.map((phase, index) => ({
+        phases: current.phases.map((phase) => ({
           ...phase,
-          ...ranges[index],
+          ...(rangeById.get(phase.id) ?? {}),
         })),
       };
     });
-  }, [firstPhaseExpectedStart]);
+  }, [firstPhaseExpectedStart, selectedBossId]);
+
+  const resetDraft = async () => {
+    setBusy(true);
+    const nextDraft = await window.bossAPI.resetSceneDraft();
+    setBusy(false);
+    setResetConfirmationOpen(false);
+    if (!nextDraft) {
+      setMessage('Não foi possível preparar a cena padrão.');
+      return;
+    }
+    setDraft(nextDraft);
+    setSelectedBossId(nextDraft.bossSlots[0]?.bossId ?? '');
+    setSelectedIndex(0);
+    setPlaylistModal(null);
+    markDirty();
+    setMessage('');
+  };
 
   if (!plan || !draft || !currentPhase) {
     return <main className="scene-loading">Preparando o editor de cena...</main>;
   }
+  const selectedSlot = draft.bossSlots.find((slot) => slot.bossId === selectedBossId) ??
+    draft.bossSlots[0];
+  const currentDirective = currentPhase.bosses.find(
+    (directive) => directive.bossId === selectedBossId,
+  ) ?? {
+    bossId: selectedBossId,
+    presence: 'inherit' as const,
+    patch: {},
+  };
 
   return (
     <main className="scene-shell">
@@ -718,10 +838,42 @@ const SceneEditorApp = () => {
           />
           <span>Marcadores de mudança na barra de vida</span>
         </label>
+        <button
+          className="scene-reset-button"
+          type="button"
+          disabled={busy}
+          onClick={() => setResetConfirmationOpen(true)}
+        >Resetar</button>
         {(rangeError || message) && (
           <p className="scene-header-error" role="alert">{rangeError ?? message}</p>
         )}
       </header>
+
+      <nav className="scene-boss-tabs" aria-label="Chefões da cena">
+        {draft.bossSlots.map((slot, index) => (
+          <button
+            className={slot.bossId === selectedBossId ? 'is-selected' : ''}
+            type="button"
+            key={slot.bossId}
+            onClick={() => {
+              setSelectedBossId(slot.bossId);
+              setSelectedIndex(0);
+              setMessage('');
+            }}
+          >
+            <span>{index + 1}</span>
+            <strong>{slot.label}</strong>
+          </button>
+        ))}
+        <button
+          className="scene-add-boss-tab"
+          type="button"
+          title="Adicionar chefão"
+          aria-label="Adicionar chefão"
+          disabled={busy || draft.bossSlots.length >= 3}
+          onClick={addBossSlot}
+        >+</button>
+      </nav>
 
       <div className="scene-workspace">
         <aside className="phase-timeline">
@@ -731,11 +883,11 @@ const SceneEditorApp = () => {
               type="button"
               title="Adicionar fase"
               aria-label="Adicionar fase"
-              disabled={draft.phases.length >= MAX_SCENE_PHASES}
+              disabled={bossPhases.length >= MAX_SCENE_PHASES}
               onClick={addPhase}
             >+</button>
           </div>
-          {draft.phases.map((phase, index) => (
+          {bossPhases.map((phase, index) => (
             <div
               className={index === selectedIndex ? 'is-selected' : ''}
               key={phase.id}
@@ -748,12 +900,12 @@ const SceneEditorApp = () => {
                 <span>{index + 1}</span>
                 <strong>{phase.name}</strong>
                 <small>
-                  {phase.startHealth} → {phase.endHealth} PV{' '}
-                  ({Math.round((phase.startHealth / (
-                    phaseVitals[index]?.get(phase.triggerBossId)?.maximum ?? 500
+                  <span>{phase.startHealth} → {phase.endHealth} PV</span>
+                  <span>{Math.round((phase.startHealth / (
+                    selectedPhaseVitals[index]?.maximum ?? 500
                   )) * 100)}% → {Math.round((phase.endHealth / (
-                    phaseVitals[index]?.get(phase.triggerBossId)?.maximum ?? 500
-                  )) * 100)}%)
+                    selectedPhaseVitals[index]?.maximum ?? 500
+                  )) * 100)}%</span>
                 </small>
               </button>
               <button
@@ -761,14 +913,18 @@ const SceneEditorApp = () => {
                 type="button"
                 title="Excluir fase"
                 aria-label={`Excluir ${phase.name}`}
-                disabled={draft.phases.length === 1}
+                disabled={index === 0}
                 onClick={() => setPhaseToDelete(index)}
               >×</button>
             </div>
           ))}
           <div className="timeline-active">
-            {plan.activePhaseIndex >= 0
-              ? `Em execução: Fase ${plan.activePhaseIndex + 1}`
+            {plan.activePhaseIds[selectedBossId]
+              ? `Em execução: Fase ${Math.max(
+                  1,
+                  bossPhases.findIndex((phase) =>
+                    phase.id === plan.activePhaseIds[selectedBossId]) + 1,
+                )}`
               : 'Aguardando início da batalha'}
           </div>
         </aside>
@@ -781,23 +937,17 @@ const SceneEditorApp = () => {
                 <input maxLength={60} value={currentPhase.name} onChange={(event) => updatePhase((phase) => ({ ...phase, name: event.target.value }))} />
               </label>
             </div>
-            <div className="trigger-grid">
-              <label>
-                <span>Chefão gatilho</span>
-                <select value={currentPhase.triggerBossId} onChange={(event) => updatePhase((phase) => ({ ...phase, triggerBossId: event.target.value }))}>
-                  {draft.bossSlots.map((slot) => <option value={slot.bossId} key={slot.bossId}>{slot.label}</option>)}
-                </select>
-              </label>
+            <div className={`trigger-grid ${isPrimaryBoss ? '' : 'is-secondary'}`}>
               <label><span>Começa em</span><div className="health-input"><input type="number" min="1" max={selectedIndex === 0 ? currentTriggerVitals.current : currentTriggerVitals.maximum} disabled={selectedIndex === 0} value={currentPhase.startHealth} onChange={(event) => setPhaseStartHealth(Number(event.target.value))} /><b>PV</b></div></label>
               <label><span>Encerra em</span><div className="health-input"><input type="number" min="0" max={Math.max(0, currentPhase.startHealth - 1)} value={currentPhase.endHealth} onChange={(event) => setPhaseEndHealth(Number(event.target.value))} /><b>PV</b></div></label>
-              <label><span>Transição</span><select disabled={selectedIndex === draft.phases.length - 1} value={currentPhase.transition} onChange={(event) => updatePhase((phase) => ({ ...phase, transition: event.target.value as SceneTransitionKind, transitionDurationSeconds: event.target.value === 'blackout' ? 0 : Math.max(0.01, phase.transitionDurationSeconds || 2), transitionSoundDelaySeconds: event.target.value === 'blackout' ? 0 : phase.transitionSoundDelaySeconds }))}>{Object.entries(transitionLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-              <label><span>Duração</span><div className="seconds-input"><input type="number" inputMode="decimal" min="0.01" max="10" step="0.01" disabled={selectedIndex === draft.phases.length - 1 || currentPhase.transition === 'blackout'} value={currentPhase.transition === 'blackout' ? 0 : currentPhase.transitionDurationSeconds} onChange={(event) => updatePhase((phase) => ({ ...phase, transitionDurationSeconds: Math.max(0.01, Math.min(10, Number(event.target.value))), transitionSoundDelaySeconds: Math.min(phase.transitionSoundDelaySeconds, Number(event.target.value)) }))} /><b>s</b></div></label>
+              {isPrimaryBoss && <label><span>Transição</span><select disabled={selectedIndex === bossPhases.length - 1} value={currentPhase.transition} onChange={(event) => updatePhase((phase) => ({ ...phase, transition: event.target.value as SceneTransitionKind, transitionDurationSeconds: event.target.value === 'blackout' ? 0 : Math.max(0.01, phase.transitionDurationSeconds || 2), transitionSoundDelaySeconds: event.target.value === 'blackout' ? 0 : phase.transitionSoundDelaySeconds }))}>{Object.entries(transitionLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>}
+              {isPrimaryBoss && <label><span>Duração</span><div className="seconds-input"><input type="number" inputMode="decimal" min="0.01" max="10" step="0.01" disabled={selectedIndex === bossPhases.length - 1 || currentPhase.transition === 'blackout'} value={currentPhase.transition === 'blackout' ? 0 : currentPhase.transitionDurationSeconds} onChange={(event) => updatePhase((phase) => ({ ...phase, transitionDurationSeconds: Math.max(0.01, Math.min(10, Number(event.target.value))), transitionSoundDelaySeconds: Math.min(phase.transitionSoundDelaySeconds, Number(event.target.value)) }))} /><b>s</b></div></label>}
             </div>
           </section>
 
           <section className="scene-card">
-            <div className="phase-media-grid">
-              <article className="phase-media">
+            <div className={`phase-media-grid ${isPrimaryBoss ? '' : 'is-secondary'}`}>
+              {isPrimaryBoss && <article className="phase-media">
                 <span>{mediaLabels.background}</span>
                 <strong title={currentPhase.background?.name ?? resolvedMedia.background ?? ''}>{currentPhase.background?.name ?? resolvedMedia.background ?? 'Não definido'}</strong>
                 <small>{currentPhase.background ? 'Definido nesta fase' : resolvedMedia.background ? 'Herdado de fase anterior' : 'Sem fundo definido'}</small>
@@ -805,18 +955,16 @@ const SceneEditorApp = () => {
                   <button type="button" disabled={busy} onClick={() => void chooseMedia('background')}>Upload</button>
                   {currentPhase.background && <button className="media-clear" type="button" disabled={busy} onClick={() => void clearMedia('background')}>Remover</button>}
                 </div>
-              </article>
-              <div className={`phase-audio-stack ${selectedIndex === draft.phases.length - 1 ? 'is-disabled' : ''}`}>
-                <PhasePlaylistCard
-                  busy={busy}
-                  label={mediaLabels.transitionSound}
-                  phaseId={currentPhase.id}
-                  playlist={currentPhase.transitionSound}
-                  slot="transitionSound"
-                  onOpen={() => void openPlaylist('transitionSound')}
-                  disabled={selectedIndex === draft.phases.length - 1}
-                />
-                <label className="transition-sound-delay">
+              </article>}
+              <PhasePlaylistCard
+                busy={busy}
+                label={mediaLabels.transitionSound}
+                phaseId={currentPhase.id}
+                playlist={currentPhase.transitionSound}
+                slot="transitionSound"
+                onOpen={() => void openPlaylist('transitionSound')}
+                disabled={selectedIndex === bossPhases.length - 1}
+                extraControl={isPrimaryBoss ? <label className="transition-sound-delay">
                   <span>Início do som</span>
                   <div className="seconds-input">
                     <input
@@ -825,7 +973,7 @@ const SceneEditorApp = () => {
                       min="0"
                       max={currentPhase.transitionDurationSeconds}
                       step="0.01"
-                      disabled={selectedIndex === draft.phases.length - 1 || currentPhase.transition === 'blackout'}
+                      disabled={selectedIndex === bossPhases.length - 1 || currentPhase.transition === 'blackout'}
                       value={currentPhase.transitionSoundDelaySeconds}
                       onChange={(event) => updatePhase((phase) => ({
                         ...phase,
@@ -837,16 +985,16 @@ const SceneEditorApp = () => {
                     />
                     <b>s</b>
                   </div>
-                </label>
-              </div>
-              <PhasePlaylistCard
+                </label> : undefined}
+              />
+              {isPrimaryBoss && <PhasePlaylistCard
                 busy={busy}
                 label={mediaLabels.music}
                 phaseId={currentPhase.id}
                 playlist={currentPhase.music}
                 slot="music"
                 onOpen={() => void openPlaylist('music')}
-              />
+              />}
             </div>
             <p className="large-media-warning">
               Limite de 100 MB por arquivo. Muitos arquivos grandes acumulados podem deixar o programa lento ou travar durante a reprodução.
@@ -854,26 +1002,26 @@ const SceneEditorApp = () => {
           </section>
 
           <section className="scene-card">
-            <div className="scene-card-heading roster-heading">
-              <button className="add-scene-boss" type="button" disabled={busy || draft.bossSlots.length >= 3} onClick={addBossSlot}>+ Novo chefão</button>
-            </div>
-            <div className="phase-boss-list">
-              {draft.bossSlots.map((slot) => {
-                const directive = currentPhase.bosses.find((item) => item.bossId === slot.bossId) ?? { bossId: slot.bossId, presence: 'inherit' as const, patch: {} };
-                return (
-                  <article className={`phase-boss ${directive.presence === 'absent' ? 'is-absent' : ''}`} key={slot.bossId}>
-                    <header><strong>{directive.patch.bossName || slot.label}</strong><div><select value={directive.presence} onChange={(event) => updateDirective(slot.bossId, (item) => ({ ...item, presence: event.target.value as SceneBossDirective['presence'] }))}><option value="inherit">Manter estado</option>{draft.bossSlots.length > 1 && <option value="present">Incluir na fase</option>}<option value="absent">Eliminar da fase</option></select>{!slot.original && <button className="remove-scene-boss" type="button" title="Remover chefão da cena" aria-label={`Remover ${slot.label}`} onClick={() => setBossToDelete(slot.bossId)}>×</button>}</div></header>
-                    <div className="boss-values">
-                      <label className="boss-name-override"><span>Nome</span><input maxLength={100} placeholder="Herdar" value={directive.patch.bossName ?? ''} onChange={(event) => setPatchValue(slot.bossId, 'bossName', event.target.value)} /></label>
-                      {([
-                        ['maxHealth', 'Vida máx.'], ['currentHealth', 'Vida atual'], ['attack', 'Ataque'], ['rangedAttack', 'Tiro'], ['skills', 'Perícias'],
-                        ['defense', 'Def. CaC'], ['rangedDefense', 'Def. AaD'], ['damageReduction', 'RD'], ['shield', 'Escudo'],
-                      ] as const).map(([key, label]) => <label key={key}><span>{label}</span><input type="number" placeholder="—" value={directive.patch[key] ?? ''} onChange={(event) => setPatchValue(slot.bossId, key, event.target.value)} /></label>)}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+            <article className={`phase-boss ${currentDirective.presence === 'absent' ? 'is-absent' : ''}`}>
+              <header>
+                <strong>{currentDirective.patch.bossName || selectedSlot.label}</strong>
+                <div>
+                  <select value={currentDirective.presence} onChange={(event) => updateDirective(selectedBossId, (item) => ({ ...item, presence: event.target.value as SceneBossDirective['presence'] }))}>
+                    <option value="inherit">Manter estado</option>
+                    {draft.bossSlots.length > 1 && <option value="present">Incluir na fase</option>}
+                    <option value="absent">Eliminar da fase</option>
+                  </select>
+                  {!selectedSlot.original && <button className="remove-scene-boss" type="button" title="Remover chefão da cena" aria-label={`Remover ${selectedSlot.label}`} onClick={() => setBossToDelete(selectedBossId)}>×</button>}
+                </div>
+              </header>
+              <div className="boss-values">
+                <label className="boss-name-override"><span>Nome</span><input maxLength={100} placeholder="Herdar" value={currentDirective.patch.bossName ?? ''} onChange={(event) => setPatchValue(selectedBossId, 'bossName', event.target.value)} /></label>
+                {([
+                  ['maxHealth', 'Vida máx.'], ['currentHealth', 'Vida atual'], ['attack', 'Ataque'], ['rangedAttack', 'Tiro'], ['skills', 'Perícias'],
+                  ['defense', 'Def. CaC'], ['rangedDefense', 'Def. AaD'], ['damageReduction', 'RD'], ['shield', 'Escudo'],
+                ] as const).map(([key, label]) => <label key={key}><span>{label}</span><input type="number" placeholder="—" value={currentDirective.patch[key] ?? ''} onChange={(event) => setPatchValue(selectedBossId, key, event.target.value)} /></label>)}
+              </div>
+            </article>
           </section>
         </section>
       </div>
@@ -894,7 +1042,7 @@ const SceneEditorApp = () => {
           <section className="scene-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="delete-phase-title">
             <h2 id="delete-phase-title">Excluir fase?</h2>
             <p>
-              A {draft.phases[phaseToDelete]?.name ?? 'fase selecionada'} e suas
+              A {bossPhases[phaseToDelete]?.name ?? 'fase selecionada'} e suas
               configurações serão removidas quando a cena for salva.
             </p>
             <div>
@@ -916,6 +1064,22 @@ const SceneEditorApp = () => {
             <div>
               <button type="button" onClick={() => setBossToDelete(null)}>Cancelar</button>
               <button className="is-destructive" type="button" onClick={removeBossSlot}>Remover chefão</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {resetConfirmationOpen && (
+        <div className="scene-modal-backdrop">
+          <section className="scene-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="reset-scene-title">
+            <h2 id="reset-scene-title">Resetar toda a cena?</h2>
+            <p>
+              Todas as fases, chefões adicionais, mídias e playlists do rascunho
+              serão removidos. A alteração só entrará em vigor após salvar a cena.
+            </p>
+            <div>
+              <button type="button" onClick={() => setResetConfirmationOpen(false)}>Cancelar</button>
+              <button className="is-destructive" type="button" onClick={() => void resetDraft()}>Resetar cena</button>
             </div>
           </section>
         </div>
