@@ -98,7 +98,7 @@ button { cursor: pointer; }
 .control-shell.is-minimized .control-form,
 .control-shell.is-minimized .control-error { display: none; }
 
-.control-form { display: grid; min-height: 0; align-content: center; gap: 9px; overflow: visible; }
+.control-form { display: grid; min-height: 0; align-content: end; gap: 9px; overflow: visible; }
 .control-form label { display: grid; min-width: 0; gap: 4px; color: #aaa0ac; font-size: .64rem; font-weight: 800; letter-spacing: .025em; }
 .control-form input, .control-form textarea {
   min-width: 0;
@@ -328,7 +328,7 @@ button { cursor: pointer; }
 .control-status-skill-summary {
   display: flex;
   min-height: 20px;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   color: #8f8491;
   font-size: .56rem;
@@ -337,11 +337,12 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .control-status-skill-summary > span { color: #aaa0ac; }
-.control-status-skill-summary > small { color: #625a65; font-size: .54rem; font-weight: 700; }
+.control-status-skill-summary > small { color: #625a65; font-size: .54rem; font-weight: 700; line-height: 1; }
 .control-status-skill-icons {
   display: flex;
   min-width: 0;
   align-items: center;
+  align-self: center;
   gap: 3px;
 }
 .control-status-command-row {
@@ -632,6 +633,7 @@ button { cursor: pointer; }
 .control-status-modal footer button:hover { filter: brightness(1.15) saturate(1.08); }
 .control-action-row { display: grid; grid-template-columns: minmax(0, .84fr) minmax(112px, .18fr) minmax(112px, .18fr); grid-template-areas: "description normal grave" "description music music"; column-gap: 7px; row-gap: 4px; align-items: start; }
 .control-action-field { grid-area: description; }
+.control-action-field > span { height: 14px; line-height: 14px; }
 .control-publish { grid-area: normal; }
 .control-publish-danger { grid-area: grave; }
 .control-action-row > button { margin-top: 18px; }
