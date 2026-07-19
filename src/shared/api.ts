@@ -15,6 +15,7 @@ import type {
   HealthSequenceRequest,
   HealthSequenceResult,
   MusicPlaybackState,
+  MusicControlCommand,
   MusicState,
   SoundboardAssignmentResult,
   SoundboardCommand,
@@ -111,6 +112,8 @@ export type BossAPI = {
   ) => Promise<BossLibraryDeleteResult>;
   closeBossLibrary: () => void;
   getMusicState: () => Promise<MusicState>;
+  dispatchMusicControl: (command: MusicControlCommand) => void;
+  openActivePhasePlaylist: () => Promise<boolean>;
   setUniversalMute: (muted: boolean) => void;
   getEncounterEffectsState: () => Promise<EncounterEffectsState>;
   setEncounterEffectsVolume: (volume: number) => void;
@@ -200,6 +203,9 @@ export type BossAPI = {
   subscribeSceneEditorCloseRequested: (callback: () => void) => () => void;
   subscribeScenePhasePlaylist: (
     callback: (state: ScenePlaylistState) => void,
+  ) => () => void;
+  subscribeActivePhasePlaylistRequested: (
+    callback: (phaseId: string) => void,
   ) => () => void;
   subscribeSceneTransition: (
     callback: (effect: SceneTransitionEvent) => void,

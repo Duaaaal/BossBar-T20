@@ -48,6 +48,7 @@ test('inicia a cena com uma fase base e marcadores opcionais desativados', () =>
   assert.equal(plan.blackoutActive, false);
   assert.equal(plan.showPhaseMarkers, false);
   assert.equal(plan.phases[0].bosses[0].carryOverflowDamage, true);
+  assert.equal(plan.phases[0].bosses[0].presence, 'present');
 });
 
 test('cria uma progressão universal contendo todos os chefões', () => {

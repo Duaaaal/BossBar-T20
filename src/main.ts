@@ -36,6 +36,7 @@ import {
   getEncounterSoundEffectKind,
   initialEncounterEffectsState,
   initialBattleState,
+  isMusicControlCommand,
   isEncounterSoundEnabled,
   isEncounterSoundEffectKind,
   isBattleCommand,
@@ -56,6 +57,7 @@ import {
   type HealthSequenceRequest,
   type HealthSequenceResult,
   type MusicPlaybackState,
+  type MusicControlCommand,
   type MusicState,
   type SoundboardAssignmentResult,
   type SoundboardState,
@@ -152,6 +154,7 @@ let launcherWindow: BrowserWindow | null = null;
 let soundboardWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
+let pendingActivePlaylistPhaseId: string | null = null;
 let playerWindowReady = false;
 let battleState: BattleState = initialBattleState;
 let scenePlan: ScenePlan = createScenePlan(battleState.bosses);
@@ -357,9 +360,9 @@ let synchronizingDockedWindows = false;
 let synchronizingDockedFocus = false;
 const CONTROL_PANEL_MINIMIZED_HEIGHT = 32;
 const CONTROL_PANEL_DOCK_OVERLAP = 1;
-const CONTROL_PANEL_MIN_EXPANDED_HEIGHT = 390;
-const CONTROL_PANEL_PREFERRED_HEIGHT = 420;
-const CONTROL_PANEL_MAX_EXPANDED_HEIGHT = 470;
+const CONTROL_PANEL_MIN_EXPANDED_HEIGHT = 422;
+const CONTROL_PANEL_PREFERRED_HEIGHT = 452;
+const CONTROL_PANEL_MAX_EXPANDED_HEIGHT = 502;
 const PLAYER_MIN_CONTENT_WIDTH = 960;
 const PLAYER_PREFERRED_CONTENT_WIDTH = 1280;
 const PLAYER_MAX_OUTER_WIDTH = 1920;
@@ -368,7 +371,7 @@ const PLAYER_NATIVE_FRAME_BUDGET = 48;
 const DOCKED_WINDOW_GAP = 12;
 const MAX_USER_MEDIA_BYTES = 100 * 1024 * 1024;
 let controlPanelMinimized = false;
-let controlPanelExpandedHeight = 420;
+let controlPanelExpandedHeight = CONTROL_PANEL_PREFERRED_HEIGHT;
 let pendingBackgroundChange:
   | { type: 'set'; filePath: string; name: string }
   | { type: 'clear' }
@@ -770,6 +773,12 @@ const loadEncounterEffectsSettings = async () => {
       },
       revision: initialEncounterEffectsState.revision,
     };
+    if (isFiniteStoredNumber(parsed.musicVolume)) {
+      musicState = {
+        ...musicState,
+        volume: Math.max(0, Math.min(1, parsed.musicVolume)),
+      };
+    }
   } catch (error) {
     if (isRecord(error) && error.code !== 'ENOENT') {
       console.error('Não foi possível ler as configurações de efeitos.', error);
@@ -782,8 +791,9 @@ const persistEncounterEffectsSettings = () => {
   const temporaryPath = `${filePath}.tmp`;
   const contents = JSON.stringify(
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       volume: encounterEffectsAudioState.volume,
+      musicVolume: musicState.volume,
       general: encounterEffectsAudioState.general,
       sounds: encounterEffectsAudioState.sounds,
       visuals: encounterEffectsAudioState.visuals,
@@ -1078,7 +1088,7 @@ const defaultStoredScene = (bosses: StoredLibraryBoss[]): StoredScenePlan => {
       music: null,
       bosses: slots.map((bossSlot) => ({
         bossId: bossSlot.bossId,
-        presence: 'inherit' as const,
+        presence: 'present' as const,
         carryOverflowDamage: true,
         patch: {},
       })),
@@ -1888,6 +1898,13 @@ const createSceneEditorWindow = () => {
     if (!window.isDestroyed()) {
       window.webContents.send('scene:state-changed', scenePlan);
       window.webContents.send('battle:state-changed', battleState);
+      if (pendingActivePlaylistPhaseId) {
+        window.webContents.send(
+          'scene:open-active-playlist-requested',
+          pendingActivePlaylistPhaseId,
+        );
+        pendingActivePlaylistPhaseId = null;
+      }
     }
   });
   loadRenderer(window, 'scene-editor');
@@ -2822,12 +2839,12 @@ const syncSceneBossSlots = () => {
     changed = true;
   }
   if (!changed) return;
-  const expandedPhases = scenePlan.phases.map((phase) => ({
+  const expandedPhases = scenePlan.phases.map((phase, phaseIndex) => ({
     ...phase,
     bosses: nextSlots.map((slot) =>
       phase.bosses.find((directive) => directive.bossId === slot.bossId) ?? {
         bossId: slot.bossId,
-        presence: 'inherit' as const,
+        presence: phaseIndex === 0 ? 'present' as const : 'inherit' as const,
         carryOverflowDamage: true,
         patch: {},
       },
@@ -3584,6 +3601,7 @@ const isBattleStateReader = (senderId: number) =>
 
 const isMusicStateReader = (senderId: number) =>
   isMasterSender(senderId) ||
+  isControlSender(senderId) ||
   isPlayerSender(senderId);
 
 ipcMain.handle('battle:get-state', (event) => {
@@ -3729,6 +3747,25 @@ ipcMain.handle('presentation:open', (event) => {
 ipcMain.handle('scene:open-window', (event) => {
   if (!isMasterSender(event.sender.id)) return false;
   createSceneEditorWindow();
+  return true;
+});
+
+ipcMain.handle('scene:open-active-playlist', (event) => {
+  if (!isControlSender(event.sender.id)) return false;
+  const activeIndex = scenePlan.activePhaseIndex >= 0
+    ? scenePlan.activePhaseIndex
+    : 0;
+  const musicPhase = resolveSceneMediaPhase(activeIndex, 'music');
+  if (!musicPhase?.music?.tracks.length) return false;
+  pendingActivePlaylistPhaseId = musicPhase.id;
+  const editor = createSceneEditorWindow();
+  if (!editor.webContents.isLoadingMainFrame()) {
+    editor.webContents.send(
+      'scene:open-active-playlist-requested',
+      musicPhase.id,
+    );
+    pendingActivePlaylistPhaseId = null;
+  }
   return true;
 });
 
@@ -4125,10 +4162,16 @@ ipcMain.on('scene-playlist:dispatch', (
   if (!changed) return;
   next.revision += 1;
   pending.summary = next;
-  const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
+  const activeSceneIndex = scenePlan.activePhaseIndex >= 0
+    ? scenePlan.activePhaseIndex
+    : 0;
+  const activeMusicPhaseId = resolveSceneMediaPhase(
+    activeSceneIndex,
+    'music',
+  )?.id;
   if (
     slot === 'music' &&
-    activePhaseId === phaseId &&
+    activeMusicPhaseId === phaseId &&
     ['set-volume', 'set-muted', 'set-loop'].includes(command.type)
   ) {
     musicState = {
@@ -4166,6 +4209,14 @@ ipcMain.on('scene-playlist:dispatch', (
         : phase),
       revision: scenePlan.revision + 1,
     };
+    if (
+      slot === 'music' &&
+      activeMusicPhaseId === phaseId &&
+      ['previous', 'next', 'select-track'].includes(command.type)
+    ) {
+      const updatedPhase = scenePlan.phases.find((phase) => phase.id === phaseId);
+      if (updatedPhase) activatePhaseMusic(updatedPhase, true);
+    }
     broadcastScenePlan();
   }
   broadcastScenePlaylist(phaseId, slot);
@@ -4778,6 +4829,67 @@ ipcMain.on('library:close-window', (event) => {
 ipcMain.handle('music:get-state', (event): MusicState => {
   assertAuthorizedIpcSender(isMusicStateReader(event.sender.id));
   return getMusicState();
+});
+ipcMain.on('music:control', (event, value: unknown) => {
+  if (!isEncounterControllerSender(event.sender.id) || !isMusicControlCommand(value)) {
+    return;
+  }
+  const command = value as MusicControlCommand;
+  const nextVolume = command.type === 'set-volume'
+    ? Math.max(0, Math.min(1, command.volume))
+    : musicState.volume;
+  const nextMuted = command.type === 'set-muted' ? command.muted : musicState.muted;
+  const nextLoop = command.type === 'set-loop' ? command.loop : musicState.loop;
+  if (
+    nextVolume === musicState.volume &&
+    nextMuted === musicState.muted &&
+    nextLoop === musicState.loop
+  ) return;
+  rememberAppChange(undefined, command.type === 'set-volume' ? 'music-volume' : undefined);
+  musicState = {
+    ...musicState,
+    volume: nextVolume,
+    muted: nextMuted,
+    loop: nextLoop,
+    revision: musicState.revision + 1,
+  };
+  const activeIndex = scenePlan.activePhaseIndex >= 0
+    ? scenePlan.activePhaseIndex
+    : 0;
+  const musicPhase = resolveSceneMediaPhase(activeIndex, 'music');
+  if (musicPhase?.music) {
+    const playlistKey = sceneMediaKey(musicPhase.id, 'music');
+    const pendingPlaylist = pendingScenePlaylists.get(playlistKey);
+    if (pendingPlaylist) {
+      pendingPlaylist.summary = {
+        ...pendingPlaylist.summary,
+        volume: nextVolume,
+        muted: nextMuted,
+        loop: nextLoop,
+        revision: pendingPlaylist.summary.revision + 1,
+      };
+    }
+    scenePlan = {
+      ...scenePlan,
+      phases: scenePlan.phases.map((phase) => phase.id === musicPhase.id
+        ? {
+            ...phase,
+            music: phase.music ? {
+              ...phase.music,
+              volume: nextVolume,
+              muted: nextMuted,
+              loop: nextLoop,
+              revision: phase.music.revision + 1,
+            } : null,
+          }
+        : phase),
+      revision: scenePlan.revision + 1,
+    };
+    broadcastScenePlan();
+    broadcastScenePlaylist(musicPhase.id, 'music');
+  }
+  broadcastMusicState();
+  persistEncounterEffectsSettingsSafely();
 });
 ipcMain.handle('soundboard:get-state', (event): SoundboardState => {
   assertAuthorizedIpcSender(

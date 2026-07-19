@@ -21,6 +21,7 @@ import type {
   HealthSequenceRequest,
   HealthSequenceResult,
   MusicPlaybackState,
+  MusicControlCommand,
   MusicState,
   SoundboardAssignmentResult,
   SoundboardCommand,
@@ -70,6 +71,10 @@ let latestScenePlaylist: ScenePlaylistState | null = null;
 const scenePlaylistSubscribers = new Set<
   (state: ScenePlaylistState) => void
 >();
+let latestActivePhasePlaylistRequest: string | null = null;
+const activePhasePlaylistRequestSubscribers = new Set<
+  (phaseId: string) => void
+>();
 
 ipcRenderer.on('battle:state-changed', (_event, state: BattleState) => {
   latestBattleState = state;
@@ -100,6 +105,19 @@ ipcRenderer.on(
   (_event, state: ScenePlaylistState) => {
     latestScenePlaylist = state;
     for (const subscriber of scenePlaylistSubscribers) subscriber(state);
+  },
+);
+
+ipcRenderer.on(
+  'scene:open-active-playlist-requested',
+  (_event, phaseId: string) => {
+    latestActivePhasePlaylistRequest = phaseId;
+    for (const subscriber of activePhasePlaylistRequestSubscribers) {
+      subscriber(phaseId);
+    }
+    if (activePhasePlaylistRequestSubscribers.size > 0) {
+      latestActivePhasePlaylistRequest = null;
+    }
   },
 );
 
@@ -217,6 +235,11 @@ const bossAPI = {
     latestMusicState = state;
     return state;
   },
+  dispatchMusicControl: (command: MusicControlCommand) => {
+    ipcRenderer.send('music:control', command);
+  },
+  openActivePhasePlaylist: (): Promise<boolean> =>
+    ipcRenderer.invoke('scene:open-active-playlist'),
   setUniversalMute: (muted: boolean) => {
     ipcRenderer.send('audio:set-universal-muted', muted);
   },
@@ -450,6 +473,14 @@ const bossAPI = {
     scenePlaylistSubscribers.add(callback);
     if (latestScenePlaylist) callback(latestScenePlaylist);
     return () => scenePlaylistSubscribers.delete(callback);
+  },
+  subscribeActivePhasePlaylistRequested: (callback: (phaseId: string) => void) => {
+    activePhasePlaylistRequestSubscribers.add(callback);
+    if (latestActivePhasePlaylistRequest) {
+      callback(latestActivePhasePlaylistRequest);
+      latestActivePhasePlaylistRequest = null;
+    }
+    return () => activePhasePlaylistRequestSubscribers.delete(callback);
   },
   subscribeSceneTransition: (
     callback: (effect: SceneTransitionEvent) => void,
