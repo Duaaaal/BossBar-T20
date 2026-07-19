@@ -1051,10 +1051,7 @@ const ControlApp = () => {
           </label>
           <button className="control-publish" type="button" onClick={() => publishAction('normal')}>Ação padrão</button>
           <button className="control-publish-danger" type="button" onClick={() => publishAction('grave')}>Ação grave</button>
-        </div>
-
-        <div className="control-music-row">
-          <div className="control-inline-audio-controls">
+          <div className="control-music-controls control-inline-audio-controls">
             <span>Música:</span>
             <input
               type="range"
@@ -1096,22 +1093,24 @@ const ControlApp = () => {
         </div>
 
         <div className="control-soundboard-row">
-          <button className="control-open-soundboard" type="button" onClick={() => void window.bossAPI.openSoundboardWindow()}>Soundboard</button>
-          <div className="control-soundboard-shortcuts" aria-label="Atalhos do soundboard">
-            {(soundboard?.slots ?? []).map((slot) => (
-              <button
-                className={slot.assigned ? 'is-assigned' : ''}
-                type="button"
-                title={slot.name ?? `Atalho ${slot.index}`}
-                aria-label={slot.assigned ? `Reproduzir ${slot.name}` : `Atalho ${slot.index} vazio`}
-                disabled={!slot.assigned}
-                data-disabled-reason="Nenhum som atribuído a este atalho"
-                key={slot.index}
-                onClick={() => window.bossAPI.dispatchSoundboard({ type: 'play', index: slot.index })}
-              >
-                {slot.index}
-              </button>
-            ))}
+          <div className="control-soundboard-primary">
+            <button className="control-open-soundboard" type="button" onClick={() => void window.bossAPI.openSoundboardWindow()}>Soundboard</button>
+            <div className="control-soundboard-shortcuts" aria-label="Atalhos do soundboard">
+              {(soundboard?.slots ?? []).map((slot) => (
+                <button
+                  className={slot.assigned ? 'is-assigned' : ''}
+                  type="button"
+                  title={slot.name ?? `Atalho ${slot.index}`}
+                  aria-label={slot.assigned ? `Reproduzir ${slot.name}` : `Atalho ${slot.index} vazio`}
+                  disabled={!slot.assigned}
+                  data-disabled-reason="Nenhum som atribuído a este atalho"
+                  key={slot.index}
+                  onClick={() => window.bossAPI.dispatchSoundboard({ type: 'play', index: slot.index })}
+                >
+                  {slot.index}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="control-inline-audio-controls">
             <span>Soundboard:</span>
