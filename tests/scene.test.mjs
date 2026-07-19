@@ -7,8 +7,10 @@ import {
   createScenePlan,
   createSceneRanges,
   crossedScenePhaseIndexes,
+  scenePhasesForBoss,
   scenePhaseAtHealth,
   sceneTransitionSourceIndex,
+  validateScenePhaseTracks,
   validateSceneRanges,
 } from '../src/shared/scene.ts';
 
@@ -46,6 +48,37 @@ test('inicia a cena com uma fase base e marcadores opcionais desativados', () =>
   assert.equal(plan.phases[0].transitionDurationSeconds, 2);
   assert.equal(plan.blackoutActive, false);
   assert.equal(plan.showPhaseMarkers, false);
+});
+
+test('cria e valida uma progressão independente para cada chefão', () => {
+  const plan = createScenePlan([
+    createInitialBoss('boss-1'),
+    { ...createInitialBoss('boss-2'), currentHealth: 320, maxHealth: 400 },
+  ]);
+
+  assert.equal(plan.phases.length, 2);
+  assert.equal(scenePhasesForBoss(plan.phases, 'boss-1').length, 1);
+  assert.equal(scenePhasesForBoss(plan.phases, 'boss-2')[0].startHealth, 320);
+  assert.deepEqual(plan.activePhaseIds, { 'boss-1': null, 'boss-2': null });
+  assert.equal(validateScenePhaseTracks(plan.phases, plan.bossSlots), null);
+});
+
+test('permite até oito fases por chefão, sem misturar as margens', () => {
+  const plan = createScenePlan([
+    createInitialBoss('boss-1'),
+    createInitialBoss('boss-2'),
+  ]);
+  const phases = plan.bossSlots.flatMap((slot) =>
+    createSceneRanges(8, 500).map((range, index) => ({
+      ...plan.phases.find((phase) => phase.triggerBossId === slot.bossId),
+      ...range,
+      id: `${slot.bossId}-phase-${index + 1}`,
+      name: `Fase ${index + 1}`,
+      triggerBossId: slot.bossId,
+    })),
+  );
+
+  assert.equal(validateScenePhaseTracks(phases, plan.bossSlots), null);
 });
 
 test('rejeita lacunas, sobreposições e margens incompletas', () => {

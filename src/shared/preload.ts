@@ -5,7 +5,6 @@ export type RendererRole =
   | 'master'
   | 'player'
   | 'control'
-  | 'music'
   | 'soundboard'
   | 'library'
   | 'scene-editor';
@@ -28,7 +27,6 @@ export const bossApiMethodsByRole = {
     'getState',
     'isPresentationOpen',
     'openBossLibrary',
-    'openMusicWindow',
     'openPresentation',
     'openSceneEditor',
     'removeEncounterSound',
@@ -48,6 +46,7 @@ export const bossApiMethodsByRole = {
     'subscribePresentationOpen',
     'getScenePlan',
     'releaseSceneBlackout',
+    'activateSceneBlackout',
     'subscribeScenePlan',
   ],
   player: [
@@ -92,22 +91,6 @@ export const bossApiMethodsByRole = {
     'subscribeEncounterEffects',
     'subscribeSoundboard',
   ],
-  music: [
-    'addMusicTracks',
-    'assignSoundboardSlot',
-    'dispatchMusic',
-    'dispatchSoundboard',
-    'getMusicPlayback',
-    'getMusicState',
-    'getSoundboardState',
-    'getState',
-    'setSoundboardOpen',
-    'subscribe',
-    'subscribeMusic',
-    'subscribeMusicPlayback',
-    'subscribeSoundboard',
-    'subscribeSoundboardError',
-  ],
   soundboard: [
     'assignSoundboardSlot',
     'dispatchSoundboard',
@@ -135,6 +118,7 @@ export const bossApiMethodsByRole = {
     'getState',
     'openScenePhasePlaylist',
     'saveScenePlan',
+    'resetSceneDraft',
     'subscribe',
     'subscribeBackgroundError',
     'subscribeSceneEditorCloseRequested',

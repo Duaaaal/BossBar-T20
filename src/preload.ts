@@ -20,9 +20,7 @@ import type {
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
-  MusicCommand,
   MusicPlaybackState,
-  MusicSelectionResult,
   MusicState,
   SoundboardAssignmentResult,
   SoundboardCommand,
@@ -60,10 +58,6 @@ let latestBackground: BackgroundState | null = null;
 const backgroundSubscribers = new Set<(state: BackgroundState) => void>();
 let latestMusicState: MusicState | null = null;
 const musicSubscribers = new Set<(state: MusicState) => void>();
-let latestMusicPlayback: MusicPlaybackState | null = null;
-const musicPlaybackSubscribers = new Set<
-  (state: MusicPlaybackState) => void
->();
 let latestSoundboardState: SoundboardState | null = null;
 const soundboardSubscribers = new Set<(state: SoundboardState) => void>();
 let latestEncounterEffectsState: EncounterEffectsState | null = null;
@@ -95,14 +89,6 @@ ipcRenderer.on('music:state-changed', (_event, state: MusicState) => {
   latestMusicState = state;
   for (const subscriber of musicSubscribers) subscriber(state);
 });
-
-ipcRenderer.on(
-  'music:playback-changed',
-  (_event, state: MusicPlaybackState) => {
-    latestMusicPlayback = state;
-    for (const subscriber of musicPlaybackSubscribers) subscriber(state);
-  },
-);
 
 ipcRenderer.on('scene:state-changed', (_event, state: ScenePlan) => {
   latestScenePlan = state;
@@ -150,8 +136,6 @@ const bossAPI = {
     ipcRenderer.invoke('presentation:is-open'),
   setControlPanelMinimized: (minimized: boolean): Promise<boolean> =>
     ipcRenderer.invoke('control:set-minimized', minimized),
-  openMusicWindow: (): Promise<boolean> =>
-    ipcRenderer.invoke('music:open-window'),
   openSoundboardWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('soundboard:open-window'),
   openSceneEditor: (): Promise<boolean> =>
@@ -164,6 +148,8 @@ const bossAPI = {
   },
   saveScenePlan: (draft: ScenePlanDraft): Promise<SceneSaveResult> =>
     ipcRenderer.invoke('scene:save', draft),
+  resetSceneDraft: (): Promise<ScenePlanDraft | null> =>
+    ipcRenderer.invoke('scene:reset-draft'),
   chooseScenePhaseMedia: (
     phaseId: string,
     slot: SceneMediaSlot,
@@ -225,22 +211,10 @@ const bossAPI = {
   ): Promise<BossLibraryDeleteResult> =>
     ipcRenderer.invoke('library:delete-entry', entryId),
   closeBossLibrary: () => ipcRenderer.send('library:close-window'),
-  addMusicTracks: (): Promise<MusicSelectionResult> =>
-    ipcRenderer.invoke('music:add-tracks'),
   getMusicState: async (): Promise<MusicState> => {
     const state = (await ipcRenderer.invoke('music:get-state')) as MusicState;
     latestMusicState = state;
     return state;
-  },
-  getMusicPlayback: async (): Promise<MusicPlaybackState> => {
-    const state = (await ipcRenderer.invoke(
-      'music:get-playback',
-    )) as MusicPlaybackState;
-    latestMusicPlayback = state;
-    return state;
-  },
-  dispatchMusic: (command: MusicCommand) => {
-    ipcRenderer.send('music:dispatch', command);
   },
   setUniversalMute: (muted: boolean) => {
     ipcRenderer.send('audio:set-universal-muted', muted);
@@ -304,10 +278,10 @@ const bossAPI = {
   dispatchSoundboard: (command: SoundboardCommand) => {
     ipcRenderer.send('soundboard:dispatch', command);
   },
-  setSoundboardOpen: (open: boolean): Promise<boolean> =>
-    ipcRenderer.invoke('music:set-soundboard-open', open),
   releaseSceneBlackout: (): Promise<boolean> =>
     ipcRenderer.invoke('scene:release-blackout'),
+  activateSceneBlackout: (): Promise<boolean> =>
+    ipcRenderer.invoke('scene:activate-blackout'),
   soundEffectFinished: (effectId: number) => {
     ipcRenderer.send('soundboard:playback-finished', effectId);
   },
@@ -401,13 +375,6 @@ const bossAPI = {
     musicSubscribers.add(callback);
     if (latestMusicState) callback(latestMusicState);
     return () => musicSubscribers.delete(callback);
-  },
-  subscribeMusicPlayback: (
-    callback: (state: MusicPlaybackState) => void,
-  ) => {
-    musicPlaybackSubscribers.add(callback);
-    if (latestMusicPlayback) callback(latestMusicPlayback);
-    return () => musicPlaybackSubscribers.delete(callback);
   },
   subscribeMusicSeek: (callback: (time: number) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, time: number) => {

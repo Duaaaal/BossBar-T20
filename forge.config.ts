@@ -60,11 +60,6 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/preload-music.ts',
-          config: 'vite.preload.config.ts',
-          target: 'preload',
-        },
-        {
           entry: 'src/preload-player.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',

@@ -17,7 +17,6 @@ import {
   isHeavyDamageEffect,
   isEncounterSoundEnabled,
   isShieldBreakEffect,
-  isMusicCommand,
   isSoundboardCommand,
   volumeToGain,
 } from '../src/shared/battle.ts';
@@ -134,7 +133,7 @@ test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () =>
   );
 });
 
-test('ignora RD no dano bruto e valida o comando de busca da música', () => {
+test('ignora RD no dano bruto', () => {
   assert.equal(
     calculateHealthSequence({
       type: 'damage',
@@ -145,10 +144,6 @@ test('ignora RD no dano bruto e valida o comando de busca da música', () => {
     }).effectiveTotal,
     100,
   );
-  assert.equal(isMusicCommand({ type: 'seek', time: 42.5 }), true);
-  assert.equal(isMusicCommand({ type: 'seek', time: Number.NaN }), false);
-  assert.equal(isMusicCommand({ type: 'remove-track', trackId: 'faixa-1' }), true);
-  assert.equal(isMusicCommand({ type: 'clear-tracks' }), true);
 });
 
 test('só prepara chefões novos ao salvar e libera o inicial ao começar', () => {
@@ -224,8 +219,10 @@ test('acompanha separadamente a preparação da identidade e da próxima ação'
 
 test('converte o controle de volume para ganho perceptual', () => {
   assert.equal(volumeToGain(0), 0);
+  assert.equal(volumeToGain(0.1), 0.1);
+  assert.equal(volumeToGain(0.2), 0.25);
+  assert.equal(volumeToGain(0.4), 0.5);
   assert.equal(volumeToGain(0.8), 1);
-  assert.ok(volumeToGain(0.4) > 0.21 && volumeToGain(0.4) < 0.22);
   assert.ok(volumeToGain(0.79) < 1);
   assert.ok(volumeToGain(0.9) > 1.41 && volumeToGain(0.9) < 1.42);
   assert.ok(volumeToGain(1) > 1.99 && volumeToGain(1) < 2);
@@ -244,7 +241,6 @@ test('valida comandos limitados aos 20 botões do soundboard', () => {
   assert.equal(isSoundboardCommand({ type: 'toggle-loop' }), true);
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: 0.75 }), true);
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: Number.NaN }), false);
-  assert.equal(isMusicCommand({ type: 'toggle-mute' }), true);
 });
 
 test('só considera pesado o golpe que remove mais de dez por cento da vida', () => {

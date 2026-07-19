@@ -14,9 +14,7 @@ import type {
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
-  MusicCommand,
   MusicPlaybackState,
-  MusicSelectionResult,
   MusicState,
   SoundboardAssignmentResult,
   SoundboardCommand,
@@ -59,12 +57,12 @@ export type BossAPI = {
   openPresentation: () => Promise<boolean>;
   isPresentationOpen: () => Promise<boolean>;
   setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
-  openMusicWindow: () => Promise<boolean>;
   openSoundboardWindow: () => Promise<boolean>;
   openSceneEditor: () => Promise<boolean>;
   confirmSceneEditorClose: () => void;
   getScenePlan: () => Promise<ScenePlan>;
   saveScenePlan: (draft: ScenePlanDraft) => Promise<SceneSaveResult>;
+  resetSceneDraft: () => Promise<ScenePlanDraft | null>;
   chooseScenePhaseMedia: (
     phaseId: string,
     slot: SceneMediaSlot,
@@ -111,10 +109,7 @@ export type BossAPI = {
     entryId: string,
   ) => Promise<BossLibraryDeleteResult>;
   closeBossLibrary: () => void;
-  addMusicTracks: () => Promise<MusicSelectionResult>;
   getMusicState: () => Promise<MusicState>;
-  getMusicPlayback: () => Promise<MusicPlaybackState>;
-  dispatchMusic: (command: MusicCommand) => void;
   setUniversalMute: (muted: boolean) => void;
   getEncounterEffectsState: () => Promise<EncounterEffectsState>;
   setEncounterEffectsVolume: (volume: number) => void;
@@ -148,8 +143,8 @@ export type BossAPI = {
     keepExistingFile: boolean,
   ) => Promise<SoundboardAssignmentResult>;
   dispatchSoundboard: (command: SoundboardCommand) => void;
-  setSoundboardOpen: (open: boolean) => Promise<boolean>;
   releaseSceneBlackout: () => Promise<boolean>;
+  activateSceneBlackout: () => Promise<boolean>;
   soundEffectFinished: (effectId: number) => void;
   reportSoundEffectError: (effectId: number, index: number) => void;
   encounterEffectFinished: (effectId: number) => void;
@@ -178,9 +173,6 @@ export type BossAPI = {
   ) => () => void;
   subscribeBossLibraryChanged: (callback: () => void) => () => void;
   subscribeMusic: (callback: (state: MusicState) => void) => () => void;
-  subscribeMusicPlayback: (
-    callback: (state: MusicPlaybackState) => void,
-  ) => () => void;
   subscribeMusicSeek: (callback: (time: number) => void) => () => void;
   subscribeMusicFadeOut: (
     callback: (duration: number) => void,

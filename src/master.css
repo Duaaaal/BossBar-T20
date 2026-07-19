@@ -33,7 +33,6 @@ button { font: inherit; cursor: pointer; }
 .settings-button { position: absolute; z-index: 3; top: 13px; right: 53px; display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid #69537d; border-radius: 8px; padding: 5px; background: transparent; }
 .settings-button img { display: block; width: 100%; height: 100%; object-fit: contain; opacity: .82; pointer-events: none; transition: opacity .15s ease, transform .2s ease; }
 .settings-button:hover img { opacity: 1; transform: rotate(22deg); }
-.music-window-button { position: absolute; z-index: 3; top: 52px; right: 13px; width: 73px; min-height: 25px; border: 1px solid #555985; border-radius: 7px; background: transparent; color: #bfc2ee; font-size: .62rem; font-weight: 850; }
 .autosave-notification { position: fixed; z-index: 15; top: 8px; left: 50%; border: 1px solid rgba(132, 102, 148, .45); border-radius: 8px; padding: 7px 11px; background: rgba(40, 31, 45, .92); color: #c9b3d2; font-size: .58rem; transform: translateX(-50%); }
 
 .compact-panel { border: 1px solid #322b35; border-radius: 11px; padding: 13px; background: rgba(24, 20, 26, .9); box-shadow: 0 12px 28px rgba(0, 0, 0, .18); }
@@ -44,13 +43,15 @@ button { font: inherit; cursor: pointer; }
 .session-actions button, .library-actions button, .modal-actions button { border: 1px solid rgba(171, 112, 130, .28); border-radius: 8px; min-height: 38px; padding: 8px 10px; color: #fff; font-size: .7rem; font-weight: 800; }
 .session-actions button, .library-actions button { background: transparent; box-shadow: none; transition: border-color .15s ease, color .15s ease, filter .15s ease, transform .15s ease; }
 .modal-actions button { box-shadow: inset 0 1px rgba(255, 255, 255, .1), 0 3px 8px rgba(0, 0, 0, .16); transition: filter .15s ease, transform .15s ease; }
-.session-actions button:hover:not(:disabled), .library-actions button:hover:not(:disabled), .modal-actions button:hover:not(:disabled), .universal-mute-button:hover:not(:disabled), .settings-button:hover:not(:disabled), .music-window-button:hover:not(:disabled) { filter: brightness(1.16) saturate(1.12); transform: translateY(-1px); }
+.session-actions button:hover:not(:disabled), .library-actions button:hover:not(:disabled), .modal-actions button:hover:not(:disabled), .universal-mute-button:hover:not(:disabled), .settings-button:hover:not(:disabled) { filter: brightness(1.16) saturate(1.12); transform: translateY(-1px); }
 .presentation-button { border-color: #66507b !important; color: #d4c0e6 !important; }
 .presentation-button:disabled { opacity: .5; cursor: default; filter: saturate(.55); }
 .reset-button { border-color: #714553 !important; color: #d9a9b6 !important; }
 .hud-toggle-button { border-color: #72455f !important; color: #dfadca !important; }
 .start-battle-button { border-color: #d3495f !important; background: linear-gradient(135deg, #9c263e, #df4358) !important; }
 .start-battle-button.is-ending { background: linear-gradient(135deg, #67263a, #a7354c) !important; }
+.blackout-button { border-color: #4e4e56 !important; background: #020203 !important; color: #d5d5dc !important; }
+.blackout-button:disabled { opacity: .4; }
 .release-blackout-button { grid-column: 1 / -1; border-color: #e6a45b !important; background: linear-gradient(135deg, #6f3c18, #bc6d28) !important; color: #fff1d9 !important; }
 
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
