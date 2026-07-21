@@ -53,10 +53,17 @@
     "vite": "8.1.5"
   },
   "dependencies": {
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/static": "10.1.0",
     "electron-squirrel-startup": "^1.0.1",
+    "fastify": "5.10.0",
     "music-metadata": "11.14.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
+    "zod": "4.4.3"
   },
   "overrides": {
     "@electron/node-gyp": "10.2.0-electron.2"
