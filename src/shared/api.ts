@@ -34,6 +34,12 @@ import type {
   BossLibrarySaveResult,
 } from './library';
 import type {
+  HostedEncounterStartResult,
+  HostedSessionStartupProgress,
+  HostedSessionState,
+  HostedSessionPublicUrlResult,
+} from './multiplayer';
+import type {
   SceneMediaSelectionResult,
   SceneMediaSlot,
   SceneAudioSlot,
@@ -91,6 +97,14 @@ export type BossAPI = {
   openBossLibrary: () => Promise<boolean>;
   hasEncounterLibraryEntries: () => Promise<boolean>;
   startNewEncounter: () => Promise<boolean>;
+  startHostedEncounter: () => Promise<HostedEncounterStartResult>;
+  returnToLauncher: () => Promise<boolean>;
+  getHostedSessionState: () => Promise<HostedSessionState>;
+  setHostedSessionPublicUrl: (
+    publicBaseUrl: string | null,
+  ) => Promise<HostedSessionPublicUrlResult>;
+  copyHostedSessionLink: (link?: string) => Promise<boolean>;
+  openHostedSessionAsPlayer: () => Promise<boolean>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
   saveBossToLibrary: (
     draft: BossLibraryDraft,
@@ -176,6 +190,12 @@ export type BossAPI = {
     callback: (loaded: BossLibraryLoaded) => void,
   ) => () => void;
   subscribeBossLibraryChanged: (callback: () => void) => () => void;
+  subscribeHostedSession: (
+    callback: (state: HostedSessionState) => void,
+  ) => () => void;
+  subscribeHostedSessionStartupProgress: (
+    callback: (progress: HostedSessionStartupProgress) => void,
+  ) => () => void;
   subscribeMusic: (callback: (state: MusicState) => void) => () => void;
   subscribeMusicSeek: (callback: (time: number) => void) => () => void;
   subscribeMusicFadeOut: (

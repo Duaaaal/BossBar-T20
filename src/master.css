@@ -54,6 +54,212 @@ button { font: inherit; cursor: pointer; }
 .blackout-button { border-color: #4e4e56 !important; background: #020203 !important; color: #d5d5dc !important; }
 .blackout-button:disabled { opacity: .4; }
 .release-blackout-button { border-color: #e6a45b !important; background: linear-gradient(135deg, #6f3c18, #bc6d28) !important; color: #fff1d9 !important; }
+.return-launcher-button { grid-column: 1 / -1; border-color: #536478 !important; color: #b8c9dc !important; }
+
+.hosted-session-panel {
+  border-color: rgba(65, 133, 130, .48);
+  background:
+    radial-gradient(circle at 100% 0, rgba(47, 118, 115, .14), transparent 46%),
+    rgba(20, 25, 27, .94);
+}
+.hosted-session-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.hosted-session-heading .compact-panel-title { margin: 0; }
+.hosted-session-heading-actions { display: flex; align-items: center; gap: 6px; }
+.hosted-player-count {
+  min-width: 42px;
+  border: 1px solid rgba(83, 163, 154, .42);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(43, 100, 96, .18);
+  color: #9fd4cd;
+  font-size: .61rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.hosted-session-summary {
+  display: block;
+}
+.hosted-network-fields { display: grid; min-width: 0; gap: 7px; }
+.hosted-link-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.hosted-link-field > span,
+.hosted-roster-heading > span {
+  color: #756f79;
+  font-size: .54rem;
+  font-weight: 900;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.hosted-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: end;
+}
+.hosted-link-field input {
+  width: 100%;
+  min-width: 0;
+  height: 33px;
+  border: 1px solid #3f4f50;
+  border-radius: 7px;
+  padding: 0 8px;
+  background: #111517;
+  color: #b8c8ca;
+  font: 650 .57rem/1.2 Inter, sans-serif;
+  text-overflow: ellipsis;
+}
+.hosted-link-field input:focus {
+  border-color: #638b88;
+  outline: 1px solid rgba(98, 147, 142, .32);
+}
+.hosted-copy-button,
+.hosted-open-button {
+  min-height: 33px;
+  border: 1px solid #4d7370;
+  border-radius: 7px;
+  padding: 6px 8px;
+  background: transparent;
+  color: #acd1cb;
+  font-size: .57rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.hosted-open-button { border-color: #59617b; color: #c0c7df; }
+.hosted-copy-button:hover:not(:disabled),
+.hosted-open-button:hover:not(:disabled) {
+  filter: brightness(1.2);
+  transform: translateY(-1px);
+}
+.hosted-copy-button:disabled,
+.hosted-open-button:disabled { opacity: .38; cursor: default; }
+.hosted-public-url-note {
+  margin: 0;
+  color: #77767c;
+  font-size: .52rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.hosted-public-url-note.is-warning { color: #dfa071; }
+.hosted-roster-heading {
+  display: flex;
+  min-height: 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 11px;
+  border-top: 1px solid rgba(67, 91, 91, .45);
+  padding-top: 9px;
+}
+.hosted-roster-heading small {
+  color: #91c8bd;
+  font-size: .55rem;
+  font-weight: 800;
+}
+.hosted-player-list {
+  display: grid;
+  max-height: 145px;
+  gap: 4px;
+  margin: 6px 0 0;
+  overflow-y: auto;
+  padding: 0 3px 0 0;
+  list-style: none;
+}
+.hosted-player {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto minmax(53px, auto);
+  min-height: 27px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(60, 74, 76, .58);
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: rgba(15, 20, 22, .72);
+}
+.hosted-quality-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #77727c;
+  box-shadow: 0 0 7px currentColor;
+  color: #77727c;
+}
+.hosted-player-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #d4d0d7;
+  font-size: .62rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hosted-master-badge {
+  display: block;
+  min-width: 0;
+  border: 1px solid rgba(214, 168, 100, .38);
+  border-radius: 999px;
+  padding: 1px 5px;
+  color: #e7be7c;
+  font-size: .45rem;
+  font-style: normal;
+  font-weight: 950;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  visibility: hidden;
+}
+.hosted-master-badge.is-visible { visibility: visible; }
+.hosted-player-ping {
+  color: #9c989f;
+  font-size: .56rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hosted-player-quality {
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: rgba(91, 91, 99, .18);
+  color: #a9a5ad;
+  font-size: .49rem;
+  font-weight: 900;
+  text-align: center;
+  white-space: nowrap;
+}
+.hosted-quality-excellent .hosted-quality-dot { background: #54d49d; color: #54d49d; }
+.hosted-quality-good .hosted-quality-dot { background: #83c985; color: #83c985; }
+.hosted-quality-unstable .hosted-quality-dot { background: #dfb45d; color: #dfb45d; }
+.hosted-quality-poor .hosted-quality-dot,
+.hosted-player.has-connection-issue .hosted-quality-dot { background: #e46470; color: #e46470; }
+.hosted-quality-excellent .hosted-player-quality { color: #83d8b3; }
+.hosted-quality-good .hosted-player-quality { color: #a0cf9b; }
+.hosted-quality-unstable .hosted-player-quality { color: #e0bc73; }
+.hosted-quality-poor .hosted-player-quality,
+.hosted-player.has-connection-issue .hosted-player-quality {
+  background: rgba(151, 46, 59, .2);
+  color: #ea8c96;
+}
+.hosted-player-empty,
+.hosted-session-error {
+  margin: 7px 0 0;
+  border: 1px dashed rgba(67, 91, 91, .5);
+  border-radius: 6px;
+  padding: 8px;
+  color: #777b7e;
+  font-size: .59rem;
+  text-align: center;
+}
+.hosted-session-error {
+  border-color: rgba(184, 66, 81, .45);
+  color: #dc818c;
+}
 
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
 .scene-customization-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; border-top: 1px solid rgba(77, 64, 80, .5); padding-top: 11px; }

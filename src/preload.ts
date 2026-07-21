@@ -40,6 +40,12 @@ import type {
   BossLibrarySaveResult,
 } from './shared/library';
 import type {
+  HostedEncounterStartResult,
+  HostedSessionStartupProgress,
+  HostedSessionState,
+  HostedSessionPublicUrlResult,
+} from './shared/multiplayer';
+import type {
   SceneAudioSlot,
   SceneMediaSelectionResult,
   SceneMediaSlot,
@@ -204,6 +210,20 @@ const bossAPI = {
     ipcRenderer.invoke('library:has-entries'),
   startNewEncounter: (): Promise<boolean> =>
     ipcRenderer.invoke('launcher:new-encounter'),
+  startHostedEncounter: (): Promise<HostedEncounterStartResult> =>
+    ipcRenderer.invoke('launcher:host-encounter'),
+  returnToLauncher: (): Promise<boolean> =>
+    ipcRenderer.invoke('app:return-to-launcher'),
+  getHostedSessionState: (): Promise<HostedSessionState> =>
+    ipcRenderer.invoke('multiplayer:get-session'),
+  setHostedSessionPublicUrl: (
+    publicBaseUrl: string | null,
+  ): Promise<HostedSessionPublicUrlResult> =>
+    ipcRenderer.invoke('multiplayer:set-public-url', publicBaseUrl),
+  copyHostedSessionLink: (link?: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:copy-link', link),
+  openHostedSessionAsPlayer: (): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:open-local-player'),
   getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
     ipcRenderer.invoke('library:get-entries'),
   saveBossToLibrary: (
@@ -394,6 +414,24 @@ const bossAPI = {
     const listener = () => callback();
     ipcRenderer.on('library:entries-changed', listener);
     return () => ipcRenderer.removeListener('library:entries-changed', listener);
+  },
+  subscribeHostedSession: (callback: (state: HostedSessionState) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: HostedSessionState,
+    ) => callback(state);
+    ipcRenderer.on('multiplayer:session-changed', listener);
+    return () => ipcRenderer.removeListener('multiplayer:session-changed', listener);
+  },
+  subscribeHostedSessionStartupProgress: (
+    callback: (progress: HostedSessionStartupProgress) => void,
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      progress: HostedSessionStartupProgress,
+    ) => callback(progress);
+    ipcRenderer.on('multiplayer:hosting-progress', listener);
+    return () => ipcRenderer.removeListener('multiplayer:hosting-progress', listener);
   },
   subscribeMusic: (callback: (state: MusicState) => void) => {
     musicSubscribers.add(callback);

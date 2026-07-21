@@ -1,12 +1,14 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   net,
   protocol,
   screen,
   session,
+  shell,
 } from 'electron';
 import { randomInt, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -61,6 +63,8 @@ import {
   type MusicState,
   type SoundboardAssignmentResult,
   type SoundboardState,
+  type SoundboardStop,
+  type SoundEffect,
   isSoundboardCommand,
 } from './shared/battle';
 import type {
@@ -83,6 +87,13 @@ import {
   resolveMediaOriginPolicy,
 } from './shared/media';
 import type { RendererRole } from './shared/preload';
+import type {
+  HostedEncounterStartResult,
+  HostedSessionStartupProgress,
+  HostedSessionState,
+  HostedSessionPublicUrlResult,
+  MultiplayerPresence,
+} from './shared/multiplayer';
 import {
   normalizeActiveStatuses,
   type ActiveBossStatus,
@@ -117,6 +128,21 @@ import {
   calculateInitialDockedPresentationSize,
   calculateProportionalDockedSize,
 } from './shared/window-layout';
+import {
+  createPublicPresentationSnapshot,
+  toPublicBattleState,
+  toPublicSceneState,
+} from './multiplayer/public-presentation';
+import {
+  MultiplayerSessionServer,
+  type SessionMediaResource,
+} from './multiplayer/session-server';
+import {
+  CLOUDFLARED_VERSION,
+  ensureCloudflaredBinary,
+  startCloudflareQuickTunnel,
+  type QuickTunnelHandle,
+} from './multiplayer/quick-tunnel';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -154,6 +180,15 @@ let launcherWindow: BrowserWindow | null = null;
 let soundboardWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
+let hostedSessionServer: MultiplayerSessionServer | null = null;
+let hostedSessionPresence: MultiplayerPresence | null = null;
+let hostedPublicBaseUrl: string | null = null;
+let hostedPublicInviteUrl: string | null = null;
+let hostedQuickTunnel: QuickTunnelHandle | null = null;
+let hostedSessionError: string | null = null;
+let returningToLauncher = false;
+const hostedMediaSources = new Map<string, SessionMediaResource>();
+const hostedMediaIdsBySource = new Map<string, string>();
 let pendingActivePlaylistPhaseId: string | null = null;
 let playerWindowReady = false;
 let battleState: BattleState = initialBattleState;
@@ -483,6 +518,12 @@ const rendererFile = (page: RendererPage) =>
     `../renderer/${MAIN_WINDOW_VITE_NAME}/${page}.html`,
   );
 
+const rendererDirectory = () => path.dirname(rendererFile('player'));
+
+const hostedWebDirectory = () => app.isPackaged
+  ? rendererDirectory()
+  : path.join(app.getPath('temp'), 'bossbar-t20-web-player-dev');
+
 const bundledAssetsDirectory = () => app.isPackaged
   ? path.join(process.resourcesPath, 'assets')
   : path.join(app.getAppPath(), 'assets');
@@ -511,6 +552,88 @@ const resolveBundledAssetPath = (requestUrl: URL): string | null => {
     path.isAbsolute(containedPath)
   ) return null;
   return resolvedPath;
+};
+
+const backgroundImageMimeTypeForFile = (filePath: string) => {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.avif': return 'image/avif';
+    case '.bmp': return 'image/bmp';
+    case '.gif': return 'image/gif';
+    case '.jfif':
+    case '.jpeg':
+    case '.jpg': return 'image/jpeg';
+    case '.png': return 'image/png';
+    case '.webp': return 'image/webp';
+    default: return null;
+  }
+};
+
+const resolveHostedMediaResource = (
+  sourceUrl: string,
+): SessionMediaResource | null => {
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(sourceUrl);
+  } catch {
+    return null;
+  }
+  if (requestUrl.protocol !== 'boss-media:') return null;
+
+  let filePath: string | null = null;
+  let contentType = 'audio/mpeg';
+  if (requestUrl.hostname === 'background') {
+    filePath = activeBackgroundFilePath;
+    if (filePath) {
+      contentType = backgroundVideoMimeTypeForFile(filePath) ??
+        backgroundImageMimeTypeForFile(filePath) ?? '';
+    }
+  } else if (requestUrl.hostname === 'audio') {
+    const trackId = decodeURIComponent(requestUrl.pathname.slice(1));
+    filePath = musicTracks.find((track) => track.id === trackId)?.filePath ?? null;
+  } else if (requestUrl.hostname === 'sfx') {
+    const effectId = Number(decodeURIComponent(requestUrl.pathname.slice(1)));
+    filePath = Number.isInteger(effectId)
+      ? soundEffectSources.get(effectId)?.filePath ?? null
+      : null;
+  } else if (requestUrl.hostname === 'encounter-sfx') {
+    const effectId = Number(decodeURIComponent(requestUrl.pathname.slice(1)));
+    filePath = Number.isInteger(effectId)
+      ? encounterEffectSources.get(effectId) ?? null
+      : null;
+  } else if (requestUrl.hostname === 'encounter-sound-preview') {
+    const optionId = decodeURIComponent(requestUrl.pathname.slice(1));
+    filePath = encounterSoundOptions.find(
+      (option) => option.id === optionId,
+    )?.filePath ?? null;
+  } else if (requestUrl.hostname === 'scene-audio') {
+    const mediaKey = decodeURIComponent(requestUrl.pathname.slice(1));
+    const [phaseId, rawSlot, trackId] = mediaKey.split(':');
+    const pending = ['transitionSound', 'music'].includes(rawSlot)
+      ? pendingScenePlaylists.get(`${phaseId}:${rawSlot}`)
+      : null;
+    filePath = (trackId ? pending?.paths.get(trackId) : null) ??
+      scenePlaylistPaths.get(mediaKey) ??
+      sceneMediaPaths.get(mediaKey) ??
+      null;
+  }
+
+  return filePath && contentType ? { filePath, contentType } : null;
+};
+
+const rewriteHostedMediaUrl = (
+  sourceUrl: string,
+  mediaUrl: (id: string) => string,
+) => {
+  const resource = resolveHostedMediaResource(sourceUrl);
+  if (!resource) return '';
+  const sourceKey = `${sourceUrl}\n${resource.filePath}`;
+  let mediaId = hostedMediaIdsBySource.get(sourceKey);
+  if (!mediaId) {
+    mediaId = randomUUID();
+    hostedMediaIdsBySource.set(sourceKey, mediaId);
+  }
+  hostedMediaSources.set(mediaId, resource);
+  return mediaUrl(mediaId);
 };
 
 const defaultMediaDirectory = (
@@ -675,6 +798,208 @@ const getEncounterEffectsState = (): EncounterEffectsState => ({
   ...encounterEffectsAudioState,
   universalMuted: musicState.universalMuted,
 });
+
+const encounterSoundSourceUrl = (optionId: string) =>
+  `boss-media://encounter-sound-preview/${encodeURIComponent(optionId)}`;
+
+const createHostedEncounterSoundUrls = (mediaUrl: (id: string) => string) =>
+  encounterSoundOptions
+    .filter((option) => option.enabled)
+    .map((option) => rewriteHostedMediaUrl(
+      encounterSoundSourceUrl(option.id),
+      mediaUrl,
+    ))
+    .filter(Boolean);
+
+const createHostedPresentationSnapshot = (
+  mediaUrl: (id: string) => string,
+) => ({
+  ...createPublicPresentationSnapshot(
+    {
+      battle: battleState,
+      background: getBackgroundState(),
+      scenePlan,
+      encounterEffects: getEncounterEffectsState(),
+      music: getMusicState(),
+      musicPlayback: musicPlaybackState,
+      soundboard: getSoundboardState(),
+    },
+    {
+      rewriteMediaUrl: (url) => rewriteHostedMediaUrl(url, mediaUrl),
+    },
+  ),
+  encounterSoundUrls: createHostedEncounterSoundUrls(mediaUrl),
+});
+
+const getHostedSessionState = (): HostedSessionState => {
+  const server = hostedSessionServer;
+  if (!server) {
+    return {
+      active: false,
+      roomCode: null,
+      tunnelProvider: null,
+      tunnelStatus: 'inactive',
+      publicBaseUrl: null,
+      shareUrl: null,
+      localUrl: null,
+      lanUrls: [],
+      connectedPlayers: 0,
+      maxPlayers: 10,
+      players: [],
+      error: null,
+    };
+  }
+  const presence = hostedSessionPresence ?? server.getPresence();
+  const { invite } = server.info;
+  return {
+    active: true,
+    roomCode: invite.roomCode,
+    tunnelProvider: 'cloudflare-quick',
+    tunnelStatus: hostedSessionError ? 'error' : 'online',
+    publicBaseUrl: hostedPublicBaseUrl,
+    shareUrl: hostedPublicInviteUrl,
+    localUrl: invite.localUrl,
+    lanUrls: [...invite.lanUrls],
+    connectedPlayers: presence.connectedPlayers,
+    maxPlayers: presence.maxPlayers,
+    players: presence.players.map((player) => ({ ...player })),
+    error: hostedSessionError,
+  };
+};
+
+const broadcastHostedSessionState = () => {
+  if (masterWindow && !masterWindow.isDestroyed()) {
+    masterWindow.webContents.send(
+      'multiplayer:session-changed',
+      getHostedSessionState(),
+    );
+  }
+};
+
+const reportHostedSessionStartupProgress = (
+  percent: number,
+  stage: string,
+) => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  const progress: HostedSessionStartupProgress = {
+    percent: Math.max(0, Math.min(100, percent)),
+    stage,
+  };
+  launcherWindow.webContents.send('multiplayer:hosting-progress', progress);
+};
+
+const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
+  if (hostedSessionServer) {
+    return { ok: true, session: getHostedSessionState() };
+  }
+  hostedMediaSources.clear();
+  hostedMediaIdsBySource.clear();
+  hostedSessionPresence = null;
+  hostedPublicBaseUrl = null;
+  hostedPublicInviteUrl = null;
+  hostedSessionError = null;
+  let startingServer: MultiplayerSessionServer | null = null;
+  let startingTunnel: QuickTunnelHandle | null = null;
+  try {
+    reportHostedSessionStartupProgress(5, 'Preparando o encontro...');
+    reportHostedSessionStartupProgress(10, 'Verificando o componente de conexão segura...');
+    const binaryPath = await ensureCloudflaredBinary({
+      binaryPath: path.join(
+        app.getPath('userData'),
+        'network-tools',
+        `cloudflared-${CLOUDFLARED_VERSION}.exe`,
+      ),
+      fetchBinary: net.fetch as typeof fetch,
+      onProgress: (progress) => reportHostedSessionStartupProgress(
+        10 + progress * 45,
+        progress < 1
+          ? 'Baixando o componente de conexão segura...'
+          : 'Componente de conexão pronto.',
+      ),
+    });
+    reportHostedSessionStartupProgress(62, 'Iniciando a sala local...');
+    const server = await MultiplayerSessionServer.start({
+      // O túnel acessa somente o loopback. Nenhuma porta de entrada é exposta.
+      networkMode: 'loopback',
+      webRoot: hostedWebDirectory(),
+      webIndexFile: 'web-player.html',
+      assetRoot: bundledAssetsDirectory(),
+      initialSnapshot: ({ mediaUrl }) =>
+        createHostedPresentationSnapshot(mediaUrl),
+      resolveMedia: ({ id }) => hostedMediaSources.get(id) ?? null,
+      onPresenceChanged: (presence) => {
+        hostedSessionPresence = presence;
+        broadcastHostedSessionState();
+      },
+    });
+    startingServer = server;
+    reportHostedSessionStartupProgress(72, 'Criando o túnel HTTPS temporário...');
+    let tunnel: QuickTunnelHandle | null = null;
+    tunnel = await startCloudflareQuickTunnel({
+      binaryPath,
+      localOrigin: new URL(server.info.invite.localUrl).origin,
+      onUnexpectedExit: (message) => {
+        if (hostedQuickTunnel !== tunnel) return;
+        hostedQuickTunnel = null;
+        hostedSessionError = `${message} Encerre e hospede a sala novamente.`;
+        hostedPublicBaseUrl = null;
+        hostedPublicInviteUrl = null;
+        server.clearPublicInviteUrl();
+        broadcastHostedSessionState();
+      },
+    });
+    startingTunnel = tunnel;
+    reportHostedSessionStartupProgress(94, 'Validando o convite dos jogadores...');
+    const publicInvite = server.publicInviteUrl(tunnel.publicBaseUrl);
+    hostedSessionServer = server;
+    hostedQuickTunnel = tunnel;
+    hostedSessionPresence = server.getPresence();
+    hostedPublicBaseUrl = publicInvite.baseUrl;
+    hostedPublicInviteUrl = publicInvite.inviteUrl;
+    reportHostedSessionStartupProgress(100, 'Sala hospedada com segurança.');
+    broadcastHostedSessionState();
+    return { ok: true, session: getHostedSessionState() };
+  } catch (error) {
+    await startingTunnel?.close().catch(() => undefined);
+    await startingServer?.close('server-shutdown').catch(() => undefined);
+    hostedMediaSources.clear();
+    hostedMediaIdsBySource.clear();
+    hostedSessionPresence = null;
+    hostedPublicBaseUrl = null;
+    hostedPublicInviteUrl = null;
+    hostedQuickTunnel = null;
+    hostedSessionError = null;
+    reportHostedSessionStartupProgress(0, 'Não foi possível criar a sala.');
+    return {
+      ok: false,
+      error: error instanceof Error
+        ? error.message
+        : 'Não foi possível iniciar a sala hospedada.',
+    };
+  }
+};
+
+const stopHostedSession = async (
+  reason: 'host-ended-session' | 'server-shutdown' = 'host-ended-session',
+) => {
+  const server = hostedSessionServer;
+  if (!server) return;
+  const tunnel = hostedQuickTunnel;
+  hostedSessionServer = null;
+  hostedSessionPresence = null;
+  hostedPublicBaseUrl = null;
+  hostedPublicInviteUrl = null;
+  hostedQuickTunnel = null;
+  hostedSessionError = null;
+  broadcastHostedSessionState();
+  try {
+    await tunnel?.close();
+    await server.close(reason);
+  } finally {
+    hostedMediaSources.clear();
+    hostedMediaIdsBySource.clear();
+  }
+};
 
 const getEncounterSoundCustomizationState = (): EncounterSoundCustomizationState => ({
   options: encounterSoundOptions.map((option) => ({
@@ -1694,6 +2019,13 @@ const broadcastMusicState = () => {
       window.webContents.send('music:state-changed', nextState);
     }
   }
+  if (hostedSessionServer) {
+    hostedSessionServer.publishMusic(
+      createHostedPresentationSnapshot(
+        (id) => hostedSessionServer?.mediaUrl(id) ?? '',
+      ).music,
+    );
+  }
 };
 
 const broadcastSoundboardState = () => {
@@ -1702,6 +2034,13 @@ const broadcastSoundboardState = () => {
     if (window && !window.isDestroyed()) {
       window.webContents.send('soundboard:state-changed', state);
     }
+  }
+  if (hostedSessionServer) {
+    hostedSessionServer.publishSoundboard(
+      createHostedPresentationSnapshot(
+        (id) => hostedSessionServer?.mediaUrl(id) ?? '',
+      ).soundboard,
+    );
   }
 };
 
@@ -1712,18 +2051,84 @@ const broadcastEncounterEffectsState = () => {
       window.webContents.send('encounter-effects:state-changed', state);
     }
   }
+  hostedSessionServer?.publishEncounterEffects(state);
 };
 
-const playEncounterMechanicSound = (effect: HealthEffect) => {
+const broadcastHostedEncounterSoundLibrary = () => {
+  const server = hostedSessionServer;
+  if (!server) return;
+  server.publishEncounterSoundLibrary(
+    createHostedEncounterSoundUrls((id) => server.mediaUrl(id)),
+  );
+};
+
+const sendHealthEffect = (effect: HealthEffect, publishHosted = true) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('health:effect', effect);
+  }
+  if (publishHosted) hostedSessionServer?.publishHealthEffect(effect);
+};
+
+const sendSceneTransition = (event: SceneTransitionEvent) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('scene:transition', event);
+  }
+  const server = hostedSessionServer;
+  if (!server) return;
+  server.publishSceneTransition({
+    ...event,
+    soundUrl: event.soundUrl
+      ? rewriteHostedMediaUrl(event.soundUrl, (id) => server.mediaUrl(id)) || null
+      : null,
+  });
+};
+
+const sendMusicFadeOut = (duration: number) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('music:fade-out', duration);
+  }
+  hostedSessionServer?.publishMusicFadeOut(duration);
+};
+
+const sendSoundboardStop = (stop: SoundboardStop) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('soundboard:stop', stop);
+  }
+  hostedSessionServer?.publishSoundboardStop(stop);
+};
+
+const sendSoundEffect = (effect: SoundEffect) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('soundboard:play', effect);
+  }
+  const server = hostedSessionServer;
+  if (!server) return;
+  const url = rewriteHostedMediaUrl(effect.url, (id) => server.mediaUrl(id));
+  if (url) server.publishSoundEffect({ ...effect, url });
+};
+
+const sendEncounterEffect = (
+  effect: EncounterSoundEffect,
+  publishHosted = true,
+) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('encounter-effects:play', effect);
+  }
+  const server = publishHosted ? hostedSessionServer : null;
+  if (!server) return;
+  const url = rewriteHostedMediaUrl(effect.url, (id) => server.mediaUrl(id));
+  if (url) server.publishEncounterEffect({ ...effect, url });
+};
+
+const prepareEncounterMechanicSound = (effect: HealthEffect) => {
   const soundKind = getEncounterSoundEffectKind(effect);
   if (
     !soundKind ||
-    !playerWindow ||
-    playerWindow.isDestroyed() ||
+    ((!playerWindow || playerWindow.isDestroyed()) && !hostedSessionServer) ||
     musicState.universalMuted ||
     encounterEffectsAudioState.volume <= 0 ||
     !isEncounterSoundEnabled(encounterEffectsAudioState, soundKind)
-  ) return;
+  ) return null;
 
   const availableSounds = encounterSoundOptions.filter(
     (option) => option.kind === soundKind && option.enabled,
@@ -1736,25 +2141,23 @@ const playEncounterMechanicSound = (effect: HealthEffect) => {
     playbackTime,
     randomInt,
   );
-  const filePath = availableSounds[soundIndex]?.filePath ?? null;
-  if (!filePath) return;
+  const selectedSound = availableSounds[soundIndex] ?? null;
+  if (!selectedSound) return null;
   previousEncounterSoundIndex.set(soundKind, soundIndex);
   encounterSoundGroupLastPlayedAt.set(soundKind, playbackTime);
 
   encounterEffectSequence += 1;
-  encounterEffectSources.set(encounterEffectSequence, filePath);
+  encounterEffectSources.set(encounterEffectSequence, selectedSound.filePath);
   const encounterEffect: EncounterSoundEffect = {
     id: encounterEffectSequence,
     kind: soundKind,
     url: `boss-media://encounter-sfx/${encounterEffectSequence}`,
   };
-  playerWindow.webContents.send('encounter-effects:play', encounterEffect);
+  return { encounterEffect, optionId: selectedSound.id };
 };
 
 const stopSoundboardPlayback = (index?: number) => {
-  if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.webContents.send('soundboard:stop', { index });
-  }
+  sendSoundboardStop(index === undefined ? {} : { index });
 };
 
 const resetMusicPlayback = (trackId = musicState.currentTrackId) => {
@@ -2200,7 +2603,10 @@ const getInitialWindowLayout = (): {
 } => {
   const { workArea } = screen.getPrimaryDisplay();
   const masterWidth = getMasterWidthForWorkArea(workArea);
-  const masterHeight = Math.min(660, workArea.height);
+  const masterHeight = Math.min(
+    hostedSessionServer ? 960 : 660,
+    workArea.height,
+  );
   const controlHeight = Math.min(
     CONTROL_PANEL_PREFERRED_HEIGHT,
     Math.max(CONTROL_PANEL_MIN_EXPANDED_HEIGHT, workArea.height - 450),
@@ -2437,6 +2843,7 @@ const createPlayerWindow = (
     autoHideMenuBar: true,
     webPreferences: {
       preload: preloadFile('player'),
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -2512,11 +2919,23 @@ const createPlayerWindow = (
     syncControlWindow();
     controlWindow?.showInactive();
   });
-  window.on('show', () => controlWindow?.showInactive());
+  window.on('show', () => {
+    controlWindow?.showInactive();
+    broadcastPresentationOpen();
+  });
 
   window.on('close', (event) => {
     const { x, y } = window.getBounds();
     lastPlayerWindowPosition = { x, y };
+    // Mantém o renderer local como relógio autoritativo da música hospedada,
+    // embora a apresentação pareça fechada para o mestre.
+    if (returningToLauncher) return;
+    if (hostedSessionServer && !allowAppClose) {
+      event.preventDefault();
+      window.hide();
+      broadcastPresentationOpen();
+      return;
+    }
     if (!allowPlayerWindowClose && musicState.isPlaying) {
       event.preventDefault();
       if (playerWindowClosePending) return;
@@ -2578,7 +2997,10 @@ const createEncounterWindows = () => {
     minWidth: 390,
     maxWidth: 480,
     minHeight: Math.min(600, layout.master.height),
-    maxHeight: Math.min(700, screen.getPrimaryDisplay().workArea.height),
+    maxHeight: Math.min(
+      hostedSessionServer ? 1040 : 700,
+      screen.getPrimaryDisplay().workArea.height,
+    ),
     title: 'Controle do Mestre - BossBar T20',
     backgroundColor: '#111117',
     autoHideMenuBar: true,
@@ -2596,7 +3018,7 @@ const createEncounterWindows = () => {
   positionMasterBesidePlayer();
 
   masterWindow.on('close', (event) => {
-    if (allowAppClose) return;
+    if (allowAppClose || returningToLauncher) return;
     event.preventDefault();
     const window = masterWindow;
     if (!window || window.isDestroyed()) return;
@@ -2632,6 +3054,7 @@ const createEncounterWindows = () => {
       controlWindow.setClosable(true);
       controlWindow.close();
     }
+    returningToLauncher = false;
   });
 };
 
@@ -2643,15 +3066,15 @@ const createLauncherWindow = () => {
   }
 
   const { workArea } = screen.getPrimaryDisplay();
-  const width = Math.min(660, workArea.width);
-  const height = Math.min(430, workArea.height);
+  const width = Math.min(780, workArea.width);
+  const height = Math.min(450, workArea.height);
   const window = new BrowserWindow({
     icon: applicationIcon(),
     width,
     height,
     x: workArea.x + Math.round((workArea.width - width) / 2),
     y: workArea.y + Math.round((workArea.height - height) / 2),
-    minWidth: Math.min(580, width),
+    minWidth: Math.min(700, width),
     minHeight: Math.min(380, height),
     maxWidth: width,
     maxHeight: height,
@@ -2675,7 +3098,7 @@ const createLauncherWindow = () => {
   return window;
 };
 
-const broadcastBattleState = () => {
+const broadcastBattleState = (publishHosted = true) => {
   for (const window of [
     masterWindow,
     playerWindow,
@@ -2687,10 +3110,13 @@ const broadcastBattleState = () => {
       window.webContents.send('battle:state-changed', battleState);
     }
   }
+  if (publishHosted) {
+    hostedSessionServer?.publishBattleState(toPublicBattleState(battleState));
+  }
 };
 
 const isPresentationOpen = () =>
-  Boolean(playerWindow && !playerWindow.isDestroyed());
+  Boolean(playerWindow && !playerWindow.isDestroyed() && playerWindow.isVisible());
 
 const broadcastPresentationOpen = () => {
   if (masterWindow && !masterWindow.isDestroyed()) {
@@ -2705,6 +3131,13 @@ const broadcastBackground = () => {
     if (window && !window.isDestroyed()) {
       window.webContents.send('background:changed', background);
     }
+  }
+  if (hostedSessionServer) {
+    hostedSessionServer.publishBackground(
+      createHostedPresentationSnapshot(
+        (id) => hostedSessionServer?.mediaUrl(id) ?? '',
+      ).background,
+    );
   }
 };
 
@@ -2801,6 +3234,7 @@ const broadcastScenePlan = () => {
       window.webContents.send('scene:state-changed', scenePlan);
     }
   }
+  hostedSessionServer?.publishScene(toPublicSceneState(scenePlan));
 };
 
 const resetScenePlan = () => {
@@ -3380,12 +3814,12 @@ const processScenePhaseQueue = () => {
     soundLoop: transitionPlaylist?.loop ?? false,
     visual: true,
   };
-  if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.webContents.send('scene:transition', event);
-  }
+  sendSceneTransition(event);
   if (musicState.isPlaying) {
-    if (durationMs > 0 && playerWindow && !playerWindow.isDestroyed()) {
-      playerWindow.webContents.send('music:fade-out', Math.max(100, Math.floor(durationMs / 2)));
+    if (durationMs > 0 && (
+      (playerWindow && !playerWindow.isDestroyed()) || hostedSessionServer
+    )) {
+      sendMusicFadeOut(Math.max(100, Math.floor(durationMs / 2)));
     } else {
       musicState = {
         ...musicState,
@@ -3482,9 +3916,7 @@ const releaseSceneBlackout = (resumeManualMusic = true) => {
     soundLoop: false,
     visual: true,
   };
-  if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.webContents.send('scene:transition', event);
-  }
+  sendSceneTransition(event);
   const finish = () => {
     sceneTransitionTimer = null;
     if (phaseIndex !== null) {
@@ -3517,9 +3949,7 @@ const activateSceneBlackout = () => {
     soundLoop: false,
     visual: true,
   };
-  if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.webContents.send('scene:transition', event);
-  }
+  sendSceneTransition(event);
   if (musicState.isPlaying) {
     musicState = {
       ...musicState,
@@ -3661,8 +4091,28 @@ ipcMain.handle('control:set-minimized', (event, minimized: unknown) => {
 
 ipcMain.on('app:confirm-close', (event) => {
   if (!isMasterSender(event.sender.id) || !masterWindow) return;
-  allowAppClose = true;
-  masterWindow.close();
+  const window = masterWindow;
+  void stopHostedSession('host-ended-session').finally(() => {
+    if (!window.isDestroyed()) {
+      allowAppClose = true;
+      window.close();
+    }
+  });
+});
+
+ipcMain.handle('app:return-to-launcher', async (event) => {
+  if (!isMasterSender(event.sender.id) || !masterWindow) return false;
+  const encounterWindow = masterWindow;
+  returningToLauncher = true;
+  try {
+    await stopHostedSession('host-ended-session');
+    createLauncherWindow();
+    if (!encounterWindow.isDestroyed()) encounterWindow.close();
+    return true;
+  } catch {
+    returningToLauncher = false;
+    return false;
+  }
 });
 
 ipcMain.handle(
@@ -4234,8 +4684,7 @@ ipcMain.handle('library:has-entries', (event) => {
   return bossLibraryEntries.length > 0;
 });
 
-ipcMain.handle('launcher:new-encounter', (event) => {
-  if (!isLauncherSender(event.sender.id)) return false;
+const prepareFreshEncounter = () => {
   appUndoHistory.length = 0;
   lastAppUndoKey = null;
   lastAppUndoRecordedAt = 0;
@@ -4249,9 +4698,96 @@ ipcMain.handle('launcher:new-encounter', (event) => {
   configuredBackgroundFilePath = null;
   configuredBackgroundName = null;
   resetScenePlan();
+};
+
+ipcMain.handle('launcher:new-encounter', (event) => {
+  if (!isLauncherSender(event.sender.id)) return false;
+  prepareFreshEncounter();
   createEncounterWindows();
   launcherWindow?.close();
   return true;
+});
+
+ipcMain.handle(
+  'launcher:host-encounter',
+  async (event): Promise<HostedEncounterStartResult> => {
+    if (!isLauncherSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    prepareFreshEncounter();
+    const result = await startHostedSession();
+    if (!result.ok) return result;
+    createEncounterWindows();
+    launcherWindow?.close();
+    return result;
+  },
+);
+
+ipcMain.handle('multiplayer:get-session', (event): HostedSessionState => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  return getHostedSessionState();
+});
+
+ipcMain.handle(
+  'multiplayer:set-public-url',
+  (event, value: unknown): HostedSessionPublicUrlResult => {
+    if (!isMasterSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const server = hostedSessionServer;
+    if (!server) return { ok: false, error: 'Nenhuma sala está hospedada.' };
+    if (value === null || (typeof value === 'string' && !value.trim())) {
+      server.clearPublicInviteUrl();
+      hostedPublicBaseUrl = null;
+      hostedPublicInviteUrl = null;
+      broadcastHostedSessionState();
+      return { ok: true, session: getHostedSessionState() };
+    }
+    if (typeof value !== 'string' || value.length > 2_048) {
+      return { ok: false, error: 'O endereço público informado é inválido.' };
+    }
+    try {
+      const publicInvite = server.publicInviteUrl(value);
+      hostedPublicBaseUrl = publicInvite.baseUrl;
+      hostedPublicInviteUrl = publicInvite.inviteUrl;
+      broadcastHostedSessionState();
+      return { ok: true, session: getHostedSessionState() };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Não foi possível configurar o endereço público.',
+      };
+    }
+  },
+);
+
+ipcMain.handle('multiplayer:copy-link', (event, requestedLink: unknown) => {
+  if (!isMasterSender(event.sender.id)) return false;
+  const state = getHostedSessionState();
+  const availableLinks = [state.shareUrl].filter(
+    (link): link is string => Boolean(link),
+  );
+  const link = typeof requestedLink === 'string' &&
+    availableLinks.includes(requestedLink)
+    ? requestedLink
+    : state.shareUrl;
+  if (!state.active || !link) return false;
+  clipboard.writeText(link);
+  return true;
+});
+
+ipcMain.handle('multiplayer:open-local-player', async (event) => {
+  if (!isMasterSender(event.sender.id)) return false;
+  const { active, localUrl } = getHostedSessionState();
+  if (!active || !localUrl) return false;
+  try {
+    await shell.openExternal(localUrl, { activate: true });
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 ipcMain.handle(
@@ -4979,6 +5515,7 @@ ipcMain.handle(
       previousEncounterSoundIndex.delete(kind);
       encounterSoundGroupLastPlayedAt.delete(kind);
       await persistEncounterSoundCustomization();
+      broadcastHostedEncounterSoundLibrary();
       return { ok: true, state: getEncounterSoundCustomizationState() };
     } catch (error) {
       const optionIndex = encounterSoundOptions.findIndex(
@@ -5016,6 +5553,7 @@ ipcMain.handle(
     encounterSoundGroupLastPlayedAt.delete(option.kind);
     try {
       await persistEncounterSoundCustomization();
+      broadcastHostedEncounterSoundLibrary();
       return { ok: true, state: getEncounterSoundCustomizationState() };
     } catch (error) {
       option.enabled = previousEnabled;
@@ -5061,6 +5599,7 @@ ipcMain.handle(
     } catch (error) {
       console.error('O cadastro foi removido, mas o arquivo não pôde ser excluído.', error);
     }
+    broadcastHostedEncounterSoundLibrary();
     return { ok: true, state: getEncounterSoundCustomizationState() };
   },
 );
@@ -5292,13 +5831,16 @@ ipcMain.on('soundboard:dispatch', (event, command: unknown) => {
 
   if (command.type === 'play') {
     const slot = soundboardSlots[command.index - 1];
-    if (!slot || !playerWindow || playerWindow.isDestroyed()) return;
+    if (
+      !slot ||
+      ((!playerWindow || playerWindow.isDestroyed()) && !hostedSessionServer)
+    ) return;
     soundEffectSequence += 1;
     soundEffectSources.set(soundEffectSequence, {
       filePath: slot.filePath,
       index: command.index,
     });
-    playerWindow.webContents.send('soundboard:play', {
+    sendSoundEffect({
       id: soundEffectSequence,
       index: command.index,
       url: `boss-media://sfx/${soundEffectSequence}`,
@@ -5632,14 +6174,17 @@ const applyHealthMutation = (
   }
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!nextBoss) return;
-  broadcastBattleState();
+  broadcastBattleState(false);
   queueCrossedScenePhases(
     bossId,
     previousBoss.currentHealth,
     nextBoss.currentHealth,
   );
 
-  if (playerWindow && !playerWindow.isDestroyed()) {
+  if (
+    (playerWindow && !playerWindow.isDestroyed()) ||
+    hostedSessionServer
+  ) {
     healthEffectSequence += 1;
     const effect: HealthEffect = {
       id: healthEffectSequence,
@@ -5652,8 +6197,27 @@ const applyHealthMutation = (
       shieldFrom: previousBoss.shield,
       shieldTo: nextBoss.shield,
     };
-    playerWindow.webContents.send('health:effect', effect);
-    playEncounterMechanicSound(effect);
+    const preparedSound = prepareEncounterMechanicSound(effect);
+    sendHealthEffect(effect, false);
+    if (preparedSound) {
+      sendEncounterEffect(preparedSound.encounterEffect, false);
+    }
+    const server = hostedSessionServer;
+    if (server) {
+      const hostedSoundUrl = preparedSound
+        ? rewriteHostedMediaUrl(
+            encounterSoundSourceUrl(preparedSound.optionId),
+            (id) => server.mediaUrl(id),
+          )
+        : '';
+      server.publishCombatImpact({
+        battle: toPublicBattleState(battleState),
+        healthEffect: effect,
+        soundEffect: preparedSound && hostedSoundUrl
+          ? { ...preparedSound.encounterEffect, url: hostedSoundUrl }
+          : null,
+      });
+    }
   }
 };
 
@@ -5773,7 +6337,10 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
       );
     }
 
-    if (playerWindow && !playerWindow.isDestroyed()) {
+    if (
+      (playerWindow && !playerWindow.isDestroyed()) ||
+      hostedSessionServer
+    ) {
       for (const tick of advancedTurn.ticks) {
         const visibleFloor = nextBoss?.currentHealth ?? 0;
         const visibleFrom = Math.max(visibleFloor, tick.from);
@@ -5797,7 +6364,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
             formula: tick.formula,
           },
         };
-        playerWindow.webContents.send('health:effect', effect);
+        sendHealthEffect(effect);
       }
     }
     return;
@@ -5935,8 +6502,10 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
       clearTimeout(battleMusicStartTimer);
       battleMusicStartTimer = null;
     }
-    if (musicState.isPlaying && playerWindow && !playerWindow.isDestroyed()) {
-      playerWindow.webContents.send('music:fade-out', 1600);
+    if (musicState.isPlaying && (
+      (playerWindow && !playerWindow.isDestroyed()) || hostedSessionServer
+    )) {
+      sendMusicFadeOut(1600);
     } else if (musicState.isPlaying) {
       musicState = {
         ...musicState,
@@ -6139,6 +6708,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   allowAppClose = true;
+  void stopHostedSession('server-shutdown');
   allowControlWindowClose = true;
   controlWindow?.setClosable(true);
   pendingHealthTimers.forEach(clearTimeout);

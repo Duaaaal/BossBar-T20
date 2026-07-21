@@ -5,7 +5,9 @@ const encodeAssetPath = (relativePath: string) => relativePath
   .join('/');
 
 export const bundledAssetUrl = (relativePath: string) =>
-  `boss-asset://local/${encodeAssetPath(relativePath)}`;
+  typeof window !== 'undefined' && window.__BOSS_WEB_PLAYER__
+    ? `/session-assets/${encodeAssetPath(relativePath)}`
+    : `boss-asset://local/${encodeAssetPath(relativePath)}`;
 
 const statusIconUrls = new Map<string, string>();
 

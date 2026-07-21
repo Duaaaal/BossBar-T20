@@ -8,7 +8,7 @@
   ![Versão](https://img.shields.io/badge/versão-1.5.2-8d1f2d)
   ![Plataforma](https://img.shields.io/badge/plataforma-Windows-326ca8)
   ![Electron](https://img.shields.io/badge/Electron-43-47848f)
-  ![Uso](https://img.shields.io/badge/uso-local-c99545)
+  ![Uso](https://img.shields.io/badge/uso-local%20ou%20web-c99545)
 
   [Português](#português) · [English](#english)
 </div>
@@ -19,9 +19,9 @@
 
 ## Sobre o BossBar
 
-O **BossBar - Tormenta20** é um aplicativo desktop para mestres de RPG apresentarem encontros e lutas contra chefões de forma cinematográfica. O mestre controla a batalha localmente enquanto os jogadores assistem à janela de apresentação por uma transmissão no Discord ou em outro programa de captura.
+O **BossBar - Tormenta20** é um aplicativo desktop para mestres de RPG apresentarem encontros e lutas contra chefões de forma cinematográfica. O mestre pode transmitir a janela de apresentação pelo Discord, como sempre, ou hospedar uma sessão web temporária para os jogadores acompanharem pelo navegador.
 
-Os jogadores não precisam instalar o aplicativo, criar uma conta ou se conectar a um servidor. Apenas a janela de apresentação é compartilhada; os controles permanecem com o mestre.
+Os jogadores não precisam instalar o aplicativo nem criar uma conta. No modo local, somente a janela de apresentação é compartilhada. No modo hospedado, o computador do mestre atua como servidor da sessão e publica apenas a apresentação e os dados necessários aos jogadores; os controles permanecem privados.
 
 ## Principais recursos
 
@@ -33,6 +33,14 @@ Os jogadores não precisam instalar o aplicativo, criar uma conta ou se conectar
 - Exibição opcional de vida atual, marcadores de fase e informações de escudo.
 - Controles para mostrar ou esconder o HUD, aplicar blackout e iniciar ou encerrar a batalha.
 - Histórico com até cinco ações reversíveis por `Ctrl + Z`.
+
+### Sessão web opcional
+
+- Hospedagem temporária iniciada e encerrada pelo próprio mestre, sem servidor permanente do BossBar.
+- Acesso dos jogadores pelo navegador, sem instalar o aplicativo.
+- Até dez jogadores simultâneos, com contagem de conexões, ping e indicação de qualidade.
+- Convite protegido por código de sala e token temporário.
+- Túnel HTTPS temporário criado automaticamente; o modo local continua disponível e não abre nenhuma porta de rede.
 
 ### Chefões e combate
 
@@ -74,7 +82,7 @@ Os jogadores não precisam instalar o aplicativo, criar uma conta ou se conectar
 - Salvamento automático periódico e salvamento adicional ao encerrar o aplicativo.
 - Identificação de arquivos locais ausentes e opção de localizar substitutos.
 
-## Instalação para jogadores e mestres
+## Instalação para o mestre
 
 1. Abra a página da [versão mais recente](https://github.com/Duaaaal/BossBar-T20/releases/latest).
 2. Baixe o instalador `.exe` disponível em **Assets**.
@@ -82,18 +90,28 @@ Os jogadores não precisam instalar o aplicativo, criar uma conta ou se conectar
 
 > O Windows pode exibir um aviso do SmartScreen quando um instalador não possui assinatura digital reconhecida. Baixe o aplicativo somente pelo canal oficial de distribuição e confira a versão antes de executá-lo.
 
-Os jogadores não precisam realizar esses passos: somente o computador do mestre executa o BossBar.
+Os jogadores não precisam realizar esses passos. No modo hospedado, eles acessam o convite pelo navegador; no modo local, assistem à transmissão escolhida pelo mestre.
 
 ## Uso rápido
 
-1. Na tela inicial, escolha **Novo encontro** ou carregue um encontro salvo.
+1. Na tela inicial, escolha **Novo encontro**, **Carregar encontro** ou **Hospedar encontro**.
 2. Preencha os dados dos chefões no painel de controle.
 3. Abra **Editar cena** para configurar fases, fundos, transições e músicas.
 4. Aplique e salve as alterações desejadas.
 5. Clique em **Iniciar batalha**.
-6. No Discord, compartilhe somente a janela **Apresentação - BossBar T20**.
+6. No modo local, compartilhe somente a janela **Apresentação - BossBar T20** no Discord. No modo hospedado, copie o link HTTPS gerado automaticamente e envie-o aos jogadores.
 
 Para manter os controles privados, compartilhe a janela específica do aplicativo — não a tela ou o monitor inteiro. O painel do mestre é uma janela separada e sincronizada, posicionada junto à apresentação.
+
+## Hospedagem pela Internet
+
+Ao escolher **Hospedar encontro**, o BossBar baixa na primeira utilização uma versão fixa do componente oficial `cloudflared`, confere sua assinatura SHA-256, inicia o servidor somente em `127.0.0.1` e cria um Cloudflare Quick Tunnel. A janela do mestre recebe automaticamente um endereço aleatório `https://*.trycloudflare.com` com as credenciais temporárias da sala.
+
+Não é necessário informar IP, abrir portas no roteador, configurar firewall, possuir domínio ou instalar certificado. O link expira quando a sala é encerrada e um novo endereço é gerado na próxima hospedagem.
+
+Quick Tunnels são um serviço externo gratuito da Cloudflare, sem garantia de disponibilidade ou SLA e destinado oficialmente a testes e usos temporários. A Cloudflare limita cada túnel rápido a 200 requisições simultâneas e não oferece suporte a Server-Sent Events; o BossBar usa WebSocket com fallback compatível. O uso do serviço e do `cloudflared` está sujeito à [documentação e aos termos informados pela Cloudflare](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+A implementação anterior para IP, DNS ou proxy fornecido manualmente permanece preservada internamente como fallback técnico, mas não aparece no fluxo normal do aplicativo.
 
 ## Arquivos de mídia
 
@@ -118,10 +136,10 @@ Arquivos muito grandes ou muitas mídias simultâneas podem aumentar o consumo d
 git clone https://github.com/Duaaaal/BossBar-T20.git
 cd BossBar-T20
 npm ci
-npm start
+npm.cmd start
 ```
 
-No PowerShell, `npm.cmd` pode ser usado no lugar de `npm` caso a política de execução impeça o carregamento de `npm.ps1`.
+Execute os comandos na pasta que contém o `package.json`. No PowerShell, use `npm.cmd` no lugar de `npm` caso a política de execução impeça o carregamento de `npm.ps1`.
 
 ### Verificar e gerar o aplicativo
 
@@ -144,6 +162,9 @@ Os arquivos gerados ficam no diretório `out/`.
 - TypeScript
 - Vite
 - Node.js
+- Fastify
+- Socket.IO
+- Zod
 
 ## Desenvolvimento assistido por IA
 
@@ -164,6 +185,8 @@ BossBar-T20/
 │   ├── scene-editor.tsx     # Editor de cenas e fases
 │   ├── library.tsx          # Biblioteca de encontros
 │   ├── soundboard.tsx       # Gerenciador do soundboard
+│   ├── web-player.ts        # Apresentação acessada pelo navegador
+│   ├── multiplayer/         # Servidor temporário, autenticação e proteção da sessão
 │   └── shared/              # Tipos, regras e utilitários compartilhados
 ├── tests/                   # Testes automatizados
 ├── forge.config.ts          # Empacotamento do Electron Forge
@@ -172,8 +195,11 @@ BossBar-T20/
 
 ## Privacidade e segurança
 
-- O BossBar funciona localmente e não exige conta ou servidor próprio.
-- Mídias e encontros escolhidos pelo usuário permanecem no computador, salvo quando o próprio usuário os compartilha ou move.
+- O modo local não exige conta, servidor externo nem conexão dos jogadores.
+- O servidor web e o túnel permanecem desligados até o mestre escolher **Hospedar encontro** e são encerrados junto com a sessão.
+- No modo hospedado, os navegadores conectados recebem a apresentação, as mídias publicadas e somente o estado público necessário; atributos privados e comandos do mestre não são enviados.
+- Código de sala, token temporário, limite de dez jogadores, validação de origem, limitação de requisições e validação de arquivos reduzem a superfície de ataque.
+- Mídias e encontros escolhidos pelo usuário permanecem no computador no modo local. No modo hospedado, as mídias usadas na apresentação atravessam o Cloudflare Quick Tunnel até os jogadores conectados.
 - As janelas usam APIs de preload separadas e comunicação IPC validada entre os processos do aplicativo.
 - Dependências devem ser instaladas a partir do arquivo de lock com `npm ci` e verificadas antes de cada lançamento.
 
@@ -197,9 +223,9 @@ Criado por **Brian Nascimento**.
 
 ## About BossBar
 
-**BossBar - Tormenta20** is a desktop application that helps game masters present cinematic RPG encounters and boss battles. The game master controls the battle locally while players watch the presentation window through Discord streaming or another capture application.
+**BossBar - Tormenta20** is a desktop application that helps game masters present cinematic RPG encounters and boss battles. The game master can stream the presentation window through Discord, as before, or host a temporary web session that players can watch in their browsers.
 
-Players do not need to install the application, create an account, or connect to a server. Only the presentation window is shared; all controls remain with the game master.
+Players do not need to install the application or create an account. In local mode, only the presentation window is shared. In hosted mode, the game master's computer acts as the session server and publishes only the presentation and player-facing data; all controls remain private.
 
 ## Main features
 
@@ -211,6 +237,14 @@ Players do not need to install the application, create an account, or connect to
 - Optional current-health display, phase markers, and shield information.
 - Controls to show or hide the HUD, trigger a blackout, and start or end the battle.
 - Up to five reversible changes through `Ctrl + Z`.
+
+### Optional web session
+
+- Temporary self-hosting started and stopped by the game master, with no permanent BossBar server.
+- Browser access for players without installing the application.
+- Up to ten simultaneous players with connection count, ping, and connection-quality indicators.
+- Invitations protected by an ephemeral room code and token.
+- An automatically created temporary HTTPS tunnel; local mode remains available and opens no network port.
 
 ### Bosses and combat
 
@@ -252,7 +286,7 @@ Players do not need to install the application, create an account, or connect to
 - Periodic autosaves and an additional save when the application closes.
 - Detection of missing local files with an option to locate replacements.
 
-## Installation for players and game masters
+## Installation for the game master
 
 1. Open the [latest release](https://github.com/Duaaaal/BossBar-T20/releases/latest) page.
 2. Download the `.exe` installer listed under **Assets**.
@@ -260,18 +294,28 @@ Players do not need to install the application, create an account, or connect to
 
 > Windows may show a SmartScreen warning when an installer does not have a recognized digital signature. Download the application only from its official distribution channel and check the version before running it.
 
-Players do not need to follow these steps: BossBar runs only on the game master's computer.
+Players do not need to follow these steps. In hosted mode, they open the invitation in a browser; in local mode, they watch the stream selected by the game master.
 
 ## Quick start
 
-1. On the launcher, choose **Novo encontro** (New encounter) or load a saved encounter.
+1. On the launcher, choose **Novo encontro** (New encounter), **Carregar encontro** (Load encounter), or **Hospedar encontro** (Host encounter).
 2. Fill in the boss information in the control panel.
 3. Open **Editar cena** (Edit scene) to configure phases, backgrounds, transitions, and music.
 4. Apply and save the desired changes.
 5. Click **Iniciar batalha** (Start battle).
-6. In Discord, share only the **Apresentação - BossBar T20** window.
+6. In local mode, share only the **Apresentação - BossBar T20** window in Discord. In hosted mode, copy the automatically generated HTTPS link and send it to the players.
 
 To keep controls private, share the specific application window rather than the entire screen or monitor. The game-master panel is a separate synchronized window positioned next to the presentation.
+
+## Hosting over the Internet
+
+When the game master selects **Hospedar encontro**, BossBar downloads a pinned version of the official `cloudflared` component on first use, verifies its SHA-256 signature, starts the server on `127.0.0.1` only, and creates a Cloudflare Quick Tunnel. The game-master window automatically receives a random `https://*.trycloudflare.com` address with the room's ephemeral credentials.
+
+No public IP, router port forwarding, firewall configuration, domain, or manually installed certificate is required. The link expires when the room closes, and a new address is generated for the next hosted session.
+
+Quick Tunnels are a free third-party Cloudflare service without an uptime guarantee or SLA and are officially intended for testing and temporary use. Cloudflare limits each Quick Tunnel to 200 concurrent requests and does not support Server-Sent Events; BossBar uses WebSocket with a compatible fallback. Use of the service and `cloudflared` is subject to [Cloudflare's published documentation and terms](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+The previous manually supplied IP, DNS, or proxy implementation remains preserved internally as a technical fallback but is hidden from the normal application flow.
 
 ## Media files
 
@@ -296,10 +340,10 @@ Very large files or many simultaneous media assets may increase memory usage and
 git clone https://github.com/Duaaaal/BossBar-T20.git
 cd BossBar-T20
 npm ci
-npm start
+npm.cmd start
 ```
 
-In PowerShell, use `npm.cmd` instead of `npm` if the execution policy blocks `npm.ps1`.
+Run these commands from the directory containing `package.json`. In PowerShell, use `npm.cmd` instead of `npm` if the execution policy blocks `npm.ps1`.
 
 ### Verify and build
 
@@ -322,6 +366,9 @@ Generated files are written to the `out/` directory.
 - TypeScript
 - Vite
 - Node.js
+- Fastify
+- Socket.IO
+- Zod
 
 ## AI-assisted development
 
@@ -342,6 +389,8 @@ BossBar-T20/
 │   ├── scene-editor.tsx     # Scene and phase editor
 │   ├── library.tsx          # Encounter library
 │   ├── soundboard.tsx       # Soundboard manager
+│   ├── web-player.ts        # Browser-accessible presentation
+│   ├── multiplayer/         # Temporary server, authentication, and session protection
 │   └── shared/              # Shared types, rules, and utilities
 ├── tests/                   # Automated tests
 ├── forge.config.ts          # Electron Forge packaging configuration
@@ -350,8 +399,11 @@ BossBar-T20/
 
 ## Privacy and security
 
-- BossBar runs locally and requires no account or dedicated server.
-- User-selected media and encounters remain on the computer unless the user explicitly shares or moves them.
+- Local mode requires no account, external server, or player connection.
+- The web server and tunnel stay disabled until the game master selects **Hospedar encontro** and stop with the hosted session.
+- In hosted mode, connected browsers receive the presentation, published media, and only the required public state; private attributes and game-master commands are not sent.
+- A room code, ephemeral token, ten-player limit, origin validation, rate limiting, and file validation reduce the attack surface.
+- User-selected media and encounters remain on the computer in local mode. In hosted mode, presentation media travels through the Cloudflare Quick Tunnel to connected players.
 - Windows use separate preload APIs and validated IPC communication between application processes.
 - Dependencies should be installed from the lockfile with `npm ci` and verified before every release.
 

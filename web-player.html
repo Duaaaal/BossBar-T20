@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none';"
+    />
+    <title>Apresentação - BossBar T20</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <section class="web-player-join" id="web-player-join" aria-labelledby="join-title">
+      <form class="web-player-join-card" id="web-player-join-form">
+        <span class="web-player-join-mark" aria-hidden="true"></span>
+        <h1 id="join-title">Entrar no encontro</h1>
+        <p>Informe como o mestre identificará você nesta sessão.</p>
+        <label for="web-player-name">Nome do jogador</label>
+        <input
+          id="web-player-name"
+          name="playerName"
+          type="text"
+          minlength="1"
+          maxlength="40"
+          autocomplete="nickname"
+          required
+        />
+        <button type="submit">Entrar</button>
+      </form>
+    </section>
+    <div id="web-player-status" role="status" aria-live="polite"></div>
+    <script type="module" src="/src/web-player.ts"></script>
+  </body>
+</html>

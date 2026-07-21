@@ -16,6 +16,10 @@ import { bundledAssetUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
+import type {
+  ConnectionQuality,
+  HostedSessionState,
+} from './shared/multiplayer';
 import type { ScenePlan } from './shared/scene';
 import './master.css';
 import './scrollbars.css';
@@ -76,6 +80,14 @@ const encounterSoundCategories: Array<{
   { kind: 'shield-break', label: 'Escudo quebrando' },
 ];
 
+const connectionQualityLabels: Record<ConnectionQuality, string> = {
+  unknown: 'Medindo',
+  excellent: 'Excelente',
+  good: 'Boa',
+  unstable: 'Instável',
+  poor: 'Ruim',
+};
+
 type SoundCategoryMenuPosition = {
   left: number;
   width: number;
@@ -89,6 +101,10 @@ const MasterApp = () => {
   const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
   const [appVersion, setAppVersion] = useState('...');
   const [presentationOpen, setPresentationOpen] = useState(false);
+  const [hostedSession, setHostedSession] = useState<HostedSessionState | null>(
+    null,
+  );
+  const [hostedSessionFeedback, setHostedSessionFeedback] = useState('');
   const [universalMuted, setUniversalMuted] = useState(false);
   const [musicState, setMusicState] = useState<MusicState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
@@ -104,17 +120,22 @@ const MasterApp = () => {
   const [previewingSoundId, setPreviewingSoundId] = useState<string | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
+  const [returnConfirmationOpen, setReturnConfirmationOpen] = useState(false);
   const [overwriteConfirmationOpen, setOverwriteConfirmationOpen] = useState(false);
   const [unpreparedConfirmationOpen, setUnpreparedConfirmationOpen] = useState(false);
   const [libraryMessage, setLibraryMessage] = useState('');
   const [savingLibrary, setSavingLibrary] = useState(false);
   const [closingApp, setClosingApp] = useState(false);
+  const [returningToLauncher, setReturningToLauncher] = useState(false);
   const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
   const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
   const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const soundPreviewRef = useRef<HTMLAudioElement | null>(null);
   const soundCategoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const soundCategoryMenuRef = useRef<HTMLDivElement | null>(null);
+  const hostedSessionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useLayoutEffect(() => {
     if (!soundCategoryMenuOpen) {
@@ -222,6 +243,28 @@ const MasterApp = () => {
       active = false;
       unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getHostedSessionState().then((nextSession) => {
+      if (active) setHostedSession(nextSession);
+    }).catch(() => {
+      if (active) setHostedSession(null);
+    });
+    const unsubscribe = window.bossAPI.subscribeHostedSession((nextSession) => {
+      if (active) setHostedSession(nextSession);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => () => {
+    if (hostedSessionFeedbackTimer.current) {
+      clearTimeout(hostedSessionFeedbackTimer.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -500,6 +543,55 @@ const MasterApp = () => {
     }
   };
 
+  const confirmReturnToLauncher = async () => {
+    setReturningToLauncher(true);
+    try {
+      const returned = await window.bossAPI.returnToLauncher();
+      if (!returned) {
+        setReturningToLauncher(false);
+        setReturnConfirmationOpen(false);
+        setLibraryMessage('Não foi possível voltar à tela inicial.');
+      }
+    } catch {
+      setReturningToLauncher(false);
+      setReturnConfirmationOpen(false);
+      setLibraryMessage('Não foi possível voltar à tela inicial.');
+    }
+  };
+
+  const showHostedSessionFeedback = (message: string) => {
+    setHostedSessionFeedback(message);
+    if (hostedSessionFeedbackTimer.current) {
+      clearTimeout(hostedSessionFeedbackTimer.current);
+    }
+    hostedSessionFeedbackTimer.current = setTimeout(() => {
+      hostedSessionFeedbackTimer.current = null;
+      setHostedSessionFeedback('');
+    }, 2600);
+  };
+
+  const copyHostedSessionLink = async () => {
+    try {
+      const copied = await window.bossAPI.copyHostedSessionLink();
+      showHostedSessionFeedback(
+        copied ? 'Link copiado.' : 'Não foi possível copiar o link.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível copiar o link.');
+    }
+  };
+
+  const openHostedSessionAsPlayer = async () => {
+    try {
+      const opened = await window.bossAPI.openHostedSessionAsPlayer();
+      if (!opened) {
+        showHostedSessionFeedback('Não foi possível abrir o acesso local.');
+      }
+    } catch {
+      showHostedSessionFeedback('Não foi possível abrir o acesso local.');
+    }
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const unpreparedBosses = state.bosses.filter(
@@ -583,8 +675,111 @@ const MasterApp = () => {
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
           <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
+          <button className="return-launcher-button" type="button" onClick={() => setReturnConfirmationOpen(true)}>Voltar ao início</button>
         </div>
       </section>
+
+      {hostedSession?.active && (
+        <section
+          className="compact-panel hosted-session-panel"
+          aria-labelledby="hosted-session-title"
+        >
+          <div className="hosted-session-heading">
+            <div className="compact-panel-title">
+              <h2 id="hosted-session-title">Sala hospedada</h2>
+            </div>
+            <div className="hosted-session-heading-actions">
+              <button
+                className="hosted-open-button"
+                type="button"
+                disabled={!hostedSession.localUrl}
+                data-disabled-reason="O acesso local ainda não está disponível"
+                onClick={() => void openHostedSessionAsPlayer()}
+              >
+                Abrir como jogador
+              </button>
+              <span className="hosted-player-count" aria-label={`${hostedSession.connectedPlayers} de ${hostedSession.maxPlayers} jogadores conectados`}>
+                {hostedSession.connectedPlayers}/{hostedSession.maxPlayers}
+              </span>
+            </div>
+          </div>
+
+          <div className="hosted-session-summary">
+            <div className="hosted-network-fields">
+              <div className="hosted-link-row">
+                <label className="hosted-link-field">
+                  <span>Link HTTPS dos jogadores</span>
+                  <input
+                    type="text"
+                    value={hostedSession.shareUrl ?? ''}
+                    placeholder="O túnel seguro não está disponível"
+                    readOnly
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </label>
+                <button
+                  className="hosted-copy-button"
+                  type="button"
+                  disabled={!hostedSession.shareUrl}
+                  data-disabled-reason="O túnel seguro não está disponível"
+                  onClick={() => void copyHostedSessionLink()}
+                >
+                  Copiar
+                </button>
+              </div>
+              <p className={`hosted-public-url-note ${hostedSession.tunnelStatus === 'error' ? 'is-warning' : ''}`}>
+                {hostedSession.tunnelStatus === 'online'
+                  ? 'Túnel HTTPS temporário ativo. O link expira ao encerrar a sala.'
+                  : 'O túnel HTTPS foi interrompido. Encerre e hospede novamente.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="hosted-roster-heading">
+            <span>Jogadores conectados</span>
+            {hostedSessionFeedback && (
+              <small role="status">{hostedSessionFeedback}</small>
+            )}
+          </div>
+          {hostedSession.players.length > 0 ? (
+            <ol className="hosted-player-list">
+              {hostedSession.players.map((player) => (
+                <li
+                  className={`hosted-player hosted-quality-${player.connectionQuality} ${player.hasConnectionIssue ? 'has-connection-issue' : ''}`}
+                  key={player.id}
+                >
+                  <span className="hosted-quality-dot" aria-hidden="true" />
+                  <span className="hosted-player-name" title={player.name}>
+                    {player.name}
+                  </span>
+                  <em className={`hosted-master-badge ${player.isHost ? 'is-visible' : ''}`}>
+                    {player.isHost ? 'Mestre' : ''}
+                  </em>
+                  <span className="hosted-player-ping">
+                    {player.latencyMs === null
+                      ? 'Medindo ping'
+                      : `${Math.max(0, Math.round(player.latencyMs))} ms`}
+                  </span>
+                  <span className="hosted-player-quality">
+                    {player.hasConnectionIssue
+                      ? 'Problema de conexão'
+                      : connectionQualityLabels[player.connectionQuality]}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="hosted-player-empty">
+              Aguardando jogadores entrarem na sala.
+            </p>
+          )}
+          {hostedSession.error && (
+            <p className="hosted-session-error" role="alert">
+              {hostedSession.error}
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="compact-panel">
         <div className="compact-panel-title"><h2>Personalização de Cena</h2></div>
@@ -934,6 +1129,20 @@ const MasterApp = () => {
             <div className="modal-actions">
               <button className="modal-cancel-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
               <button className="modal-confirm-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => void confirmAppClose()}>{closingApp ? 'Salvando...' : 'Sim, fechar'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {returnConfirmationOpen && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="return-title">
+            <p className="modal-eyebrow">Voltar ao início</p>
+            <h2 id="return-title">Encerrar o encontro atual?</h2>
+            <p>A apresentação, o painel e qualquer sala hospedada serão encerrados antes de voltar à tela inicial.</p>
+            <div className="modal-actions">
+              <button className="modal-cancel-button" type="button" disabled={returningToLauncher} data-disabled-reason="O encontro está sendo encerrado" onClick={() => setReturnConfirmationOpen(false)}>Cancelar</button>
+              <button className="modal-confirm-button" type="button" disabled={returningToLauncher} data-disabled-reason="O encontro está sendo encerrado" onClick={() => void confirmReturnToLauncher()}>{returningToLauncher ? 'Encerrando...' : 'Sim, voltar'}</button>
             </div>
           </section>
         </div>
