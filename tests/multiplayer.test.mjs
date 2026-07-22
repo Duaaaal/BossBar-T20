@@ -117,6 +117,8 @@ const connectPlayer = (server, {
       acknowledge({ id: probe.id });
     });
   }
+  socket.on('session:closed', (_notice, acknowledge) => acknowledge());
+  socket.on('session:join-rejected', (_message, acknowledge) => acknowledge());
   return socket;
 };
 
@@ -262,6 +264,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
     resolveMedia: ({ id }) => id === 'media-test-000001'
       ? { filePath: mediaFile, contentType: 'audio/mpeg' }
       : null,
+    preloadMediaUrls: ({ mediaUrl }) => [mediaUrl('media-test-000001')],
     onPresenceChanged: (presence) => presenceUpdates.push(presence),
   });
   t.after(async () => server.close('server-shutdown'));
@@ -305,6 +308,32 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   });
   assert.equal((await fetch(`${invite.origin}/`)).status, 200);
   assert.equal((await fetch(`${invite.origin}/master.html`)).status, 404);
+  assert.equal((await fetch(`${invite.origin}/api/preload`)).status, 403);
+  const preloadManifest = await fetch(`${invite.origin}/api/preload`, {
+    headers: {
+      Authorization: `Bearer ${server.credentials.playerToken}`,
+      'X-BossBar-Room': server.credentials.roomCode,
+    },
+  }).then((response) => response.json());
+  assert.equal(preloadManifest.protocolVersion, MULTIPLAYER_PROTOCOL_VERSION);
+  assert.ok(preloadManifest.urls.length >= 2);
+  assert.ok(preloadManifest.urls.includes(server.mediaUrl('media-test-000001')));
+  assert.equal(
+    preloadManifest.urls.every((url) => url.startsWith('/session-media/')),
+    true,
+  );
+  assert.equal((await fetch(`${invite.origin}/api/session-cache/clear`, {
+    method: 'POST',
+  })).status, 403);
+  const cacheClearResponse = await fetch(`${invite.origin}/api/session-cache/clear`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${server.credentials.playerToken}`,
+      'X-BossBar-Room': server.credentials.roomCode,
+    },
+  });
+  assert.equal(cacheClearResponse.status, 200);
+  assert.equal(cacheClearResponse.headers.get('clear-site-data'), '"cache"');
 
   const missingAccessResponse = await fetch(
     `${invite.origin}/session-media/media-test-000001`,
@@ -402,4 +431,57 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const closedNotice = once(first, 'session:closed');
   await server.close('host-ended-session');
   assert.deepEqual((await closedNotice)[0], { reason: 'host-ended-session' });
+});
+
+test('exige aprovação do mestre para novos jogadores durante a batalha', async (t) => {
+  const requests = [];
+  const snapshot = publicSnapshot();
+  const server = await MultiplayerSessionServer.start({
+    initialSnapshot: {
+      ...snapshot,
+      battle: { ...snapshot.battle, battleStarted: true },
+    },
+    port: 0,
+    networkMode: 'loopback',
+    onJoinRequestsChanged: (pending) => requests.push(pending),
+  });
+  t.after(async () => server.close('server-shutdown'));
+
+  const player = connectPlayer(server, {
+    clientId: 'approval-player-01',
+    playerName: 'Alice',
+  });
+  t.after(() => player.close());
+  const pendingRequest = once(player, 'session:join-pending');
+  const acceptedSnapshot = once(player, 'session:snapshot');
+  await once(player, 'connect');
+  const [request] = await pendingRequest;
+  assert.equal(request.name, 'Alice');
+  assert.equal(server.getPresence().connectedPlayers, 0);
+  assert.equal(server.getPendingJoinRequests().length, 1);
+  assert.equal(server.approveJoinRequest(request.id), true);
+  assert.equal((await acceptedSnapshot)[0].battle.battleStarted, true);
+  assert.equal(server.getPresence().connectedPlayers, 1);
+
+  player.disconnect();
+  const reconnectedSnapshot = once(player, 'session:snapshot');
+  const reconnected = once(player, 'connect');
+  player.connect();
+  await reconnected;
+  assert.equal((await reconnectedSnapshot)[0].battle.battleStarted, true);
+
+  const rejected = connectPlayer(server, {
+    clientId: 'approval-player-02',
+    playerName: 'Bruno',
+  });
+  t.after(() => rejected.close());
+  const rejectedPending = once(rejected, 'session:join-pending');
+  const rejectionNotice = once(rejected, 'session:join-rejected');
+  await once(rejected, 'connect');
+  const [rejectedRequest] = await rejectedPending;
+  assert.equal(server.rejectJoinRequest(rejectedRequest.id), true);
+  assert.match((await rejectionNotice)[0], /não autorizou/i);
+  assert.equal(server.getPresence().connectedPlayers, 1);
+  assert.ok(requests.some((pending) => pending.length === 1));
+  assert.equal(requests.at(-1).length, 0);
 });

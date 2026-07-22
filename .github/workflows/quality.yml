@@ -1,0 +1,138 @@
+name: Quality and compatibility
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, types, unit tests and coverage
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run coverage:netcode
+      - run: npm audit --omit=dev
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: netcode-coverage
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+  web-e2e:
+    name: Web player compatibility
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium firefox
+      - run: npm run test:e2e:web
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-playwright-diagnostics
+          path: |
+            playwright-report/web/
+            test-results/web/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  electron-e2e:
+    name: Electron window flow
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e:electron
+      - name: Upload Electron diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: electron-playwright-diagnostics
+          path: |
+            playwright-report/electron/
+            test-results/electron/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  disposable-package:
+    name: Package in disposable Windows runner
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build hardened package outside the workspace
+        shell: pwsh
+        run: |
+          $env:BOSS_BUILD_OUT = Join-Path $env:RUNNER_TEMP 'bossbar-package'
+          npm run package
+      - name: Launch packaged application smoke test
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'bossbar-package'
+          $executable = Get-ChildItem -LiteralPath $packageRoot -Recurse -File |
+            Where-Object Name -EQ 'BossBar - Tormenta20.exe' |
+            Select-Object -First 1
+          if (-not $executable) { throw 'Executável empacotado não encontrado.' }
+          $process = Start-Process -FilePath $executable.FullName -WindowStyle Hidden -PassThru
+          try {
+            Start-Sleep -Seconds 5
+            $process.Refresh()
+            if ($process.HasExited) { throw "O pacote encerrou com código $($process.ExitCode)." }
+            $runningProcesses = @(Get-Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.Path -and $_.Path.StartsWith($executable.DirectoryName) })
+            if ($runningProcesses.Count -lt 2) {
+              throw 'A árvore de processos do Electron não permaneceu ativa.'
+            }
+          } finally {
+            Get-Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.Path -and $_.Path.StartsWith($executable.DirectoryName) } |
+              Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+      - name: Upload disposable package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bossbar-disposable-package
+          path: ${{ runner.temp }}/bossbar-package/
+          if-no-files-found: error
+          retention-days: 7

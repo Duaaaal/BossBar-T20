@@ -28,6 +28,7 @@ import {
   type MultiplayerConnectionErrorCode,
   type MultiplayerConnectionErrorData,
   type MultiplayerInterServerEvents,
+  type MultiplayerJoinRequest,
   type MultiplayerPlayerAuth,
   type MultiplayerPresence,
   type MultiplayerServerToClientEvents,
@@ -81,12 +82,14 @@ export type MultiplayerSessionServerOptions = {
   webIndexFile?: string;
   assetRoot?: string;
   resolveMedia?: SessionMediaResolver;
+  preloadMediaUrls?: (context: MultiplayerSnapshotContext) => string[];
   publicBaseUrl?: string;
   allowedOrigins?: readonly string[];
   latencyProbeIntervalMs?: number;
   latencyProbeTimeoutMs?: number;
   logger?: boolean;
   onPresenceChanged?: (presence: MultiplayerPresence) => void;
+  onJoinRequestsChanged?: (requests: MultiplayerJoinRequest[]) => void;
 };
 
 export type MultiplayerSnapshotContext = {
@@ -126,6 +129,23 @@ type PendingProbe = {
   id: string;
   timeout: ReturnType<typeof setTimeout>;
 };
+
+type PendingJoinRequest = {
+  request: MultiplayerJoinRequest;
+  socketId: string;
+  clientId: string;
+};
+
+type SnapshotReference = {
+  current: MultiplayerSessionSnapshot;
+};
+
+const publicSnapshotMediaUrls = (snapshot: MultiplayerSessionSnapshot) =>
+  [...new Set([
+    snapshot.background.url,
+    ...snapshot.music.tracks.map(({ url }) => url),
+    ...snapshot.encounterSoundUrls,
+  ].filter((url): url is string => Boolean(url)))];
 
 type AuthenticationResult =
   | { ok: true; auth: MultiplayerPlayerAuth }
@@ -314,9 +334,15 @@ export class MultiplayerSessionServer {
 
   private readonly pendingProbes = new Map<string, PendingProbe>();
 
+  private readonly pendingJoinRequests = new Map<string, PendingJoinRequest>();
+
+  private readonly approvedClientIds = new Set<string>();
+
   private readonly probeInterval: ReturnType<typeof setInterval>;
 
   private readonly options: MultiplayerSessionServerOptions;
+
+  private readonly snapshotReference: SnapshotReference;
 
   private readonly allowedOrigins: Set<string>;
 
@@ -331,6 +357,7 @@ export class MultiplayerSessionServer {
     credentials: SessionCredentials,
     info: MultiplayerSessionServerInfo,
     initialSnapshot: MultiplayerSessionSnapshot,
+    snapshotReference: SnapshotReference,
     options: MultiplayerSessionServerOptions,
     allowedOrigins: Set<string>,
     publicOrigin: string | null,
@@ -341,6 +368,7 @@ export class MultiplayerSessionServer {
     this.credentials = credentials;
     this.info = info;
     this.options = options;
+    this.snapshotReference = snapshotReference;
     this.allowedOrigins = allowedOrigins;
     this.publicOrigin = publicOrigin;
     this.currentSnapshot = initialSnapshot;
@@ -362,6 +390,7 @@ export class MultiplayerSessionServer {
         mediaUrl: (id) => buildSessionMediaUrl(id, credentials.playerToken),
       })
       : options.initialSnapshot;
+    const snapshotReference: SnapshotReference = { current: initialSnapshot };
     if (initialSnapshot.protocolVersion !== MULTIPLAYER_PROTOCOL_VERSION) {
       throw new Error('O snapshot inicial usa uma versão de protocolo inválida.');
     }
@@ -421,6 +450,55 @@ export class MultiplayerSessionServer {
         connectedPlayers: presence.connectedPlayers,
         maxPlayers: presence.maxPlayers,
       };
+    });
+    app.get('/api/preload', {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const authorization = request.headers.authorization;
+      const roomCode = request.headers['x-bossbar-room'];
+      const token = typeof authorization === 'string' &&
+        authorization.startsWith('Bearer ')
+        ? authorization.slice(7)
+        : '';
+      if (
+        typeof roomCode !== 'string' ||
+        roomCode.trim().toUpperCase() !== credentials.roomCode ||
+        !tokensMatch(token, credentials.playerToken)
+      ) {
+        return reply.code(403).send({ error: 'Convite inválido.' });
+      }
+      return {
+        protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
+        urls: [...new Set([
+          ...publicSnapshotMediaUrls(snapshotReference.current),
+          ...(options.preloadMediaUrls?.({
+            roomCode: credentials.roomCode,
+            mediaUrl: (id) => buildSessionMediaUrl(id, credentials.playerToken),
+          }) ?? []),
+        ])],
+      };
+    });
+    app.post('/api/session-cache/clear', {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const authorization = request.headers.authorization;
+      const roomCode = request.headers['x-bossbar-room'];
+      const token = typeof authorization === 'string' &&
+        authorization.startsWith('Bearer ')
+        ? authorization.slice(7)
+        : '';
+      if (
+        typeof roomCode !== 'string' ||
+        roomCode.trim().toUpperCase() !== credentials.roomCode ||
+        !tokensMatch(token, credentials.playerToken)
+      ) {
+        return reply.code(403).send({ error: 'Convite inválido.' });
+      }
+      return reply
+        .header('Clear-Site-Data', '"cache"')
+        .send({ ok: true });
     });
 
     if (options.resolveMedia) {
@@ -637,6 +715,7 @@ export class MultiplayerSessionServer {
       credentials,
       info,
       initialSnapshot,
+      snapshotReference,
       options,
       allowedOrigins,
       normalizedPublicBaseUrl
@@ -650,6 +729,48 @@ export class MultiplayerSessionServer {
 
   getPresence() {
     return this.roster.presence();
+  }
+
+  getPendingJoinRequests() {
+    return [...this.pendingJoinRequests.values()]
+      .map(({ request }) => ({ ...request }))
+      .sort((first, second) => first.requestedAt - second.requestedAt);
+  }
+
+  approveJoinRequest(requestId: string) {
+    const pending = this.pendingJoinRequests.get(requestId);
+    if (!pending) return false;
+    const socket = this.io.sockets.sockets.get(pending.socketId);
+    this.pendingJoinRequests.delete(requestId);
+    this.notifyJoinRequestsChanged();
+    if (!socket?.connected) return false;
+    if (!this.roster.canRegister(pending.clientId)) {
+      socket.timeout(1_000).emit(
+        'session:join-rejected',
+        'A sala atingiu o limite de jogadores.',
+        () => socket.disconnect(true),
+      );
+      return false;
+    }
+    this.approvedClientIds.add(pending.clientId);
+    this.completePlayerRegistration(socket);
+    return true;
+  }
+
+  rejectJoinRequest(requestId: string) {
+    const pending = this.pendingJoinRequests.get(requestId);
+    if (!pending) return false;
+    this.pendingJoinRequests.delete(requestId);
+    this.notifyJoinRequestsChanged();
+    const socket = this.io.sockets.sockets.get(pending.socketId);
+    if (socket?.connected) {
+      socket.timeout(1_000).emit(
+        'session:join-rejected',
+        'O mestre não autorizou sua entrada neste momento.',
+        () => socket.disconnect(true),
+      );
+    }
+    return true;
   }
 
   mediaUrl(id: string) {
@@ -676,13 +797,15 @@ export class MultiplayerSessionServer {
     if (snapshot.protocolVersion !== MULTIPLAYER_PROTOCOL_VERSION) {
       throw new Error('Não é possível publicar um snapshot incompatível.');
     }
-    this.currentSnapshot = snapshot;
+    this.setCurrentSnapshot(snapshot);
     this.io.emit('session:snapshot', snapshot);
+    if (!snapshot.battle.battleStarted) this.approveAllPendingJoinRequests();
   }
 
   publishBattleState(state: PublicBattlePresentationState) {
-    this.currentSnapshot = { ...this.currentSnapshot, battle: state };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, battle: state });
     this.io.emit('battle:state', state);
+    if (!state.battleStarted) this.approveAllPendingJoinRequests();
   }
 
   publishHealthEffect(effect: HealthEffect) {
@@ -690,17 +813,17 @@ export class MultiplayerSessionServer {
   }
 
   publishCombatImpact(impact: PublicCombatImpact) {
-    this.currentSnapshot = { ...this.currentSnapshot, battle: impact.battle };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, battle: impact.battle });
     this.io.emit('battle:impact', impact);
   }
 
   publishBackground(background: BackgroundState) {
-    this.currentSnapshot = { ...this.currentSnapshot, background };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, background });
     this.io.emit('presentation:background', background);
   }
 
   publishScene(scene: PublicScenePresentationState) {
-    this.currentSnapshot = { ...this.currentSnapshot, scene };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, scene });
     this.io.emit('presentation:scene', scene);
   }
 
@@ -709,12 +832,12 @@ export class MultiplayerSessionServer {
   }
 
   publishEncounterEffects(effects: EncounterEffectsState) {
-    this.currentSnapshot = { ...this.currentSnapshot, encounterEffects: effects };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, encounterEffects: effects });
     this.io.emit('presentation:effects', effects);
   }
 
   publishMusic(music: PublicMusicPresentationState) {
-    this.currentSnapshot = { ...this.currentSnapshot, music };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, music });
     this.io.emit('presentation:music', music);
   }
 
@@ -727,7 +850,7 @@ export class MultiplayerSessionServer {
   }
 
   publishSoundboard(soundboard: PublicSoundboardPresentationState) {
-    this.currentSnapshot = { ...this.currentSnapshot, soundboard };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, soundboard });
     this.io.emit('presentation:soundboard', soundboard);
   }
 
@@ -744,7 +867,7 @@ export class MultiplayerSessionServer {
   }
 
   publishEncounterSoundLibrary(urls: string[]) {
-    this.currentSnapshot = { ...this.currentSnapshot, encounterSoundUrls: urls };
+    this.setCurrentSnapshot({ ...this.currentSnapshot, encounterSoundUrls: urls });
     this.io.emit('presentation:encounter-sound-library', urls);
   }
 
@@ -756,9 +879,20 @@ export class MultiplayerSessionServer {
     clearInterval(this.probeInterval);
     for (const { timeout } of this.pendingProbes.values()) clearTimeout(timeout);
     this.pendingProbes.clear();
-    this.io.emit('session:closed', { reason });
-    await new Promise<void>((resolveFlush) => setImmediate(resolveFlush));
+    await new Promise<void>((resolveFlush) => {
+      if (this.io.sockets.sockets.size === 0) {
+        resolveFlush();
+        return;
+      }
+      this.io.timeout(2_000).emit(
+        'session:closed',
+        { reason },
+        () => resolveFlush(),
+      );
+    });
     this.io.disconnectSockets(true);
+    this.pendingJoinRequests.clear();
+    this.approvedClientIds.clear();
     if (this.fastify.server.listening) await this.fastify.close();
     await new Promise<void>((resolveClose) => {
       this.io.close(() => resolveClose());
@@ -772,6 +906,31 @@ export class MultiplayerSessionServer {
   }
 
   private registerConnectedSocket(socket: MultiplayerPlayerSocket) {
+    socket.on('disconnect', () => {
+      const pendingProbe = this.pendingProbes.get(socket.id);
+      if (pendingProbe) clearTimeout(pendingProbe.timeout);
+      this.pendingProbes.delete(socket.id);
+      const pendingRequest = [...this.pendingJoinRequests.entries()]
+        .find(([, pending]) => pending.socketId === socket.id);
+      if (pendingRequest) {
+        this.pendingJoinRequests.delete(pendingRequest[0]);
+        this.notifyJoinRequestsChanged();
+      }
+      if (this.roster.unregisterSocket(socket.id)) this.notifyPresenceChanged();
+    });
+
+    if (
+      this.currentSnapshot.battle.battleStarted &&
+      !socket.data.isHost &&
+      !this.approvedClientIds.has(socket.data.clientId)
+    ) {
+      this.queueJoinRequest(socket);
+      return;
+    }
+    this.completePlayerRegistration(socket);
+  }
+
+  private completePlayerRegistration(socket: MultiplayerPlayerSocket) {
     const result = this.roster.register({
       clientId: socket.data.clientId,
       name: socket.data.playerName,
@@ -784,24 +943,48 @@ export class MultiplayerSessionServer {
       return;
     }
     socket.data.playerId = result.player.id;
+    this.approvedClientIds.add(socket.data.clientId);
     if (result.replacedSocketId && result.replacedSocketId !== socket.id) {
       this.io.sockets.sockets.get(result.replacedSocketId)?.disconnect(true);
     }
     if (typeof this.options.initialSnapshot === 'function') {
-      this.currentSnapshot = this.options.initialSnapshot({
+      this.setCurrentSnapshot(this.options.initialSnapshot({
         roomCode: this.credentials.roomCode,
         mediaUrl: (id) => this.mediaUrl(id),
-      });
+      }));
     }
     socket.emit('session:snapshot', this.currentSnapshot);
     this.notifyPresenceChanged();
+  }
 
-    socket.on('disconnect', () => {
-      const pending = this.pendingProbes.get(socket.id);
-      if (pending) clearTimeout(pending.timeout);
-      this.pendingProbes.delete(socket.id);
-      if (this.roster.unregisterSocket(socket.id)) this.notifyPresenceChanged();
+  private queueJoinRequest(socket: MultiplayerPlayerSocket) {
+    const existing = [...this.pendingJoinRequests.entries()]
+      .find(([, pending]) => pending.clientId === socket.data.clientId);
+    if (existing) {
+      this.pendingJoinRequests.delete(existing[0]);
+      const previousSocket = this.io.sockets.sockets.get(existing[1].socketId);
+      if (previousSocket && previousSocket.id !== socket.id) {
+        previousSocket.disconnect(true);
+      }
+    }
+    const request: MultiplayerJoinRequest = {
+      id: randomUUID(),
+      name: socket.data.playerName,
+      requestedAt: Date.now(),
+    };
+    this.pendingJoinRequests.set(request.id, {
+      request,
+      socketId: socket.id,
+      clientId: socket.data.clientId,
     });
+    socket.emit('session:join-pending', request);
+    this.notifyJoinRequestsChanged();
+  }
+
+  private approveAllPendingJoinRequests() {
+    for (const requestId of [...this.pendingJoinRequests.keys()]) {
+      this.approveJoinRequest(requestId);
+    }
   }
 
   private probeLatencies() {
@@ -811,6 +994,7 @@ export class MultiplayerSessionServer {
       this.options.latencyProbeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
     );
     for (const socket of this.io.sockets.sockets.values()) {
+      if (!socket.data.playerId) continue;
       if (this.pendingProbes.has(socket.id)) continue;
       const sentAt = Date.now();
       const id = randomUUID();
@@ -845,5 +1029,14 @@ export class MultiplayerSessionServer {
       maxPlayers: presence.maxPlayers,
     });
     this.options.onPresenceChanged?.(presence);
+  }
+
+  private notifyJoinRequestsChanged() {
+    this.options.onJoinRequestsChanged?.(this.getPendingJoinRequests());
+  }
+
+  private setCurrentSnapshot(snapshot: MultiplayerSessionSnapshot) {
+    this.currentSnapshot = snapshot;
+    this.snapshotReference.current = snapshot;
   }
 }

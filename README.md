@@ -5,7 +5,7 @@
 
   **Uma apresentação audiovisual de encontros de RPG, controlada pelo mestre e transmitida aos jogadores.**
 
-  ![Versão](https://img.shields.io/badge/versão-1.5.2-8d1f2d)
+  ![Versão](https://img.shields.io/badge/versão-2.0.0--alpha.0-8d1f2d)
   ![Plataforma](https://img.shields.io/badge/plataforma-Windows-326ca8)
   ![Electron](https://img.shields.io/badge/Electron-43-47848f)
   ![Uso](https://img.shields.io/badge/uso-local%20ou%20web-c99545)
@@ -39,6 +39,10 @@ Os jogadores não precisam instalar o aplicativo nem criar uma conta. No modo lo
 - Hospedagem temporária iniciada e encerrada pelo próprio mestre, sem servidor permanente do BossBar.
 - Acesso dos jogadores pelo navegador, sem instalar o aplicativo.
 - Até dez jogadores simultâneos, com contagem de conexões, ping e indicação de qualidade.
+- Confirmação do nome antes da entrada e troca de nome permitida enquanto a batalha não começou.
+- Pré-carregamento autenticado das mídias da sessão antes de revelar a apresentação no navegador.
+- Eventos permanecem em uma fila ordenada até suas mídias serem transferidas e reconhecidas pelo navegador.
+- Novas entradas durante uma batalha dependem da aprovação explícita do mestre.
 - Convite protegido por código de sala e token temporário.
 - Túnel HTTPS temporário criado automaticamente; o modo local continua disponível e não abre nenhuma porta de rede.
 
@@ -109,7 +113,7 @@ Ao escolher **Hospedar encontro**, o BossBar baixa na primeira utilização uma 
 
 Não é necessário informar IP, abrir portas no roteador, configurar firewall, possuir domínio ou instalar certificado. O link expira quando a sala é encerrada e um novo endereço é gerado na próxima hospedagem.
 
-Quick Tunnels são um serviço externo gratuito da Cloudflare, sem garantia de disponibilidade ou SLA e destinado oficialmente a testes e usos temporários. A Cloudflare limita cada túnel rápido a 200 requisições simultâneas e não oferece suporte a Server-Sent Events; o BossBar usa WebSocket com fallback compatível. O uso do serviço e do `cloudflared` está sujeito à [documentação e aos termos informados pela Cloudflare](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+Quick Tunnels são um serviço externo gratuito da Cloudflare, sem garantia de disponibilidade ou SLA e destinado oficialmente a testes e usos temporários. A Cloudflare limita cada túnel rápido a 200 requisições simultâneas e não oferece suporte a Server-Sent Events; o BossBar mantém uma conexão WebSocket persistente para os eventos da sessão. O uso do serviço e do `cloudflared` está sujeito à [documentação e aos termos informados pela Cloudflare](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
 
 A implementação anterior para IP, DNS ou proxy fornecido manualmente permanece preservada internamente como fallback técnico, mas não aparece no fluxo normal do aplicativo.
 
@@ -154,6 +158,35 @@ npm run make
 - `make`: cria os artefatos distribuíveis e o instalador para Windows.
 
 Os arquivos gerados ficam no diretório `out/`.
+
+### Testes avançados
+
+Instale os navegadores controlados pelo Playwright uma vez após o `npm ci`:
+
+```powershell
+npx.cmd playwright install chromium firefox
+```
+
+Os projetos web cobrem Chromium, Chrome for Testing, Microsoft Edge e Firefox. Para executar a suíte completa ou uma parte específica:
+
+```powershell
+npm.cmd run fixtures:media
+npm.cmd run test:e2e:web
+npm.cmd run test:e2e:electron
+npm.cmd run test:e2e
+npm.cmd run coverage:netcode
+```
+
+- `fixtures:media`: gera arquivos PNG, GIF, MP3 e MP4 pequenos e determinísticos, exclusivos para testes.
+- `test:e2e:web`: valida compatibilidade, carregamento de mídia, latência, desconexão e reconexão, eventos fora de ordem, até dez clientes simultâneos e regressões visuais do HUD.
+- `test:e2e:electron`: empacota o aplicativo e verifica o fluxo integrado das janelas de início, mestre, apresentação e painel.
+- `coverage:netcode`: produz relatórios de cobertura textual, HTML e LCOV para o servidor multiplayer, estado público compartilhado e cliente web.
+
+Relatórios navegáveis ficam em `playwright-report/`, diagnósticos como traces, screenshots e vídeos de falha em `test-results/`, e cobertura em `coverage/`. As referências visuais versionadas ficam em `tests/e2e/snapshots/`.
+
+Os testes Electron usam automaticamente um perfil temporário isolado por meio de `BOSSBAR_E2E` e `BOSSBAR_E2E_PROFILE`; assim, encontros, configurações e mídias do perfil real não são alterados. Não reutilize esses sinalizadores em uma sessão normal.
+
+O workflow `quality.yml` executa verificação estática, testes, cobertura, compatibilidade web, fluxo Electron e packaging em um Windows descartável a cada push e pull request. O pacote de teste é criado fora do workspace do runner e disponibilizado como artefato temporário. O workflow `tunnel-smoke.yml` verifica o Quick Tunnel semanalmente ou sob acionamento manual, sem torná-lo uma dependência de cada push.
 
 ## Tecnologias
 
@@ -200,6 +233,7 @@ BossBar-T20/
 - No modo hospedado, os navegadores conectados recebem a apresentação, as mídias publicadas e somente o estado público necessário; atributos privados e comandos do mestre não são enviados.
 - Código de sala, token temporário, limite de dez jogadores, validação de origem, limitação de requisições e validação de arquivos reduzem a superfície de ataque.
 - Mídias e encontros escolhidos pelo usuário permanecem no computador no modo local. No modo hospedado, as mídias usadas na apresentação atravessam o Cloudflare Quick Tunnel até os jogadores conectados.
+- Ao encerrar a sala, downloads, decodificadores e caches temporários da sessão são descartados; os assets empacotados no aplicativo não são removidos.
 - As janelas usam APIs de preload separadas e comunicação IPC validada entre os processos do aplicativo.
 - Dependências devem ser instaladas a partir do arquivo de lock com `npm ci` e verificadas antes de cada lançamento.
 
@@ -243,6 +277,10 @@ Players do not need to install the application or create an account. In local mo
 - Temporary self-hosting started and stopped by the game master, with no permanent BossBar server.
 - Browser access for players without installing the application.
 - Up to ten simultaneous players with connection count, ping, and connection-quality indicators.
+- Name confirmation before joining, with name changes allowed until the battle starts.
+- Authenticated session-media preloading before the browser reveals the presentation.
+- Events stay in an ordered queue until their media has been transferred and recognized by the browser.
+- New players joining an ongoing battle require explicit game-master approval.
 - Invitations protected by an ephemeral room code and token.
 - An automatically created temporary HTTPS tunnel; local mode remains available and opens no network port.
 
@@ -313,7 +351,7 @@ When the game master selects **Hospedar encontro**, BossBar downloads a pinned v
 
 No public IP, router port forwarding, firewall configuration, domain, or manually installed certificate is required. The link expires when the room closes, and a new address is generated for the next hosted session.
 
-Quick Tunnels are a free third-party Cloudflare service without an uptime guarantee or SLA and are officially intended for testing and temporary use. Cloudflare limits each Quick Tunnel to 200 concurrent requests and does not support Server-Sent Events; BossBar uses WebSocket with a compatible fallback. Use of the service and `cloudflared` is subject to [Cloudflare's published documentation and terms](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+Quick Tunnels are a free third-party Cloudflare service without an uptime guarantee or SLA and are officially intended for testing and temporary use. Cloudflare limits each Quick Tunnel to 200 concurrent requests and does not support Server-Sent Events; BossBar keeps a persistent WebSocket connection for session events. Use of the service and `cloudflared` is subject to [Cloudflare's published documentation and terms](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
 
 The previous manually supplied IP, DNS, or proxy implementation remains preserved internally as a technical fallback but is hidden from the normal application flow.
 
@@ -358,6 +396,35 @@ npm run make
 - `make`: creates distributable artifacts and the Windows installer.
 
 Generated files are written to the `out/` directory.
+
+### Advanced testing
+
+Install the Playwright-managed browsers once after `npm ci`:
+
+```powershell
+npx.cmd playwright install chromium firefox
+```
+
+The web projects cover Chromium, Chrome for Testing, Microsoft Edge, and Firefox. Run the full suite or an individual layer with:
+
+```powershell
+npm.cmd run fixtures:media
+npm.cmd run test:e2e:web
+npm.cmd run test:e2e:electron
+npm.cmd run test:e2e
+npm.cmd run coverage:netcode
+```
+
+- `fixtures:media`: generates small deterministic PNG, GIF, MP3, and MP4 files used exclusively by tests.
+- `test:e2e:web`: verifies compatibility, media loading, latency, disconnection and reconnection, out-of-order events, up to ten simultaneous clients, and HUD visual regressions.
+- `test:e2e:electron`: packages the application and verifies the integrated launcher, game-master, presentation, and control-panel window flow.
+- `coverage:netcode`: produces text, HTML, and LCOV coverage reports for the multiplayer server, shared public state, and web client.
+
+Browsable reports are written to `playwright-report/`, failure diagnostics such as traces, screenshots, and videos to `test-results/`, and coverage to `coverage/`. Versioned visual baselines live in `tests/e2e/snapshots/`.
+
+Electron tests automatically use a disposable profile through `BOSSBAR_E2E` and `BOSSBAR_E2E_PROFILE`, keeping real encounters, settings, and media untouched. Do not reuse these flags for a normal session.
+
+The `quality.yml` workflow runs static verification, tests, coverage, web compatibility, the Electron flow, and packaging on a disposable Windows runner for every push and pull request. The test package is built outside the runner workspace and uploaded as a temporary artifact. The `tunnel-smoke.yml` workflow checks the Quick Tunnel weekly or on manual dispatch without making that external service a dependency of every push.
 
 ## Technology stack
 
@@ -404,6 +471,7 @@ BossBar-T20/
 - In hosted mode, connected browsers receive the presentation, published media, and only the required public state; private attributes and game-master commands are not sent.
 - A room code, ephemeral token, ten-player limit, origin validation, rate limiting, and file validation reduce the attack surface.
 - User-selected media and encounters remain on the computer in local mode. In hosted mode, presentation media travels through the Cloudflare Quick Tunnel to connected players.
+- Closing the room discards session downloads, decoders, and temporary caches without removing bundled application assets.
 - Windows use separate preload APIs and validated IPC communication between application processes.
 - Dependencies should be installed from the lockfile with `npm ci` and verified before every release.
 

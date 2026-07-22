@@ -29,6 +29,33 @@
         <button type="submit">Entrar</button>
       </form>
     </section>
+    <section class="web-player-dialog" id="web-player-name-confirm" role="dialog" aria-modal="true" aria-labelledby="name-confirm-title" hidden>
+      <div class="web-player-dialog-card">
+        <span class="web-player-join-mark" aria-hidden="true"></span>
+        <h1 id="name-confirm-title">Confirmar nome</h1>
+        <p>Você entrará no encontro como</p>
+        <strong id="web-player-confirmed-name"></strong>
+        <div class="web-player-dialog-actions">
+          <button id="web-player-name-back" type="button">Alterar</button>
+          <button id="web-player-name-submit" type="button">Confirmar</button>
+        </div>
+      </div>
+    </section>
+    <section class="web-player-pending" id="web-player-pending" aria-live="polite" hidden>
+      <div class="web-player-dialog-card">
+        <span class="web-player-loading-mark" aria-hidden="true"></span>
+        <h1 id="web-player-pending-title">Preparando encontro</h1>
+        <p id="web-player-pending-message">Conectando à sala…</p>
+      </div>
+    </section>
+    <section class="web-player-closed" id="web-player-closed" aria-labelledby="closed-title" hidden>
+      <div class="web-player-closed-card">
+        <span class="web-player-closed-mark" aria-hidden="true"></span>
+        <h1 id="closed-title">Sala encerrada</h1>
+        <p>O mestre encerrou esta sala. Você já pode fechar esta página.</p>
+      </div>
+    </section>
+    <button class="web-player-change-name" id="web-player-change-name" type="button" hidden>Trocar nome</button>
     <div id="web-player-status" role="status" aria-live="polite"></div>
     <script type="module" src="/src/web-player.ts"></script>
   </body>

@@ -1014,11 +1014,16 @@ const EncounterEffectsPlayer = () => {
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeEncounterEffect((effect) => {
       if (!isEncounterSoundEnabled(settingsRef.current, effect.kind)) {
+        window.bossAPI.encounterEffectStarted(effect.id);
         window.bossAPI.encounterEffectFinished(effect.id);
         return;
       }
       const graph = ensureAudioGraph();
-      if (!graph.gain) return;
+      if (!graph.gain) {
+        window.bossAPI.encounterEffectStarted(effect.id);
+        window.bossAPI.encounterEffectFinished(effect.id);
+        return;
+      }
       const currentSettings = settingsRef.current;
       graph.gain.gain.setValueAtTime(
         currentSettings.universalMuted
@@ -1033,10 +1038,18 @@ const EncounterEffectsPlayer = () => {
       audio.src = effect.url;
       const source = graph.context.createMediaElementSource(audio);
       source.connect(graph.gain);
+      let playbackStarted = false;
+      const markPlaybackStarted = () => {
+        if (playbackStarted) return;
+        playbackStarted = true;
+        window.bossAPI.encounterEffectStarted(effect.id);
+      };
 
       const release = () => {
+        markPlaybackStarted();
         if (!activeSounds.current.has(effect.id)) return;
         activeSounds.current.delete(effect.id);
+        audio.removeEventListener('playing', markPlaybackStarted);
         audio.removeEventListener('ended', release);
         audio.removeEventListener('error', release);
         audio.pause();
@@ -1051,6 +1064,7 @@ const EncounterEffectsPlayer = () => {
         source,
         release,
       });
+      audio.addEventListener('playing', markPlaybackStarted, { once: true });
       audio.addEventListener('ended', release);
       audio.addEventListener('error', release);
       audio.load();
@@ -1198,52 +1212,50 @@ const SceneTransitionPlayer = () => {
     });
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const audios = new Set<HTMLAudioElement>();
-    const audioNodes = new Map<HTMLAudioElement, MediaElementAudioSourceNode>();
-    const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
-      setEffect(nextEffect.visual ? nextEffect : null);
+    const audioNodes = new Map<HTMLAudioElement, {
+      source: MediaElementAudioSourceNode;
+      gain: GainNode;
+    }>();
+    let transitionSequence = 0;
+
+    const releaseAudio = (audio: HTMLAudioElement) => {
+      const nodes = audioNodes.get(audio);
+      audios.delete(audio);
+      audioNodes.delete(audio);
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      nodes?.source.disconnect();
+      nodes?.gain.disconnect();
+    };
+    const clearActiveTransitionMedia = () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
       audios.forEach((audio) => {
-        audio.pause();
-        audio.removeAttribute('src');
-        audio.load();
-        audioNodes.get(audio)?.disconnect();
+        releaseAudio(audio);
       });
       audios.clear();
       audioNodes.clear();
-      if (
-        nextEffect.stage === 'enter' &&
-        nextEffect.soundUrl &&
-        !nextEffect.soundMuted &&
-        !universalMuted.current
-      ) {
+    };
+    const showTransition = (
+      nextEffect: SceneTransitionEvent,
+      sequence: number,
+      preparedAudio: HTMLAudioElement | null,
+    ) => {
+      if (!active || sequence !== transitionSequence) {
+        if (preparedAudio) releaseAudio(preparedAudio);
+        return;
+      }
+      setEffect(nextEffect.visual ? nextEffect : null);
+      if (preparedAudio) {
         const soundTimer = setTimeout(() => {
           timers.delete(soundTimer);
-          const audio = new Audio(nextEffect.soundUrl ?? undefined);
-          audios.add(audio);
-          audio.preload = 'auto';
-          audio.volume = 1;
-          audio.loop = nextEffect.soundLoop;
-          const source = audioContext.createMediaElementSource(audio);
-          const gain = audioContext.createGain();
-          gain.gain.setValueAtTime(
-            volumeToGain(nextEffect.soundVolume),
-            audioContext.currentTime,
-          );
-          source.connect(gain);
-          gain.connect(audioContext.destination);
-          audioNodes.set(audio, source);
+          if (!active || sequence !== transitionSequence) {
+            releaseAudio(preparedAudio);
+            return;
+          }
           if (audioContext.state === 'suspended') void audioContext.resume();
-          const release = () => {
-            audios.delete(audio);
-            audioNodes.delete(audio);
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-            source.disconnect();
-            gain.disconnect();
-          };
-          audio.addEventListener('ended', release, { once: true });
-          audio.addEventListener('error', release, { once: true });
-          void audio.play().catch(release);
+          void preparedAudio.play().catch(() => releaseAudio(preparedAudio));
         }, nextEffect.soundDelayMs);
         timers.add(soundTimer);
       }
@@ -1254,19 +1266,71 @@ const SceneTransitionPlayer = () => {
         }, nextEffect.durationMs + 80);
         timers.add(timer);
       }
+    };
+    const unsubscribeTransition = window.bossAPI.subscribeSceneTransition((nextEffect) => {
+      transitionSequence += 1;
+      const sequence = transitionSequence;
+      clearActiveTransitionMedia();
+      const requiresSound = nextEffect.stage === 'enter' &&
+        Boolean(nextEffect.soundUrl) &&
+        !nextEffect.soundMuted &&
+        !universalMuted.current;
+      if (!requiresSound || !nextEffect.soundUrl) {
+        showTransition(nextEffect, sequence, null);
+        return;
+      }
+
+      const audio = new Audio();
+      audios.add(audio);
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+      audio.volume = 1;
+      audio.loop = nextEffect.soundLoop;
+      const source = audioContext.createMediaElementSource(audio);
+      const gain = audioContext.createGain();
+      gain.gain.setValueAtTime(
+        volumeToGain(nextEffect.soundVolume),
+        audioContext.currentTime,
+      );
+      source.connect(gain);
+      gain.connect(audioContext.destination);
+      audioNodes.set(audio, { source, gain });
+      const loadTimer = setTimeout(() => {
+        timers.delete(loadTimer);
+        handleError();
+      }, 12_000);
+      timers.add(loadTimer);
+      const handleReady = () => {
+        clearTimeout(loadTimer);
+        timers.delete(loadTimer);
+        audio.removeEventListener('loadeddata', handleReady);
+        audio.removeEventListener('error', handleError);
+        const release = () => releaseAudio(audio);
+        audio.addEventListener('ended', release, { once: true });
+        audio.addEventListener('error', release, { once: true });
+        showTransition(nextEffect, sequence, audio);
+      };
+      const handleError = () => {
+        clearTimeout(loadTimer);
+        timers.delete(loadTimer);
+        audio.removeEventListener('loadeddata', handleReady);
+        audio.removeEventListener('error', handleError);
+        releaseAudio(audio);
+        if (sequence === transitionSequence) {
+          console.warn('A transição foi retida porque seu áudio não pôde ser carregado.');
+        }
+      };
+      audio.addEventListener('loadeddata', handleReady, { once: true });
+      audio.addEventListener('error', handleError, { once: true });
+      audio.src = nextEffect.soundUrl;
+      audio.load();
     });
     return () => {
       active = false;
+      transitionSequence += 1;
       unsubscribeMusic();
       unsubscribeTransition();
-      timers.forEach(clearTimeout);
-      audios.forEach((audio) => {
-        audio.pause();
-        audio.removeAttribute('src');
-        audio.load();
-        audioNodes.get(audio)?.disconnect();
-      });
-      audioNodes.clear();
+      clearActiveTransitionMedia();
       void audioContext.close();
     };
   }, []);
@@ -1635,4 +1699,7 @@ const PlayerApp = () => {
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Elemento raiz não encontrado.');
-createRoot(root).render(<PlayerApp />);
+const playerRoot = createRoot(root);
+playerRoot.render(<PlayerApp />);
+
+export const unmountPlayer = () => playerRoot.unmount();

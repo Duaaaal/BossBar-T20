@@ -12,7 +12,7 @@ import {
 } from 'electron';
 import { randomInt, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { createReadStream } from 'node:fs';
+import { createReadStream, mkdirSync, statSync } from 'node:fs';
 import {
   copyFile,
   mkdir,
@@ -171,6 +171,30 @@ if (started) {
   app.quit();
 }
 
+// Playwright launches only the development Electron binary with this opt-in
+// profile. Packaged releases ignore it and keep every production fuse intact.
+const isolatedTestProfile = !app.isPackaged &&
+  process.env.BOSSBAR_E2E === '1' &&
+  process.env.BOSSBAR_E2E_PROFILE
+  ? path.resolve(process.env.BOSSBAR_E2E_PROFILE)
+  : null;
+if (isolatedTestProfile) {
+  const isolatedPaths = {
+    userData: path.join(isolatedTestProfile, 'user-data'),
+    sessionData: path.join(isolatedTestProfile, 'session-data'),
+    temp: path.join(isolatedTestProfile, 'temp'),
+    documents: path.join(isolatedTestProfile, 'documents'),
+    music: path.join(isolatedTestProfile, 'music'),
+    pictures: path.join(isolatedTestProfile, 'pictures'),
+  } as const;
+  for (const directory of Object.values(isolatedPaths)) {
+    mkdirSync(directory, { recursive: true });
+  }
+  for (const [name, directory] of Object.entries(isolatedPaths)) {
+    app.setPath(name as Parameters<typeof app.setPath>[0], directory);
+  }
+}
+
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let masterWindow: BrowserWindow | null = null;
@@ -236,6 +260,13 @@ const soundEffectSources = new Map<
   { filePath: string; index: number }
 >();
 const encounterEffectSources = new Map<number, string>();
+type PendingLocalCombatImpact = {
+  battle: BattleState;
+  healthEffect: HealthEffect;
+  soundEffect: EncounterSoundEffect | null;
+  timeout: ReturnType<typeof setTimeout> | null;
+};
+const pendingLocalCombatImpacts: PendingLocalCombatImpact[] = [];
 type InternalEncounterSoundOption = Omit<EncounterSoundOption, 'previewUrl'> & {
   filePath: string;
 };
@@ -384,6 +415,9 @@ const rememberAppChange = (
 let masterFocusTimer: ReturnType<typeof setTimeout> | null = null;
 let battleMusicStartTimer: ReturnType<typeof setTimeout> | null = null;
 let allowAppClose = false;
+let gracefulQuitCompleted = false;
+let gracefulQuitInProgress = false;
+let hostedSessionStopPromise: Promise<void> | null = null;
 let allowPlayerWindowClose = false;
 let playerWindowClosePending = false;
 let playerWindowCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -605,6 +639,18 @@ const resolveHostedMediaResource = (
     filePath = encounterSoundOptions.find(
       (option) => option.id === optionId,
     )?.filePath ?? null;
+  } else if (requestUrl.hostname === 'soundboard') {
+    const slotIndex = Number(decodeURIComponent(requestUrl.pathname.slice(1)));
+    filePath = Number.isInteger(slotIndex)
+      ? soundboardSlots[slotIndex - 1]?.filePath ?? null
+      : null;
+  } else if (requestUrl.hostname === 'scene-background') {
+    const phaseId = decodeURIComponent(requestUrl.pathname.slice(1));
+    filePath = sceneMediaPaths.get(sceneMediaKey(phaseId, 'background')) ?? null;
+    if (filePath) {
+      contentType = backgroundVideoMimeTypeForFile(filePath) ??
+        backgroundImageMimeTypeForFile(filePath) ?? '';
+    }
   } else if (requestUrl.hostname === 'scene-audio') {
     const mediaKey = decodeURIComponent(requestUrl.pathname.slice(1));
     const [phaseId, rawSlot, trackId] = mediaKey.split(':');
@@ -626,7 +672,14 @@ const rewriteHostedMediaUrl = (
 ) => {
   const resource = resolveHostedMediaResource(sourceUrl);
   if (!resource) return '';
-  const sourceKey = `${sourceUrl}\n${resource.filePath}`;
+  let fileFingerprint = '';
+  try {
+    const file = statSync(resource.filePath);
+    fileFingerprint = `${file.size}:${file.mtimeMs}`;
+  } catch {
+    return '';
+  }
+  const sourceKey = `${resource.contentType}\n${resource.filePath}\n${fileFingerprint}`;
   let mediaId = hostedMediaIdsBySource.get(sourceKey);
   if (!mediaId) {
     mediaId = randomUUID();
@@ -811,6 +864,30 @@ const createHostedEncounterSoundUrls = (mediaUrl: (id: string) => string) =>
     ))
     .filter(Boolean);
 
+const createHostedPreloadMediaUrls = (mediaUrl: (id: string) => string) => {
+  const sourceUrls = [
+    ...musicTracks.map(({ id }) => `boss-media://audio/${encodeURIComponent(id)}`),
+    ...soundboardSlots.flatMap((slot, index) => slot
+      ? [`boss-media://soundboard/${index + 1}`]
+      : []),
+    ...scenePlan.phases.flatMap((phase) => [
+      ...(phase.background
+        ? [`boss-media://scene-background/${encodeURIComponent(phase.id)}`]
+        : []),
+      ...(['transitionSound', 'music'] as const).flatMap((slot) =>
+        phase[slot]?.tracks.map((track) =>
+          scenePlaylistTrackUrl(phase.id, slot, track.id)
+        ) ?? []),
+    ]),
+    ...encounterSoundOptions
+      .filter((option) => option.enabled)
+      .map((option) => encounterSoundSourceUrl(option.id)),
+  ];
+  return [...new Set(sourceUrls
+    .map((sourceUrl) => rewriteHostedMediaUrl(sourceUrl, mediaUrl))
+    .filter(Boolean))];
+};
+
 const createHostedPresentationSnapshot = (
   mediaUrl: (id: string) => string,
 ) => ({
@@ -846,6 +923,7 @@ const getHostedSessionState = (): HostedSessionState => {
       connectedPlayers: 0,
       maxPlayers: 10,
       players: [],
+      pendingJoinRequests: [],
       error: null,
     };
   }
@@ -863,6 +941,7 @@ const getHostedSessionState = (): HostedSessionState => {
     connectedPlayers: presence.connectedPlayers,
     maxPlayers: presence.maxPlayers,
     players: presence.players.map((player) => ({ ...player })),
+    pendingJoinRequests: server.getPendingJoinRequests(),
     error: hostedSessionError,
   };
 };
@@ -927,10 +1006,12 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
       initialSnapshot: ({ mediaUrl }) =>
         createHostedPresentationSnapshot(mediaUrl),
       resolveMedia: ({ id }) => hostedMediaSources.get(id) ?? null,
+      preloadMediaUrls: ({ mediaUrl }) => createHostedPreloadMediaUrls(mediaUrl),
       onPresenceChanged: (presence) => {
         hostedSessionPresence = presence;
         broadcastHostedSessionState();
       },
+      onJoinRequestsChanged: () => broadcastHostedSessionState(),
     });
     startingServer = server;
     reportHostedSessionStartupProgress(72, 'Criando o túnel HTTPS temporário...');
@@ -982,6 +1063,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
 const stopHostedSession = async (
   reason: 'host-ended-session' | 'server-shutdown' = 'host-ended-session',
 ) => {
+  if (hostedSessionStopPromise) return hostedSessionStopPromise;
   const server = hostedSessionServer;
   if (!server) return;
   const tunnel = hostedQuickTunnel;
@@ -992,12 +1074,21 @@ const stopHostedSession = async (
   hostedQuickTunnel = null;
   hostedSessionError = null;
   broadcastHostedSessionState();
+  hostedSessionStopPromise = (async () => {
+    try {
+      // Keep the public route alive until every connected browser has had a
+      // chance to acknowledge the room-closed notice.
+      await server.close(reason);
+    } finally {
+      await tunnel?.close().catch(() => undefined);
+      hostedMediaSources.clear();
+      hostedMediaIdsBySource.clear();
+    }
+  })();
   try {
-    await tunnel?.close();
-    await server.close(reason);
+    await hostedSessionStopPromise;
   } finally {
-    hostedMediaSources.clear();
-    hostedMediaIdsBySource.clear();
+    hostedSessionStopPromise = null;
   }
 };
 
@@ -2062,11 +2153,58 @@ const broadcastHostedEncounterSoundLibrary = () => {
   );
 };
 
-const sendHealthEffect = (effect: HealthEffect, publishHosted = true) => {
+const releaseCurrentLocalCombatImpact = (soundEffectId?: number) => {
+  const pending = pendingLocalCombatImpacts[0];
+  if (!pending) return;
+  const expectedSoundId = pending.soundEffect?.id;
+  if (
+    expectedSoundId !== undefined &&
+    soundEffectId !== undefined &&
+    expectedSoundId !== soundEffectId
+  ) return;
+  if (pending.timeout) clearTimeout(pending.timeout);
+  pendingLocalCombatImpacts.shift();
   if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.webContents.send('health:effect', effect);
+    playerWindow.webContents.send('battle:state-changed', pending.battle);
+    playerWindow.webContents.send('health:effect', pending.healthEffect);
   }
-  if (publishHosted) hostedSessionServer?.publishHealthEffect(effect);
+  startCurrentLocalCombatImpact();
+};
+
+function startCurrentLocalCombatImpact() {
+  const pending = pendingLocalCombatImpacts[0];
+  if (!pending) return;
+  if (!playerWindow || playerWindow.isDestroyed() || !pending.soundEffect) {
+    releaseCurrentLocalCombatImpact();
+    return;
+  }
+  pending.timeout = setTimeout(() => {
+    releaseCurrentLocalCombatImpact(pending.soundEffect?.id);
+  }, 4_000);
+  sendEncounterEffect(pending.soundEffect, false);
+}
+
+const enqueueLocalCombatImpact = (
+  battle: BattleState,
+  healthEffect: HealthEffect,
+  soundEffect: EncounterSoundEffect | null,
+) => {
+  pendingLocalCombatImpacts.push({
+    battle,
+    healthEffect,
+    soundEffect,
+    timeout: null,
+  });
+  if (pendingLocalCombatImpacts.length === 1) {
+    startCurrentLocalCombatImpact();
+  }
+};
+
+const clearPendingLocalCombatImpacts = () => {
+  pendingLocalCombatImpacts.forEach(({ timeout }) => {
+    if (timeout) clearTimeout(timeout);
+  });
+  pendingLocalCombatImpacts.length = 0;
 };
 
 const sendSceneTransition = (event: SceneTransitionEvent) => {
@@ -2966,6 +3104,7 @@ const createPlayerWindow = (
       playerWindowClosePending = false;
       soundEffectSources.clear();
       encounterEffectSources.clear();
+      clearPendingLocalCombatImpacts();
       if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
       playerWindowCloseTimer = null;
       if (dockedMoveFitTimer) clearTimeout(dockedMoveFitTimer);
@@ -3098,7 +3237,10 @@ const createLauncherWindow = () => {
   return window;
 };
 
-const broadcastBattleState = (publishHosted = true) => {
+const broadcastBattleState = (
+  publishHosted = true,
+  includePlayer = true,
+) => {
   for (const window of [
     masterWindow,
     playerWindow,
@@ -3106,7 +3248,11 @@ const broadcastBattleState = (publishHosted = true) => {
     sceneEditorWindow,
     soundboardWindow,
   ]) {
-    if (window && !window.isDestroyed()) {
+    if (
+      window &&
+      !window.isDestroyed() &&
+      (includePlayer || window !== playerWindow)
+    ) {
       window.webContents.send('battle:state-changed', battleState);
     }
   }
@@ -4728,6 +4874,25 @@ ipcMain.handle('multiplayer:get-session', (event): HostedSessionState => {
   return getHostedSessionState();
 });
 
+const isValidJoinRequestId = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    .test(value);
+
+ipcMain.handle('multiplayer:approve-player', (event, requestId: unknown) => {
+  if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(requestId)) {
+    return false;
+  }
+  return hostedSessionServer?.approveJoinRequest(requestId) ?? false;
+});
+
+ipcMain.handle('multiplayer:reject-player', (event, requestId: unknown) => {
+  if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(requestId)) {
+    return false;
+  }
+  return hostedSessionServer?.rejectJoinRequest(requestId) ?? false;
+});
+
 ipcMain.handle(
   'multiplayer:set-public-url',
   (event, value: unknown): HostedSessionPublicUrlResult => {
@@ -4915,6 +5080,7 @@ const restoreLibraryEntry = (
 ): BossLibraryLoaded => {
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
+  clearPendingLocalCombatImpacts();
   if (battleMusicStartTimer) {
     clearTimeout(battleMusicStartTimer);
     battleMusicStartTimer = null;
@@ -5914,6 +6080,18 @@ ipcMain.on('soundboard:playback-finished', (event, effectId: unknown) => {
 });
 
 ipcMain.on(
+  'encounter-effects:playback-started',
+  (event, effectId: unknown) => {
+    if (
+      !isPlayerSender(event.sender.id) ||
+      typeof effectId !== 'number' ||
+      !Number.isInteger(effectId)
+    ) return;
+    releaseCurrentLocalCombatImpact(effectId);
+  },
+);
+
+ipcMain.on(
   'encounter-effects:playback-finished',
   (event, effectId: unknown) => {
     if (
@@ -6082,6 +6260,7 @@ const restoreLastAppChange = () => {
 
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
+  clearPendingLocalCombatImpacts();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
   battleMusicStartTimer = null;
   if (sceneTransitionTimer) clearTimeout(sceneTransitionTimer);
@@ -6174,12 +6353,7 @@ const applyHealthMutation = (
   }
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!nextBoss) return;
-  broadcastBattleState(false);
-  queueCrossedScenePhases(
-    bossId,
-    previousBoss.currentHealth,
-    nextBoss.currentHealth,
-  );
+  broadcastBattleState(false, false);
 
   if (
     (playerWindow && !playerWindow.isDestroyed()) ||
@@ -6198,9 +6372,12 @@ const applyHealthMutation = (
       shieldTo: nextBoss.shield,
     };
     const preparedSound = prepareEncounterMechanicSound(effect);
-    sendHealthEffect(effect, false);
-    if (preparedSound) {
-      sendEncounterEffect(preparedSound.encounterEffect, false);
+    if (playerWindow && !playerWindow.isDestroyed()) {
+      enqueueLocalCombatImpact(
+        battleState,
+        effect,
+        preparedSound?.encounterEffect ?? null,
+      );
     }
     const server = hostedSessionServer;
     if (server) {
@@ -6219,6 +6396,11 @@ const applyHealthMutation = (
       });
     }
   }
+  queueCrossedScenePhases(
+    bossId,
+    previousBoss.currentHealth,
+    nextBoss.currentHealth,
+  );
 };
 
 ipcMain.handle(
@@ -6327,20 +6509,17 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
       randomInt,
     );
     battleState = clampSceneOverflowDamage(advancedTurn.state, previousBoss);
-    broadcastBattleState();
+    // Controllers receive the authoritative state immediately. Player surfaces
+    // receive each status tick together with its visual effect so life and
+    // animation cannot be rendered in different network frames.
+    broadcastBattleState(false, false);
     const nextBoss = battleState.bosses.find((boss) => boss.id === command.bossId);
-    if (nextBoss) {
-      queueCrossedScenePhases(
-        command.bossId,
-        previousBoss.currentHealth,
-        nextBoss.currentHealth,
-      );
-    }
 
     if (
       (playerWindow && !playerWindow.isDestroyed()) ||
       hostedSessionServer
     ) {
+      let publishedVisibleImpact = false;
       for (const tick of advancedTurn.ticks) {
         const visibleFloor = nextBoss?.currentHealth ?? 0;
         const visibleFrom = Math.max(visibleFloor, tick.from);
@@ -6364,8 +6543,29 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
             formula: tick.formula,
           },
         };
-        sendHealthEffect(effect);
+        publishedVisibleImpact = true;
+        if (playerWindow && !playerWindow.isDestroyed()) {
+          enqueueLocalCombatImpact(battleState, effect, null);
+        }
+        hostedSessionServer?.publishCombatImpact({
+          battle: toPublicBattleState(battleState),
+          healthEffect: effect,
+          soundEffect: null,
+        });
       }
+      if (!publishedVisibleImpact) {
+        if (playerWindow && !playerWindow.isDestroyed()) {
+          playerWindow.webContents.send('battle:state-changed', battleState);
+        }
+        hostedSessionServer?.publishBattleState(toPublicBattleState(battleState));
+      }
+    }
+    if (nextBoss) {
+      queueCrossedScenePhases(
+        command.bossId,
+        previousBoss.currentHealth,
+        nextBoss.currentHealth,
+      );
     }
     return;
   }
@@ -6437,6 +6637,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     linkedLibraryEntryId = null;
     pendingHealthTimers.forEach(clearTimeout);
     pendingHealthTimers.clear();
+    clearPendingLocalCombatImpacts();
     activeBackgroundFilePath = null;
     configuredBackgroundFilePath = null;
     configuredBackgroundName = null;
@@ -6706,19 +6907,33 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   allowAppClose = true;
-  void stopHostedSession('server-shutdown');
   allowControlWindowClose = true;
   controlWindow?.setClosable(true);
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
+  clearPendingLocalCombatImpacts();
   soundEffectSources.clear();
   encounterEffectSources.clear();
   if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
   if (sceneTransitionTimer) clearTimeout(sceneTransitionTimer);
   if (playerWindowCloseTimer) clearTimeout(playerWindowCloseTimer);
   if (masterFocusTimer) clearTimeout(masterFocusTimer);
+
+  if (
+    !gracefulQuitCompleted &&
+    (hostedSessionServer !== null || hostedSessionStopPromise !== null)
+  ) {
+    event.preventDefault();
+    if (gracefulQuitInProgress) return;
+    gracefulQuitInProgress = true;
+    void stopHostedSession('server-shutdown').finally(() => {
+      gracefulQuitCompleted = true;
+      gracefulQuitInProgress = false;
+      app.quit();
+    });
+  }
 });
 
 app.on('activate', () => {

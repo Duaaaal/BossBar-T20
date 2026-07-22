@@ -10,7 +10,7 @@ import type {
 import type { SceneTransitionEvent } from './scene';
 import type { ActiveBossStatus } from './status';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 1;
+export const MULTIPLAYER_PROTOCOL_VERSION = 2;
 export const MAX_MULTIPLAYER_PLAYERS = 10;
 
 export type ConnectionQuality =
@@ -29,6 +29,12 @@ export type MultiplayerPlayer = {
   latencyMs: number | null;
   connectionQuality: ConnectionQuality;
   hasConnectionIssue: boolean;
+};
+
+export type MultiplayerJoinRequest = {
+  id: string;
+  name: string;
+  requestedAt: number;
 };
 
 export type HostedSessionStartupProgress = {
@@ -55,6 +61,7 @@ export type HostedSessionState = {
   connectedPlayers: number;
   maxPlayers: number;
   players: MultiplayerPlayer[];
+  pendingJoinRequests: MultiplayerJoinRequest[];
   error: string | null;
 };
 
@@ -186,7 +193,12 @@ export type MultiplayerConnectionErrorData = {
 export interface MultiplayerServerToClientEvents {
   'session:snapshot': (snapshot: MultiplayerSessionSnapshot) => void;
   'session:occupancy': (occupancy: MultiplayerOccupancy) => void;
-  'session:closed': (notice: SessionClosedNotice) => void;
+  'session:join-pending': (request: MultiplayerJoinRequest) => void;
+  'session:join-rejected': (message: string, acknowledge: () => void) => void;
+  'session:closed': (
+    notice: SessionClosedNotice,
+    acknowledge: () => void,
+  ) => void;
   'session:latency-probe': (
     probe: LatencyProbe,
     acknowledge: (response: LatencyProbeAcknowledgement) => void,

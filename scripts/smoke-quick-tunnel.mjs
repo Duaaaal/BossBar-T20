@@ -38,9 +38,12 @@ try {
   });
 
   let response = null;
+  let firstResponseLatencyMs = null;
   for (let attempt = 0; attempt < 15; attempt += 1) {
     try {
+      const startedAt = performance.now();
       response = await fetch(`${tunnel.publicBaseUrl}/health`);
+      firstResponseLatencyMs = Math.round(performance.now() - startedAt);
       if (response.ok) break;
     } catch {
       // O hostname pode levar alguns instantes para ficar acessível globalmente.
@@ -49,7 +52,24 @@ try {
   }
   assert(response?.ok, 'O endereço público do túnel não respondeu.');
   assert.deepEqual(await response.json(), { ok: true });
-  process.stdout.write(`Quick Tunnel validado: ${tunnel.publicBaseUrl}\n`);
+  const roundTripSamples = [];
+  for (let sample = 0; sample < 5; sample += 1) {
+    const startedAt = performance.now();
+    const sampleResponse = await fetch(`${tunnel.publicBaseUrl}/health`, {
+      cache: 'no-store',
+    });
+    assert(sampleResponse.ok, 'O túnel deixou de responder durante a medição.');
+    await sampleResponse.arrayBuffer();
+    roundTripSamples.push(Math.round(performance.now() - startedAt));
+  }
+  const orderedSamples = [...roundTripSamples].sort((first, second) => first - second);
+  const medianRoundTripMs = orderedSamples[Math.floor(orderedSamples.length / 2)];
+  process.stdout.write([
+    `Quick Tunnel validado: ${tunnel.publicBaseUrl}`,
+    `Primeira resposta: ${firstResponseLatencyMs ?? '-'} ms`,
+    `RTT HTTP mediano: ${medianRoundTripMs} ms (${roundTripSamples.join(', ')} ms)`,
+    '',
+  ].join('\n'));
 } finally {
   await tunnel?.close();
   await new Promise((resolve) => server.close(resolve));

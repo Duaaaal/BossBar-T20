@@ -20,6 +20,7 @@ export const bossApiMethodsByRole = {
   ],
   master: [
     'addEncounterSound',
+    'approveHostedPlayer',
     'confirmAppClose',
     'dispatch',
     'getAppVersion',
@@ -53,6 +54,7 @@ export const bossApiMethodsByRole = {
     'subscribePresentationOpen',
     'getScenePlan',
     'releaseSceneBlackout',
+    'rejectHostedPlayer',
     'returnToLauncher',
     'activateSceneBlackout',
     'subscribeScenePlan',
@@ -60,6 +62,7 @@ export const bossApiMethodsByRole = {
   ],
   player: [
     'encounterEffectFinished',
+    'encounterEffectStarted',
     'getBackground',
     'getEncounterEffectsState',
     'getMusicState',

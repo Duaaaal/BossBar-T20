@@ -105,6 +105,8 @@ export type BossAPI = {
   ) => Promise<HostedSessionPublicUrlResult>;
   copyHostedSessionLink: (link?: string) => Promise<boolean>;
   openHostedSessionAsPlayer: () => Promise<boolean>;
+  approveHostedPlayer: (requestId: string) => Promise<boolean>;
+  rejectHostedPlayer: (requestId: string) => Promise<boolean>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
   saveBossToLibrary: (
     draft: BossLibraryDraft,
@@ -166,6 +168,7 @@ export type BossAPI = {
   soundEffectFinished: (effectId: number) => void;
   reportSoundEffectError: (effectId: number, index: number) => void;
   encounterEffectFinished: (effectId: number) => void;
+  encounterEffectStarted: (effectId: number) => void;
   musicTrackEnded: () => void;
   musicFadeoutComplete: () => void;
   reportMusicProgress: (state: MusicPlaybackState) => void;

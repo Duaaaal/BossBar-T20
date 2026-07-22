@@ -21,6 +21,8 @@ import {
   type MultiplayerConnectionErrorData,
   type MultiplayerOccupancy,
   type PublicBattlePresentationState,
+  type PublicCombatImpact,
+  type PublicMusicPresentationState,
   type PublicScenePresentationState,
   type PublicSoundboardPresentationState,
   type MultiplayerServerToClientEvents,
@@ -34,11 +36,38 @@ import {
 
 type Unsubscribe = () => void;
 type Listener<Value> = (value: Value) => void;
+type OrderedEventTask = (isCurrent: () => boolean) => void | Promise<void>;
+
+export const createOrderedEventQueue = (
+  onError: (error: unknown) => void = () => undefined,
+) => {
+  let generation = 0;
+  let tail = Promise.resolve();
+  return {
+    enqueue(task: OrderedEventTask) {
+      const taskGeneration = generation;
+      const run = tail.then(async () => {
+        const isCurrent = () => generation === taskGeneration;
+        if (!isCurrent()) return;
+        await task(isCurrent);
+      });
+      tail = run.catch(onError);
+      return run;
+    },
+    reset() {
+      generation += 1;
+      tail = Promise.resolve();
+    },
+  };
+};
 
 export type WebPlayerConnectionState =
   | { state: 'connecting'; message: string }
+  | { state: 'preloading'; message: string }
+  | { state: 'awaiting-approval'; message: string }
   | { state: 'connected'; message: string }
   | { state: 'disconnected'; message: string }
+  | { state: 'closed'; message: string }
   | { state: 'error'; message: string };
 
 type PlayerApi = Pick<
@@ -57,6 +86,7 @@ type PlayerApi = Pick<
   | 'getEncounterEffectsState'
   | 'subscribeEncounterEffects'
   | 'subscribeEncounterEffect'
+  | 'encounterEffectStarted'
   | 'encounterEffectFinished'
   | 'getMusicState'
   | 'subscribeMusic'
@@ -224,6 +254,14 @@ export const toSoundboardState = (
   slots: emptySoundboardState.slots,
 });
 
+export const publicMediaUrlsFromSnapshot = (
+  snapshot: MultiplayerSessionSnapshot,
+) => [...new Set([
+  snapshot.background.url,
+  ...snapshot.music.tracks.map(({ url }) => url),
+  ...(snapshot.encounterSoundUrls ?? []),
+].filter((url): url is string => Boolean(url)))];
+
 const connectionErrorMessages: Record<MultiplayerConnectionErrorCode, string> = {
   INVALID_AUTH: 'O link desta sessão é inválido.',
   INVALID_CLIENT_ID: 'Não foi possível identificar este navegador.',
@@ -279,8 +317,10 @@ const getConnectionErrorCode = (error: Error & { data?: unknown }) => {
 
 export const createWebPlayerApi = ({
   onConnectionState,
+  onSessionReady,
 }: {
   onConnectionState: (state: WebPlayerConnectionState) => void;
+  onSessionReady?: () => void;
 }) => {
   const battle = createChannel<BattleState>(initialBattleState);
   const background = createChannel<BackgroundState>(emptyBackgroundState);
@@ -301,11 +341,291 @@ export const createWebPlayerApi = ({
   const encounterSoundEffects = createEventChannel<EncounterSoundEffect>();
   const { roomCode, playerToken, clientId, hostToken } =
     resolveConnectionParameters();
-  const preloadedEncounterSounds = new Map<string, HTMLAudioElement>();
+  const mediaPreloadPromises = new Map<string, Promise<boolean>>();
+  const resolvedMediaUrls = new Map<string, string>();
+  const maxResidentMediaItemBytes = 8 * 1024 * 1024;
+  const maxResidentMediaTotalBytes = 32 * 1024 * 1024;
+  const activePreloadControllers = new Set<AbortController>();
+  const activePreloadElements = new Set<HTMLImageElement | HTMLMediaElement>();
+  const eventQueue = createOrderedEventQueue((error) => {
+    console.error('Falha ao processar um evento da sessão na ordem recebida.', error);
+  });
+  const pendingCombatImpacts: Array<{
+    impact: PublicCombatImpact;
+    timeout: ReturnType<typeof setTimeout> | null;
+  }> = [];
 
   let latestOccupancy: MultiplayerOccupancy | null = null;
   let receivedSnapshot = false;
   let latestPublicScene: PublicScenePresentationState | null = null;
+  let deferredBattleState: PublicBattlePresentationState | null = null;
+  let snapshotLoadSequence = 0;
+  let manifestPreloadPromise: Promise<boolean> | null = null;
+  let residentMediaBytes = 0;
+
+  const verifyMediaCanLoad = (
+    url: string,
+    contentType: string,
+    signal: AbortSignal,
+  ) => new Promise<boolean>((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    if (!/^(?:audio|image|video)\//.test(contentType)) {
+      resolve(true);
+      return;
+    }
+
+    const isImage = contentType.startsWith('image/');
+    const element = isImage
+      ? new Image()
+      : document.createElement(contentType.startsWith('video/') ? 'video' : 'audio');
+    activePreloadElements.add(element);
+    const successEvent = isImage ? 'load' : 'loadeddata';
+    let settled = false;
+    const finish = (loaded: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', handleAbort);
+      element.removeEventListener(successEvent, handleSuccess);
+      element.removeEventListener('error', handleError);
+      activePreloadElements.delete(element);
+      if (element instanceof HTMLMediaElement) {
+        element.pause();
+        element.removeAttribute('src');
+        element.load();
+      } else {
+        element.removeAttribute('src');
+      }
+      resolve(loaded);
+    };
+    const handleSuccess = () => finish(true);
+    const handleError = () => finish(false);
+    const handleAbort = () => finish(false);
+    const timeout = setTimeout(() => finish(false), 12_000);
+    signal.addEventListener('abort', handleAbort, { once: true });
+    element.addEventListener(successEvent, handleSuccess, { once: true });
+    element.addEventListener('error', handleError, { once: true });
+    if (element instanceof HTMLMediaElement) {
+      element.preload = 'auto';
+      if (element instanceof HTMLVideoElement) element.muted = true;
+      element.src = url;
+      element.load();
+    } else {
+      element.src = url;
+    }
+  });
+
+  const preloadMediaUrl = (url: string) => {
+    if (!url) return Promise.resolve(true);
+    const existing = mediaPreloadPromises.get(url);
+    if (existing) return existing;
+    const controller = new AbortController();
+    activePreloadControllers.add(controller);
+    const preload: Promise<boolean> = (async () => {
+      const response = await fetch(url, {
+        cache: 'force-cache',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get('content-type') ?? '';
+      const contentLengthHeader = response.headers.get('content-length');
+      const contentLength = contentLengthHeader === null
+        ? Number.NaN
+        : Number(contentLengthHeader);
+      const canKeepResident = Number.isSafeInteger(contentLength) &&
+        contentLength >= 0 &&
+        contentLength <= maxResidentMediaItemBytes &&
+        residentMediaBytes + contentLength <= maxResidentMediaTotalBytes;
+      if (!canKeepResident) {
+        await response.body?.cancel();
+        return verifyMediaCanLoad(url, contentType, controller.signal);
+      }
+
+      residentMediaBytes += contentLength;
+      let reservationHeld = true;
+      try {
+        const mediaBlob = await response.blob();
+        if (controller.signal.aborted) return false;
+        const localUrl = URL.createObjectURL(mediaBlob);
+        const loaded = await verifyMediaCanLoad(
+          localUrl,
+          contentType || mediaBlob.type,
+          controller.signal,
+        );
+        if (!loaded || controller.signal.aborted) {
+          URL.revokeObjectURL(localUrl);
+          return false;
+        }
+        resolvedMediaUrls.set(url, localUrl);
+        reservationHeld = false;
+        return true;
+      } finally {
+        if (reservationHeld) residentMediaBytes -= contentLength;
+      }
+    })().catch((error: unknown) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.warn('Não foi possível pré-carregar uma mídia da sessão.', error);
+      }
+      return false;
+    }).then((loaded) => {
+      if (!loaded && mediaPreloadPromises.get(url) === preload) {
+        mediaPreloadPromises.delete(url);
+      }
+      return loaded;
+    }).finally(() => {
+      activePreloadControllers.delete(controller);
+    });
+    mediaPreloadPromises.set(url, preload);
+    return preload;
+  };
+
+  const preloadMediaUrls = async (urls: Array<string | null | undefined>) => {
+    const queue = [...new Set(urls.filter((url): url is string => Boolean(url)))];
+    let loaded = true;
+    const workers = Array.from(
+      { length: Math.min(3, queue.length) },
+      async () => {
+        while (queue.length > 0) {
+          const url = queue.shift();
+          if (url && !(await preloadMediaUrl(url))) loaded = false;
+        }
+      },
+    );
+    await Promise.all(workers);
+    return loaded;
+  };
+
+  const waitForMediaUrls = async (
+    urls: Array<string | null | undefined>,
+    isCurrent: () => boolean = () => true,
+  ) => {
+    for (let attempt = 0; attempt < 3 && isCurrent(); attempt += 1) {
+      if (await preloadMediaUrls(urls)) return true;
+      if (attempt < 2 && isCurrent()) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+    return false;
+  };
+
+  const resolvedMediaUrl = (url: string | null | undefined) =>
+    url ? resolvedMediaUrls.get(url) ?? url : url;
+
+  const withResolvedBackground = (state: BackgroundState): BackgroundState => ({
+    ...state,
+    url: resolvedMediaUrl(state.url) ?? null,
+  });
+
+  const withResolvedMusic = (
+    state: PublicMusicPresentationState,
+  ): PublicMusicPresentationState => ({
+    ...state,
+    tracks: state.tracks.map((track) => ({
+      ...track,
+      url: resolvedMediaUrl(track.url) ?? track.url,
+    })),
+  });
+
+  const withResolvedCombatImpact = (
+    impact: PublicCombatImpact,
+  ): PublicCombatImpact => ({
+    ...impact,
+    soundEffect: impact.soundEffect ? {
+      ...impact.soundEffect,
+      url: resolvedMediaUrl(impact.soundEffect.url) ?? impact.soundEffect.url,
+    } : null,
+  });
+
+  const preloadSessionManifest = () => {
+    if (manifestPreloadPromise) return manifestPreloadPromise;
+    manifestPreloadPromise = roomCode && playerToken
+      ? fetch('/api/preload', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: {
+          Authorization: `Bearer ${playerToken}`,
+          'X-BossBar-Room': roomCode,
+        },
+      })
+        .then(async (response) => {
+          if (!response.ok) return false;
+          const manifest = await response.json() as {
+            protocolVersion?: unknown;
+            urls?: unknown;
+          };
+          if (
+            manifest.protocolVersion !== MULTIPLAYER_PROTOCOL_VERSION ||
+            !Array.isArray(manifest.urls)
+          ) return false;
+          const urls = manifest.urls.flatMap((candidate) => {
+            if (typeof candidate !== 'string' || candidate.length > 2_048) return [];
+            try {
+              const parsed = new URL(candidate, window.location.href);
+              return parsed.origin === window.location.origin &&
+                parsed.pathname.startsWith('/session-media/')
+                ? [candidate]
+                : [];
+            } catch {
+              return [];
+            }
+          }).slice(0, 256);
+          return waitForMediaUrls(urls);
+        })
+        .catch(() => false)
+      : Promise.resolve(false);
+    return manifestPreloadPromise;
+  };
+
+  const clearTransientMediaCache = () => {
+    snapshotLoadSequence += 1;
+    eventQueue.reset();
+    activePreloadControllers.forEach((controller) => controller.abort());
+    activePreloadControllers.clear();
+    activePreloadElements.forEach((element) => {
+      if (element instanceof HTMLMediaElement) {
+        element.pause();
+        element.removeAttribute('src');
+        element.load();
+      } else {
+        element.removeAttribute('src');
+      }
+    });
+    activePreloadElements.clear();
+    resolvedMediaUrls.forEach((localUrl) => URL.revokeObjectURL(localUrl));
+    resolvedMediaUrls.clear();
+    residentMediaBytes = 0;
+    mediaPreloadPromises.clear();
+    manifestPreloadPromise = null;
+  };
+
+  const requestBrowserCacheClear = async () => {
+    if (!roomCode || !playerToken) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1_400);
+    try {
+      await fetch('/api/session-cache/clear', {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: {
+          Authorization: `Bearer ${playerToken}`,
+          'X-BossBar-Room': roomCode,
+        },
+        signal: controller.signal,
+      });
+    } catch {
+      // The room may already be closing. Its unique media URLs become unusable
+      // as soon as the temporary server and tunnel stop.
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  void preloadSessionManifest();
 
   const publishBattle = (nextBattle: PublicBattlePresentationState) => {
     const fullBattle = toBattleState(nextBattle);
@@ -321,31 +641,87 @@ export const createWebPlayerApi = ({
   };
 
   const preloadEncounterSounds = (urls: string[]) => {
-    const nextUrls = new Set(urls);
-    for (const [url, audio] of preloadedEncounterSounds) {
-      if (nextUrls.has(url)) continue;
-      audio.removeAttribute('src');
-      audio.load();
-      preloadedEncounterSounds.delete(url);
-    }
-    for (const url of nextUrls) {
-      if (preloadedEncounterSounds.has(url)) continue;
-      const audio = new Audio();
-      audio.crossOrigin = 'anonymous';
-      audio.preload = 'auto';
-      audio.src = url;
-      audio.load();
-      preloadedEncounterSounds.set(url, audio);
+    return preloadMediaUrls(urls);
+  };
+
+  const releaseCurrentCombatImpact = (soundEffectId?: number) => {
+    const pending = pendingCombatImpacts[0];
+    if (!pending) return;
+    const expectedSoundId = pending.impact.soundEffect?.id;
+    if (
+      expectedSoundId !== undefined &&
+      soundEffectId !== undefined &&
+      soundEffectId !== expectedSoundId
+    ) return;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    pendingCombatImpacts.shift();
+    healthEffects.publish(pending.impact.healthEffect);
+    publishBattle(pending.impact.battle);
+    const next = pendingCombatImpacts[0];
+    if (next) {
+      startCurrentCombatImpact();
+    } else if (deferredBattleState) {
+      const nextBattle = deferredBattleState;
+      deferredBattleState = null;
+      publishBattle(nextBattle);
     }
   };
 
-  const applySnapshot = (snapshot: MultiplayerSessionSnapshot) => {
+  function startCurrentCombatImpact() {
+    const pending = pendingCombatImpacts[0];
+    if (!pending) return;
+    const soundEffect = pending.impact.soundEffect;
+    if (!soundEffect) {
+      releaseCurrentCombatImpact();
+      return;
+    }
+    pending.timeout = setTimeout(() => {
+      releaseCurrentCombatImpact(soundEffect.id);
+    }, 4_000);
+    encounterSoundEffects.publish(soundEffect);
+  }
+
+  const enqueueCombatImpact = (impact: PublicCombatImpact) => {
+    pendingCombatImpacts.push({ impact, timeout: null });
+    if (pendingCombatImpacts.length === 1) startCurrentCombatImpact();
+  };
+
+  const clearPendingCombatImpacts = () => {
+    pendingCombatImpacts.forEach(({ timeout }) => {
+      if (timeout) clearTimeout(timeout);
+    });
+    pendingCombatImpacts.length = 0;
+    deferredBattleState = null;
+  };
+
+  const applySnapshot = async (snapshot: MultiplayerSessionSnapshot) => {
+    const loadSequence = ++snapshotLoadSequence;
+    onConnectionState({
+      state: 'preloading',
+      message: 'Carregando a cena e os sons do encontro…',
+    });
+    const [, currentMediaLoaded] = await Promise.all([
+      preloadSessionManifest(),
+      waitForMediaUrls(
+        publicMediaUrlsFromSnapshot(snapshot),
+        () => loadSequence === snapshotLoadSequence,
+      ),
+    ]);
+    if (loadSequence !== snapshotLoadSequence) return;
+    if (!currentMediaLoaded) {
+      onConnectionState({
+        state: 'error',
+        message: 'Uma mídia necessária não pôde ser carregada. Atualize a página para tentar novamente.',
+      });
+      return;
+    }
+    clearPendingCombatImpacts();
     receivedSnapshot = true;
     publishBattle(snapshot.battle);
-    background.publish(snapshot.background);
+    background.publish(withResolvedBackground(snapshot.background));
     publishScene(snapshot.scene);
     encounterEffects.publish(snapshot.encounterEffects);
-    music.publish(snapshot.music);
+    music.publish(withResolvedMusic(snapshot.music));
     const currentTrack = snapshot.music.tracks.find(
       ({ id }) => id === snapshot.music.currentTrackId,
     );
@@ -357,7 +733,7 @@ export const createWebPlayerApi = ({
       Math.max(0, snapshot.music.currentTime + elapsed),
     ));
     soundboard.publish(toSoundboardState(snapshot.soundboard));
-    preloadEncounterSounds(snapshot.encounterSoundUrls ?? []);
+    void preloadEncounterSounds(snapshot.encounterSoundUrls ?? []);
     if (snapshot.scene.blackoutActive) {
       sceneTransitions.publish({
         id: -(snapshot.scene.revision + 1),
@@ -379,6 +755,7 @@ export const createWebPlayerApi = ({
         ? `Conectado à sala ${roomCode} · ${latestOccupancy.connectedPlayers}/${latestOccupancy.maxPlayers}`
         : `Conectado à sala ${roomCode}`,
     });
+    onSessionReady?.();
   };
 
   const api: PlayerApi = {
@@ -396,6 +773,7 @@ export const createWebPlayerApi = ({
     getEncounterEffectsState: async () => encounterEffects.current(),
     subscribeEncounterEffects: encounterEffects.subscribe,
     subscribeEncounterEffect: encounterSoundEffects.subscribe,
+    encounterEffectStarted: releaseCurrentCombatImpact,
     encounterEffectFinished: () => undefined,
     getMusicState: async () => music.current(),
     subscribeMusic: music.subscribe,
@@ -421,6 +799,8 @@ export const createWebPlayerApi = ({
       api: api as BossAPI,
       canConnect: false,
       connect: () => false,
+      leave: () => undefined,
+      dispose: () => undefined,
       socket: null,
     };
   }
@@ -462,41 +842,128 @@ export const createWebPlayerApi = ({
       message: 'Conexão interrompida. Tentando reconectar…',
     });
   });
-  socket.on('session:snapshot', applySnapshot);
+  socket.on('session:snapshot', (snapshot) => {
+    eventQueue.reset();
+    void eventQueue.enqueue(() => applySnapshot(snapshot));
+  });
   socket.on('session:occupancy', (occupancy) => {
     latestOccupancy = occupancy;
   });
-  socket.on('session:closed', () => {
-    socket.disconnect();
+  socket.on('session:join-pending', () => {
     onConnectionState({
-      state: 'error',
-      message: 'O mestre encerrou esta sessão.',
+      state: 'awaiting-approval',
+      message: 'A batalha já começou. Aguardando aprovação do mestre…',
     });
+  });
+  socket.on('session:join-rejected', (message, acknowledge) => {
+    acknowledge();
+    void (async () => {
+      clearPendingCombatImpacts();
+      clearTransientMediaCache();
+      await requestBrowserCacheClear();
+      socket.disconnect();
+      onConnectionState({ state: 'error', message });
+    })();
+  });
+  socket.on('session:closed', (_notice, acknowledge) => {
+    void (async () => {
+      clearPendingCombatImpacts();
+      clearTransientMediaCache();
+      onConnectionState({
+        state: 'closed',
+        message: 'O mestre encerrou a sala.',
+      });
+      await requestBrowserCacheClear();
+      acknowledge();
+      socket.disconnect();
+    })();
   });
   socket.on('session:latency-probe', (probe, acknowledge) => {
     acknowledge({ id: probe.id });
   });
-  socket.on('battle:state', publishBattle);
-  socket.on('battle:health-effect', healthEffects.publish);
-  socket.on('battle:impact', ({ battle: nextBattle, healthEffect, soundEffect }) => {
-    if (soundEffect) encounterSoundEffects.publish(soundEffect);
-    healthEffects.publish(healthEffect);
-    publishBattle(nextBattle);
+  socket.on('battle:state', (nextBattle) => {
+    void eventQueue.enqueue(() => {
+      if (pendingCombatImpacts.length > 0) {
+        deferredBattleState = nextBattle;
+        return;
+      }
+      publishBattle(nextBattle);
+    });
   });
-  socket.on('presentation:background', background.publish);
-  socket.on('presentation:scene', publishScene);
-  socket.on('presentation:scene-transition', sceneTransitions.publish);
-  socket.on('presentation:effects', encounterEffects.publish);
-  socket.on('presentation:music', music.publish);
-  socket.on('presentation:music-seek', musicSeek.publish);
-  socket.on('presentation:music-fade-out', musicFadeOut.publish);
+  socket.on('battle:health-effect', (effect) => {
+    void eventQueue.enqueue(() => healthEffects.publish(effect));
+  });
+  socket.on('battle:impact', (impact) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls([impact.soundEffect?.url], isCurrent);
+      if (loaded && isCurrent()) enqueueCombatImpact(withResolvedCombatImpact(impact));
+    });
+  });
+  socket.on('presentation:background', (nextBackground) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls([nextBackground.url], isCurrent);
+      if (loaded && isCurrent()) background.publish(withResolvedBackground(nextBackground));
+    });
+  });
+  socket.on('presentation:scene', (nextScene) => {
+    void eventQueue.enqueue(() => publishScene(nextScene));
+  });
+  socket.on('presentation:scene-transition', (transition) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls([transition.soundUrl], isCurrent);
+      if (loaded && isCurrent()) sceneTransitions.publish({
+        ...transition,
+        soundUrl: resolvedMediaUrl(transition.soundUrl) ?? null,
+      });
+    });
+  });
+  socket.on('presentation:effects', (effects) => {
+    void eventQueue.enqueue(() => encounterEffects.publish(effects));
+  });
+  socket.on('presentation:music', (nextMusic) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls(
+        nextMusic.tracks.map(({ url }) => url),
+        isCurrent,
+      );
+      if (loaded && isCurrent()) music.publish(withResolvedMusic(nextMusic));
+    });
+  });
+  socket.on('presentation:music-seek', (time) => {
+    void eventQueue.enqueue(() => musicSeek.publish(time));
+  });
+  socket.on('presentation:music-fade-out', (duration) => {
+    void eventQueue.enqueue(() => musicFadeOut.publish(duration));
+  });
   socket.on('presentation:soundboard', (state) => {
-    soundboard.publish(toSoundboardState(state));
+    void eventQueue.enqueue(() => soundboard.publish(toSoundboardState(state)));
   });
-  socket.on('presentation:soundboard-stop', soundboardStops.publish);
-  socket.on('presentation:sound-effect', soundEffects.publish);
-  socket.on('presentation:encounter-effect', encounterSoundEffects.publish);
-  socket.on('presentation:encounter-sound-library', preloadEncounterSounds);
+  socket.on('presentation:soundboard-stop', (stop) => {
+    void eventQueue.enqueue(() => soundboardStops.publish(stop));
+  });
+  socket.on('presentation:sound-effect', (effect) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls([effect.url], isCurrent);
+      if (loaded && isCurrent()) soundEffects.publish({
+        ...effect,
+        url: resolvedMediaUrl(effect.url) ?? effect.url,
+      });
+    });
+  });
+  socket.on('presentation:encounter-effect', (effect) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls([effect.url], isCurrent);
+      if (loaded && isCurrent()) encounterSoundEffects.publish({
+        ...effect,
+        url: resolvedMediaUrl(effect.url) ?? effect.url,
+      });
+    });
+  });
+  socket.on('presentation:encounter-sound-library', (urls) => {
+    void eventQueue.enqueue(async () => {
+      await preloadEncounterSounds(urls);
+    });
+  });
 
   const connect = (requestedName: string) => {
     const playerName = requestedName.trim().slice(0, 40);
@@ -508,6 +975,7 @@ export const createWebPlayerApi = ({
       return false;
     }
     window.localStorage.setItem('bossbar.multiplayer.player-name', playerName);
+    void preloadSessionManifest();
     socket.auth = {
       roomCode,
       playerToken,
@@ -523,5 +991,16 @@ export const createWebPlayerApi = ({
     socket.connect();
     return true;
   };
-  return { api: api as BossAPI, canConnect: true, connect, socket };
+  const leave = () => {
+    snapshotLoadSequence += 1;
+    eventQueue.reset();
+    clearPendingCombatImpacts();
+    socket.disconnect();
+  };
+  const dispose = () => {
+    clearPendingCombatImpacts();
+    clearTransientMediaCache();
+    socket.disconnect();
+  };
+  return { api: api as BossAPI, canConnect: true, connect, leave, dispose, socket };
 };

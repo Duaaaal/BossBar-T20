@@ -224,6 +224,10 @@ const bossAPI = {
     ipcRenderer.invoke('multiplayer:copy-link', link),
   openHostedSessionAsPlayer: (): Promise<boolean> =>
     ipcRenderer.invoke('multiplayer:open-local-player'),
+  approveHostedPlayer: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:approve-player', requestId),
+  rejectHostedPlayer: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:reject-player', requestId),
   getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
     ipcRenderer.invoke('library:get-entries'),
   saveBossToLibrary: (
@@ -334,6 +338,9 @@ const bossAPI = {
   },
   encounterEffectFinished: (effectId: number) => {
     ipcRenderer.send('encounter-effects:playback-finished', effectId);
+  },
+  encounterEffectStarted: (effectId: number) => {
+    ipcRenderer.send('encounter-effects:playback-started', effectId);
   },
   musicTrackEnded: () => {
     ipcRenderer.send('music:track-ended');

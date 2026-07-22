@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bundledAssetUrl } from '../src/shared/bundled-assets.ts';
 import {
+  createOrderedEventQueue,
+  publicMediaUrlsFromSnapshot,
   toBattleState,
   toScenePlan,
   toSoundboardState,
 } from '../src/web-player-api.ts';
+import { MULTIPLAYER_PROTOCOL_VERSION } from '../src/shared/multiplayer.ts';
 
 const publicBattle = {
   bosses: [{
@@ -24,6 +27,31 @@ const publicBattle = {
   hudVisible: true,
   revision: 7,
 };
+
+test('mantém eventos na ordem de chegada mesmo quando a primeira mídia demora', async () => {
+  const queue = createOrderedEventQueue();
+  const published = [];
+  const first = queue.enqueue(async (isCurrent) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (isCurrent()) published.push('primeiro');
+  });
+  const second = queue.enqueue(() => published.push('segundo'));
+  await Promise.all([first, second]);
+  assert.deepEqual(published, ['primeiro', 'segundo']);
+});
+
+test('descarta eventos antigos quando um snapshot substitui a fila', async () => {
+  const queue = createOrderedEventQueue();
+  const published = [];
+  const stale = queue.enqueue(async (isCurrent) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (isCurrent()) published.push('antigo');
+  });
+  queue.reset();
+  const current = queue.enqueue(() => published.push('atual'));
+  await Promise.all([stale, current]);
+  assert.deepEqual(published, ['atual']);
+});
 
 test('adapta somente o estado público ao HUD legado do Electron', () => {
   const result = toBattleState(publicBattle);
@@ -79,4 +107,77 @@ test('usa rota HTTP somente quando o renderer web a habilita', () => {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
   }
+});
+
+test('pré-carrega apenas as mídias públicas presentes no snapshot atual', () => {
+  const urls = publicMediaUrlsFromSnapshot({
+    protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
+    revision: 1,
+    battle: publicBattle,
+    background: {
+      url: '/session-media/background?access=token',
+      name: null,
+      mediaType: 'image',
+    },
+    scene: {
+      phaseMarkers: [],
+      activePhaseIndex: 0,
+      blackoutActive: false,
+      revision: 1,
+    },
+    encounterEffects: {
+      volume: 0.8,
+      universalMuted: false,
+      general: { automaticStatusEffects: true, showPhaseMarkers: false },
+      sounds: {
+        damage: true,
+        criticalDamage: true,
+        heal: true,
+        shield: true,
+      },
+      visuals: {
+        screenShake: true,
+        healthBarShake: true,
+        damageEffect: true,
+        healEffect: true,
+        particles: true,
+        floatingDamageNumbers: true,
+        healthValues: false,
+      },
+    },
+    music: {
+      tracks: [{
+        id: 'track-1',
+        name: 'Tema',
+        url: '/session-media/music?access=token',
+        duration: 90,
+      }],
+      currentTrackId: 'track-1',
+      isPlaying: false,
+      loop: false,
+      volume: 0.8,
+      muted: false,
+      universalMuted: false,
+      playbackVersion: 0,
+      currentTime: 0,
+      synchronizedAt: 0,
+      revision: 1,
+    },
+    soundboard: {
+      volume: 0.8,
+      muted: false,
+      loop: false,
+      universalMuted: false,
+      revision: 1,
+    },
+    encounterSoundUrls: [
+      '/session-media/damage?access=token',
+      '/session-media/damage?access=token',
+    ],
+  });
+  assert.deepEqual(urls, [
+    '/session-media/background?access=token',
+    '/session-media/music?access=token',
+    '/session-media/damage?access=token',
+  ]);
 });

@@ -592,6 +592,22 @@ const MasterApp = () => {
     }
   };
 
+  const decideHostedPlayer = async (
+    requestId: string,
+    approved: boolean,
+  ) => {
+    try {
+      const changed = approved
+        ? await window.bossAPI.approveHostedPlayer(requestId)
+        : await window.bossAPI.rejectHostedPlayer(requestId);
+      if (!changed) {
+        showHostedSessionFeedback('A solicitação não está mais disponível.');
+      }
+    } catch {
+      showHostedSessionFeedback('Não foi possível responder à solicitação.');
+    }
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const unpreparedBosses = state.bosses.filter(
@@ -734,6 +750,31 @@ const MasterApp = () => {
               </p>
             </div>
           </div>
+
+          {hostedSession.pendingJoinRequests.length > 0 && (
+            <div className="hosted-join-requests">
+              <div className="hosted-roster-heading">
+                <span>Solicitações de entrada</span>
+                <small>Batalha em andamento</small>
+              </div>
+              <ol className="hosted-request-list">
+                {hostedSession.pendingJoinRequests.map((request) => (
+                  <li className="hosted-request" key={request.id}>
+                    <span title={request.name}>{request.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => void decideHostedPlayer(request.id, true)}
+                    >Aprovar</button>
+                    <button
+                      className="is-reject"
+                      type="button"
+                      onClick={() => void decideHostedPlayer(request.id, false)}
+                    >Recusar</button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
 
           <div className="hosted-roster-heading">
             <span>Jogadores conectados</span>

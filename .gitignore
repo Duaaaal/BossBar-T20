@@ -93,5 +93,13 @@ out/
 out.next/
 out.previous/
 
+# Playwright
+playwright-report/
+blob-report/
+test-results/
+
+# Local disposable test profiles
+.e2e-profile/
+
 # TypeScript output
 dist/
