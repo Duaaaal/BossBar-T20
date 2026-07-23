@@ -5,7 +5,7 @@
 
   **Uma apresentação audiovisual de encontros de RPG, controlada pelo mestre e transmitida aos jogadores.**
 
-  ![Versão](https://img.shields.io/badge/versão-2.0.0--alpha.0-8d1f2d)
+  ![Versão](https://img.shields.io/badge/versão-2.0.0--alpha.2-8d1f2d)
   ![Plataforma](https://img.shields.io/badge/plataforma-Windows-326ca8)
   ![Electron](https://img.shields.io/badge/Electron-43-47848f)
   ![Uso](https://img.shields.io/badge/uso-local%20ou%20web-c99545)

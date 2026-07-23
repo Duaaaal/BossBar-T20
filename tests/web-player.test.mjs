@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bundledAssetUrl } from '../src/shared/bundled-assets.ts';
 import {
+  criticalMediaUrlsFromSnapshot,
   createOrderedEventQueue,
   publicMediaUrlsFromSnapshot,
   toBattleState,
@@ -110,7 +111,7 @@ test('usa rota HTTP somente quando o renderer web a habilita', () => {
 });
 
 test('pré-carrega apenas as mídias públicas presentes no snapshot atual', () => {
-  const urls = publicMediaUrlsFromSnapshot({
+  const snapshot = {
     protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
     revision: 1,
     battle: publicBattle,
@@ -174,10 +175,15 @@ test('pré-carrega apenas as mídias públicas presentes no snapshot atual', () 
       '/session-media/damage?access=token',
       '/session-media/damage?access=token',
     ],
-  });
+  };
+  const urls = publicMediaUrlsFromSnapshot(snapshot);
   assert.deepEqual(urls, [
     '/session-media/background?access=token',
     '/session-media/music?access=token',
     '/session-media/damage?access=token',
+  ]);
+  assert.deepEqual(criticalMediaUrlsFromSnapshot(snapshot), [
+    '/session-media/background?access=token',
+    '/session-media/music?access=token',
   ]);
 });

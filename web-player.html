@@ -18,18 +18,18 @@
         <button id="web-player-character-expand" type="button" aria-label="Mostrar detalhes da ficha" aria-expanded="false">&#9776;</button>
       </header>
       <div class="web-player-character-vitals">
-        <div class="web-player-character-bar is-health" data-calculation="PV atuais em relação aos PV máximos">
+        <div class="web-player-character-bar is-health">
           <span id="web-player-character-health-fill"></span>
           <output id="web-player-character-health-value">0/0</output>
         </div>
-        <div class="web-player-character-bar is-mana" data-calculation="PM atuais em relação aos PM máximos">
+        <div class="web-player-character-bar is-mana">
           <span id="web-player-character-mana-fill"></span>
           <output id="web-player-character-mana-value">0/0</output>
         </div>
       </div>
       <div class="web-player-character-defenses">
-        <span id="web-player-character-defense-melee" tabindex="0">CaC 0</span>
-        <span id="web-player-character-defense-ranged" tabindex="0">AaD 0</span>
+        <span id="web-player-character-defense-melee" tabindex="-1">CaC 0</span>
+        <span id="web-player-character-defense-ranged" tabindex="-1">AaD 0</span>
       </div>
       <section class="web-player-character-details" id="web-player-character-details" hidden>
         <p id="web-player-character-class-level"></p>
@@ -109,7 +109,6 @@
       <div class="web-player-dialog-card web-player-tools-card">
         <button class="web-player-dialog-close" id="web-player-sheet-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-dialog-title">Ficha do personagem</h1>
-        <p>Envie a Ficha T20 v.2.0 preenchida para validar os campos e cálculos.</p>
         <div class="web-player-sheet-upload-row">
           <div class="web-player-sheet-file-field">
             <input id="web-player-sheet-input" type="file" accept="application/pdf,.pdf" />
@@ -141,22 +140,38 @@
     <section class="web-player-dialog web-player-notes-dialog" id="web-player-notes-dialog" role="dialog" aria-labelledby="notes-dialog-title" hidden>
       <div class="web-player-dialog-card web-player-tools-card web-player-notes-card">
         <button class="web-player-dialog-close" id="web-player-notes-close" type="button" aria-label="Fechar">&times;</button>
+        <span class="web-player-notes-resize-handle is-n" data-notes-resize="n" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-ne" data-notes-resize="ne" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-e" data-notes-resize="e" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-se" data-notes-resize="se" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-s" data-notes-resize="s" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-sw" data-notes-resize="sw" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-w" data-notes-resize="w" aria-hidden="true"></span>
+        <span class="web-player-notes-resize-handle is-nw" data-notes-resize="nw" aria-hidden="true"></span>
         <header class="web-player-notes-drag-handle" id="web-player-notes-drag-handle">
           <h1 id="notes-dialog-title">Bloco de notas</h1>
         </header>
         <div class="web-player-notes-tabs" id="web-player-notes-tabs" role="tablist" aria-label="Notas"></div>
         <div class="web-player-notes-toolbar" aria-label="Formatação das notas">
-          <label for="web-player-notes-font-size">Tamanho</label>
-          <select id="web-player-notes-font-size" aria-label="Tamanho da fonte">
-            <option value="2">Pequena</option>
-            <option value="3" selected>Normal</option>
-            <option value="4">Grande</option>
-            <option value="5">Muito grande</option>
-          </select>
-          <button type="button" data-notes-command="bold" aria-label="Negrito"><strong>N</strong></button>
-          <button type="button" data-notes-command="italic" aria-label="Itálico"><em>I</em></button>
-          <button type="button" data-notes-command="underline" aria-label="Sublinhado"><u>S</u></button>
-          <button type="button" data-notes-command="insertOrderedList" aria-label="Lista numerada">1)</button>
+          <span class="web-player-notes-title-control">
+            <label for="web-player-notes-title">Título</label>
+            <input id="web-player-notes-title" type="text" maxlength="40" aria-label="Título da nota">
+          </span>
+          <span class="web-player-notes-size-control">
+            <label for="web-player-notes-font-size">Tamanho</label>
+            <select id="web-player-notes-font-size" aria-label="Tamanho da fonte">
+              <option value="2">Pequena</option>
+              <option value="3" selected>Normal</option>
+              <option value="4">Grande</option>
+              <option value="5">Muito grande</option>
+            </select>
+          </span>
+          <span class="web-player-notes-format-controls">
+            <button type="button" data-notes-command="bold" aria-label="Negrito"><strong>N</strong></button>
+            <button type="button" data-notes-command="italic" aria-label="Itálico"><em>I</em></button>
+            <button type="button" data-notes-command="underline" aria-label="Sublinhado"><u>S</u></button>
+            <button type="button" data-notes-command="insertOrderedList" aria-label="Lista numerada">1)</button>
+          </span>
         </div>
         <div class="web-player-notes-editor" id="web-player-notes-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Escreva suas notas…"></div>
         <div class="web-player-dialog-actions web-player-notes-actions">

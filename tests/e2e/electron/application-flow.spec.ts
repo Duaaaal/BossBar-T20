@@ -54,7 +54,12 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     const control = await windowByTitle(application, 'Painel Privado do Encontro - BossBar T20');
 
     await expect(master.getByRole('button', { name: 'Abrir bloco de notas' })).toHaveText('📝');
-    await expect(master.locator('.master-header')).toHaveCSS('text-align', 'right');
+    await expect(master.locator('.master-header')).toHaveCSS('text-align', 'left');
+    await master.getByRole('button', { name: 'Abrir bloco de notas' }).click();
+    await expect(master.getByLabel('Título da nota')).toHaveValue('Nota 1');
+    await master.getByLabel('Título da nota').fill('Sessão automatizada');
+    await expect(master.getByRole('tab', { name: 'Sessão automatizada' })).toBeVisible();
+    await master.getByRole('button', { name: 'Fechar' }).click();
     await expect(control.getByRole('button', { name: /Dano em área/ })).toHaveCount(0);
     await expect(control.getByLabel('CD do teste de Reflexos')).toHaveCount(0);
 

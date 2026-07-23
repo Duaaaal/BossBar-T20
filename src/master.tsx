@@ -710,6 +710,17 @@ const MasterApp = () => {
     }));
   };
 
+  const updateActiveMasterNoteTitle = (title: string) => {
+    const normalizedTitle = title.slice(0, 40);
+    setMasterNotes((current) => ({
+      ...current,
+      tabs: current.tabs.map((tab) => tab.id === current.activeTabId
+        ? { ...tab, title: normalizedTitle }
+        : tab),
+    }));
+    setMasterNotesStatus('');
+  };
+
   const selectMasterNoteTab = (tabId: string) => {
     setMasterNotes((current) => ({
       ...captureMasterNotesEditor(current),
@@ -1183,6 +1194,15 @@ const MasterApp = () => {
               >+</button>
             </div>
             <div className="master-notes-toolbar" aria-label="Formatação da nota">
+              <label htmlFor="master-notes-title-input">Título</label>
+              <input
+                id="master-notes-title-input"
+                type="text"
+                maxLength={40}
+                aria-label="Título da nota"
+                value={masterNotes.tabs.find(({ id }) => id === masterNotes.activeTabId)?.title ?? ''}
+                onChange={(event) => updateActiveMasterNoteTitle(event.target.value)}
+              />
               <label htmlFor="master-notes-font-size">Tamanho</label>
               <select
                 id="master-notes-font-size"

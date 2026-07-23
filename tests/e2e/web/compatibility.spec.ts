@@ -5,12 +5,14 @@ import {
   TEST_MEDIA_IDS,
 } from '../support/hosted-session';
 
-test('confirma o nome e só revela a apresentação depois de carregar as mídias', async ({ page }) => {
+test('revela a cena atual sem aguardar mídias futuras e continua o preload', async ({ page }) => {
   const session = await startHostedTestSession();
   try {
+    let futureVideoLoaded = false;
     await page.route(`**/session-media/${TEST_MEDIA_IDS.video}*`, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 650));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
       await route.continue();
+      futureVideoLoaded = true;
     });
 
     await page.goto(session.inviteUrl);
@@ -20,12 +22,12 @@ test('confirma o nome e só revela a apresentação depois de carregar as mídia
     await expect(page.getByRole('dialog', { name: 'Confirmar usuário' })).toBeVisible();
     await expect(page.locator('#web-player-confirmed-name')).toHaveText('Jogador Compatível');
     await page.locator('#web-player-password-confirm').fill('test-password');
+    await expect(page.locator('.player-stage')).toHaveCount(0);
     await page.getByRole('button', { name: 'Confirmar' }).click();
 
-    await expect(page.locator('#web-player-pending')).toBeVisible();
-    await expect(page.locator('.player-stage')).toHaveCount(0);
     await expect(page.locator('.player-stage')).toBeVisible();
     await expect(page.getByText('Aguardando todos os jogadores estarem prontos')).toBeVisible();
+    expect(futureVideoLoaded).toBe(false);
 
     for (const mediaId of [
       TEST_MEDIA_IDS.background,
@@ -33,9 +35,13 @@ test('confirma o nome e só revela a apresentação depois de carregar as mídia
       TEST_MEDIA_IDS.video,
       TEST_MEDIA_IDS.music,
     ]) {
-      expect(session.mediaRequests.get(mediaId), `${mediaId} não foi requisitado`).toBeGreaterThan(0);
+      await expect.poll(
+        () => session.mediaRequests.get(mediaId) ?? 0,
+        { message: `${mediaId} não foi requisitado` },
+      ).toBeGreaterThan(0);
     }
     expect(session.mediaRequests.get(TEST_MEDIA_IDS.background)).toBe(1);
+    await expect.poll(() => futureVideoLoaded).toBe(true);
   } finally {
     await session.close();
   }

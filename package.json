@@ -1,7 +1,7 @@
 {
   "name": "bossbar-t20",
   "productName": "BossBar - Tormenta20",
-  "version": "2.0.1-alpha.0",
+  "version": "2.0.0-alpha.2",
   "description": "Painel de mestre e apresentação local ou web de chefões para sessões de RPG.",
   "main": ".vite/build/main.js",
   "private": true,

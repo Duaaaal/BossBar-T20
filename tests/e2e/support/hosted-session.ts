@@ -109,7 +109,7 @@ export type HostedTestSession = {
 
 export const createEditableCharacterSheet = async () => {
   const document = await PDFDocument.create();
-  document.addPage([600, 800]);
+  const page = document.addPage([600, 800]);
   const form = document.getForm();
   const values: Record<string, string> = {
     'NOME DO PERSONAGEM': 'Valora',
@@ -129,6 +129,10 @@ export const createEditableCharacterSheet = async () => {
     CA: '10', 'Base CA': '10', 'B.Arm': '0', 'B.Esc': '0',
     'Outros B.CA': '0', ModAtribDefe: '0',
     TesteResist: '10', ModAtribMagia: '0',
+    Desloc: '9m', SeleTamanho: 'Médio', CargaTotal: '3',
+    'Ataque 1': 'Espada longa', 'Bônus Atq 1': '+5',
+    'Dano 1': '1d8+2', 'Crítico 1': '19/x2',
+    'Tipo 1': 'Corte', 'Alcance 1': 'Corpo a corpo',
     'Descrição': '', Pa: '0', Pe: '0', ModFurtTam: '0',
   };
   for (let index = 1; index <= 30; index += 1) {
@@ -138,6 +142,8 @@ export const createEditableCharacterSheet = async () => {
     values[index === 30 ? '303' : `${String(index).padStart(2, '0')}3`] = '0';
     values[index === 30 ? '304' : `${String(index).padStart(2, '0')}4`] = '0';
   }
+  values['270'] = '2';
+  values['273'] = '2';
   for (const name of [
     'ModAtribAcro', 'ModAtribAdes', 'ModAtribAtle', 'ModAtribAtua',
     'ModAtribCava', 'ModAtribConh', 'ModAtribCura', 'ModAtribDipl',
@@ -151,7 +157,12 @@ export const createEditableCharacterSheet = async () => {
   for (const [name, value] of Object.entries(values)) {
     form.createTextField(name).setText(value);
   }
-  form.createCheckBox('arm pesa').check();
+  const heavyArmor = form.createCheckBox('arm pesa');
+  heavyArmor.addToPage(page, { x: 8, y: 8, width: 8, height: 8 });
+  heavyArmor.check();
+  const trainedReflexes = form.createCheckBox('Mar Trei refle');
+  trainedReflexes.addToPage(page, { x: 20, y: 8, width: 8, height: 8 });
+  trainedReflexes.check();
   return Buffer.from(await document.save({ updateFieldAppearances: false }));
 };
 

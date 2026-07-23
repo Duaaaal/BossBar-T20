@@ -651,8 +651,10 @@ export class MultiplayerSessionServer {
       reply.header('Cache-Control', 'no-store');
       const account = authenticatedAccount(request.headers);
       if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
-      const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
-      if (!sheet) return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
+      const profile = options.playerProfileStore.profileById(account.session.profileId);
+      if (!profile?.sheet.hasSheet) {
+        return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
+      }
       const now = Date.now();
       for (const [ticket, value] of sheetViewTickets) {
         if (value.expiresAt <= now) sheetViewTickets.delete(ticket);
@@ -667,7 +669,7 @@ export class MultiplayerSessionServer {
     app.get('/api/player/sheet/view', {
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
     }, async (request, reply) => {
-      reply.header('Cache-Control', 'private, no-store, max-age=0');
+      reply.header('Cache-Control', 'private, max-age=300');
       const query = request.query as { ticket?: unknown };
       const ticket = typeof query.ticket === 'string' ? query.ticket : '';
       const authorization = sheetViewTickets.get(ticket);

@@ -12,6 +12,12 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
   const secondContext = await browser.newContext();
   try {
     const firstPage = await firstContext.newPage();
+    let sheetTicketRequests = 0;
+    firstPage.on('request', (request) => {
+      if (/\/api\/player\/sheet\/view-ticket$/.test(new URL(request.url()).pathname)) {
+        sheetTicketRequests += 1;
+      }
+    });
     await joinHostedSession(firstPage, session.inviteUrl, 'Jogador Ferramentas');
 
     await firstPage.getByRole('button', { name: 'Bloco de notas' }).click();
@@ -19,7 +25,8 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     const notesCard = firstPage.locator('.web-player-notes-card');
     await expect(notesDialog).toBeVisible();
     await expect(firstPage.getByRole('button', { name: 'Lista numerada' })).toHaveText('1)');
-    await expect(notesCard).toHaveCSS('resize', 'both');
+    await expect(firstPage.locator('[data-notes-resize]')).toHaveCount(8);
+    await expect(firstPage.getByLabel('Título da nota')).toHaveValue('Nota 1');
     await expect(firstPage.getByRole('button', { name: 'Limpar' })).toBeVisible();
     await expect(firstPage.getByRole('button', { name: 'Salvar' })).toBeVisible();
     const clearBounds = await firstPage.getByRole('button', { name: 'Limpar' }).boundingBox();
@@ -40,8 +47,44 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       element.style.height = '100px';
     });
     const constrainedNotesBounds = await notesCard.boundingBox();
-    expect(constrainedNotesBounds?.width ?? 0).toBeGreaterThanOrEqual(500);
-    expect(constrainedNotesBounds?.height ?? 0).toBeGreaterThanOrEqual(410);
+    expect(constrainedNotesBounds?.width ?? 0).toBeGreaterThanOrEqual(440);
+    expect(constrainedNotesBounds?.height ?? 0).toBeGreaterThanOrEqual(380);
+    expect(await notesCard.evaluate((card) => {
+      const cardBounds = card.getBoundingClientRect();
+      return [
+        '.web-player-notes-tabs',
+        '.web-player-notes-toolbar',
+        '.web-player-notes-editor',
+        '.web-player-notes-actions',
+      ].every((selector) => {
+        const element = card.querySelector<HTMLElement>(selector);
+        if (!element) return false;
+        const bounds = element.getBoundingClientRect();
+        return bounds.left >= cardBounds.left &&
+          bounds.right <= cardBounds.right &&
+          bounds.top >= cardBounds.top &&
+          bounds.bottom <= cardBounds.bottom;
+      });
+    })).toBe(true);
+    const eastHandle = firstPage.locator('[data-notes-resize="e"]');
+    const eastBounds = await eastHandle.boundingBox();
+    if (!eastBounds || !constrainedNotesBounds) throw new Error('Alça lateral sem dimensões.');
+    await firstPage.mouse.move(eastBounds.x + eastBounds.width / 2, eastBounds.y + 40);
+    await firstPage.mouse.down();
+    await firstPage.mouse.move(eastBounds.x + 45, eastBounds.y + 40, { steps: 3 });
+    await firstPage.mouse.up();
+    const widenedNotesBounds = await notesCard.boundingBox();
+    expect(widenedNotesBounds?.width ?? 0).toBeGreaterThan(constrainedNotesBounds.width);
+    const northHandle = firstPage.locator('[data-notes-resize="n"]');
+    const northBounds = await northHandle.boundingBox();
+    if (!northBounds || !widenedNotesBounds) throw new Error('Alça superior sem dimensões.');
+    await firstPage.mouse.move(northBounds.x + 40, northBounds.y + northBounds.height / 2);
+    await firstPage.mouse.down();
+    await firstPage.mouse.move(northBounds.x + 40, northBounds.y - 35, { steps: 3 });
+    await firstPage.mouse.up();
+    const heightenedNotesBounds = await notesCard.boundingBox();
+    expect(heightenedNotesBounds?.height ?? 0).toBeGreaterThan(widenedNotesBounds.height);
+    expect(heightenedNotesBounds?.y ?? 0).toBeLessThan(widenedNotesBounds.y);
     await firstPage.keyboard.press('Escape');
     await expect(notesDialog).toBeVisible();
     await firstPage.mouse.click(8, 360);
@@ -52,6 +95,8 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await firstPage.getByRole('button', { name: 'Negrito' }).click();
     await expect(notesEditor.locator('b, strong')).toHaveText('Portal vermelho');
     await expect(firstPage.locator('#web-player-notes-preview')).toHaveCount(0);
+    await firstPage.getByLabel('Título da nota').fill('Portais');
+    await expect(firstPage.getByRole('tab', { name: 'Portais' })).toBeVisible();
 
     await firstPage.getByRole('button', { name: 'Criar nova nota' }).click();
     await expect(firstPage.getByRole('tab', { name: 'Nota 2' })).toHaveAttribute('aria-selected', 'true');
@@ -79,6 +124,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
+    await expect.poll(() => sheetTicketRequests).toBe(1);
     await firstPage.locator('#web-player-sheet-close').click();
 
     const characterHud = firstPage.locator('#web-player-character-hud');
@@ -91,6 +137,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await firstPage.locator('#web-player-character-expand').click();
     await expect(firstPage.locator('#web-player-character-details')).toBeVisible();
     await expect(firstPage.locator('#web-player-character-class-level')).toContainText('Guerreiro');
+    await expect(firstPage.locator('#web-player-character-class-level')).not.toHaveAttribute('data-calculation');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('Modificadores de atributo');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('FOR');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('+2');
@@ -99,13 +146,44 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       .filter({ hasText: 'FOR' });
     await strengthRow.hover();
     const calculationTooltip = firstPage.locator('#web-player-calculation-tooltip');
-    await expect(calculationTooltip).toBeVisible();
-    await expect(calculationTooltip).toContainText('modificador oficial');
-    const [hudBounds, tooltipBounds] = await Promise.all([
-      characterHud.boundingBox(),
-      calculationTooltip.boundingBox(),
-    ]);
-    expect(tooltipBounds?.x ?? 0).toBeLessThan((hudBounds?.x ?? 0) - 100);
+    await expect(strengthRow).not.toHaveAttribute('data-calculation');
+    await expect(calculationTooltip).toBeHidden();
+    const trainedSkill = firstPage
+      .locator('#web-player-character-skills .web-player-character-detail-row')
+      .filter({ hasText: 'Reflexos' });
+    await expect(trainedSkill).toHaveClass(/is-trained/);
+    await expect(trainedSkill).not.toContainText('• T');
+    await trainedSkill.hover();
+    await expect(calculationTooltip).toContainText('(atributo)');
+    await expect(calculationTooltip).toContainText('(treino)');
+    const sizeRow = firstPage
+      .locator('#web-player-character-movement .web-player-character-detail-row')
+      .filter({ hasText: 'Tamanho' });
+    await sizeRow.hover();
+    await expect(sizeRow).toHaveAttribute('data-calculation', /Tamanho da ficha/);
+    await expect(calculationTooltip).toContainText('Tamanho da ficha: Médio');
+    const movementRow = firstPage
+      .locator('#web-player-character-movement .web-player-character-detail-row')
+      .filter({ hasText: 'Deslocamento' });
+    await movementRow.hover();
+    await expect(calculationTooltip).toContainText('Deslocamento da ficha: 9m');
+    const loadRow = firstPage
+      .locator('#web-player-character-movement .web-player-character-detail-row')
+      .filter({ hasText: 'Carga' });
+    await loadRow.hover();
+    await expect(calculationTooltip).toContainText('10 + 2 × FOR 2 = 14');
+    await firstPage.locator('.web-player-character-bar.is-health').hover();
+    await expect(calculationTooltip).toContainText('PV da ficha: 21/21');
+    await firstPage.locator('.web-player-character-bar.is-mana').hover();
+    await expect(calculationTooltip).toContainText('PM da ficha: 3/3');
+    await firstPage.locator('#web-player-character-defense-melee').hover();
+    await expect(calculationTooltip).toContainText('Defesa CaC:');
+    const attackRow = firstPage
+      .locator('#web-player-character-attacks .web-player-character-detail-row')
+      .filter({ hasText: 'Espada longa' });
+    await attackRow.hover();
+    await expect(calculationTooltip).toContainText('Teste +5');
+    await expect(calculationTooltip).toContainText('dano 1d8+2');
 
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
@@ -135,7 +213,8 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       renewedSheetPopupPromise,
       renewedSheetRequestPromise,
     ]);
-    expect(renewedSheetRequest.url()).not.toBe(pdfUrl);
+    expect(renewedSheetRequest.url()).toBe(pdfUrl);
+    expect(sheetTicketRequests).toBe(1);
     await renewedSheetPopup.close();
     await firstPage.locator('#web-player-sheet-selection-remove').click();
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeHidden();
@@ -150,7 +229,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(secondPage.getByRole('tab', { name: 'Nota 2' })).toHaveAttribute('aria-selected', 'true');
     await expect(persistedEditor).toContainText('Ordem da investigação');
     await expect(persistedEditor.locator('i, em')).toHaveText('Ordem da investigação');
-    await secondPage.getByRole('tab', { name: 'Nota 1' }).click();
+    await secondPage.getByRole('tab', { name: 'Portais' }).click();
     await expect(persistedEditor).toContainText('Portal vermelho');
     await expect(persistedEditor.locator('b, strong')).toHaveText('Portal vermelho');
 

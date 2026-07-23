@@ -273,6 +273,18 @@ export const publicMediaUrlsFromSnapshot = (
   ...(snapshot.encounterSoundUrls ?? []),
 ].filter((url): url is string => Boolean(url)))];
 
+export const criticalMediaUrlsFromSnapshot = (
+  snapshot: MultiplayerSessionSnapshot,
+) => {
+  const currentTrackUrl = snapshot.music.tracks.find(
+    ({ id }) => id === snapshot.music.currentTrackId,
+  )?.url;
+  return [...new Set([
+    snapshot.background.url,
+    currentTrackUrl,
+  ].filter((url): url is string => Boolean(url)))];
+};
+
 const connectionErrorMessages: Record<MultiplayerConnectionErrorCode, string> = {
   ACCOUNT_AUTH_REQUIRED: 'Entre novamente com seu usuário e senha.',
   INVALID_AUTH: 'O link desta sessão é inválido.',
@@ -382,6 +394,16 @@ export const createWebPlayerApi = ({
   let authenticatedUsername = '';
   let currentSheet: PlayerCharacterSheetStatus | null = null;
   let currentNotes = '';
+  let accountStatusCache: {
+    username: string;
+    expiresAt: number;
+    request: Promise<PlayerAccountStatus>;
+  } | null = null;
+  let sheetViewUrlCache: {
+    url: string;
+    expiresAt: number;
+  } | null = null;
+  let sheetViewUrlRequest: Promise<string> | null = null;
 
   const inviteHeaders = () => ({
     Authorization: `Bearer ${playerToken}`,
@@ -402,17 +424,72 @@ export const createWebPlayerApi = ({
     }
   };
 
+  const invalidateCharacterSheetViewUrl = () => {
+    sheetViewUrlCache = null;
+    sheetViewUrlRequest = null;
+  };
+
+  const createCharacterSheetViewUrl = async () => {
+    if (sheetViewUrlCache && sheetViewUrlCache.expiresAt > Date.now()) {
+      return sheetViewUrlCache.url;
+    }
+    if (sheetViewUrlRequest) return sheetViewUrlRequest;
+    const request = fetch('/api/player/sheet/view-ticket', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: accountHeaders(),
+    }).then(async (response) => {
+      const result = await response.json() as { ok?: boolean; url?: string; error?: string };
+      if (!response.ok || !result.ok || !result.url) {
+        throw new Error(result.error ?? 'Não foi possível liberar o acesso à ficha.');
+      }
+      sheetViewUrlCache = {
+        url: result.url,
+        expiresAt: Date.now() + 8 * 60_000,
+      };
+      return result.url;
+    }).finally(() => {
+      if (sheetViewUrlRequest === request) sheetViewUrlRequest = null;
+    });
+    sheetViewUrlRequest = request;
+    return request;
+  };
+
+  const prefetchCharacterSheetViewUrl = async () => {
+    if (!accountToken || !currentSheet?.hasSheet) return;
+    try {
+      await createCharacterSheetViewUrl();
+    } catch {
+      // Opening the sheet reports the actionable error if the user requests it.
+    }
+  };
+
   const getAccountStatus = async (username: string): Promise<PlayerAccountStatus> => {
-    const response = await fetch('/api/player/account-status', {
+    const normalizedUsername = username.trim().normalize('NFKC').toLocaleLowerCase('pt-BR');
+    if (
+      accountStatusCache?.username === normalizedUsername &&
+      accountStatusCache.expiresAt > Date.now()
+    ) return accountStatusCache.request;
+    const request = fetch('/api/player/account-status', {
       method: 'POST',
       cache: 'no-store',
       headers: inviteHeaders(),
       body: JSON.stringify({ username }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error(await readError(response, 'Não foi possível verificar este usuário.'));
+      }
+      return response.json() as Promise<PlayerAccountStatus>;
+    }).catch((error) => {
+      if (accountStatusCache?.request === request) accountStatusCache = null;
+      throw error;
     });
-    if (!response.ok) {
-      throw new Error(await readError(response, 'Não foi possível verificar este usuário.'));
-    }
-    return response.json() as Promise<PlayerAccountStatus>;
+    accountStatusCache = {
+      username: normalizedUsername,
+      expiresAt: Date.now() + 30_000,
+      request,
+    };
+    return request;
   };
 
   const authenticateAccount = async (
@@ -434,6 +511,7 @@ export const createWebPlayerApi = ({
     authenticatedUsername = result.username;
     currentSheet = result.sheet ?? null;
     currentNotes = result.notes ?? '';
+    if (currentSheet?.hasSheet) void prefetchCharacterSheetViewUrl();
     return result;
   };
 
@@ -449,7 +527,11 @@ export const createWebPlayerApi = ({
       body: file,
     });
     const result = await response.json() as CharacterSheetUploadResult;
-    if (result.sheet) currentSheet = result.sheet;
+    if (result.sheet) {
+      currentSheet = result.sheet;
+      invalidateCharacterSheetViewUrl();
+      if (currentSheet.hasSheet) void prefetchCharacterSheetViewUrl();
+    }
     return result;
   };
 
@@ -460,7 +542,11 @@ export const createWebPlayerApi = ({
       headers: accountHeaders('application/json'),
     });
     const result = await response.json() as CharacterSheetUploadResult;
-    if (result.sheet) currentSheet = result.sheet;
+    if (result.sheet) {
+      currentSheet = result.sheet;
+      invalidateCharacterSheetViewUrl();
+      if (currentSheet.hasSheet) void prefetchCharacterSheetViewUrl();
+    }
     return result;
   };
 
@@ -475,19 +561,6 @@ export const createWebPlayerApi = ({
     return response.blob();
   };
 
-  const createCharacterSheetViewUrl = async () => {
-    const response = await fetch('/api/player/sheet/view-ticket', {
-      method: 'POST',
-      cache: 'no-store',
-      headers: accountHeaders(),
-    });
-    const result = await response.json() as { ok?: boolean; url?: string; error?: string };
-    if (!response.ok || !result.ok || !result.url) {
-      throw new Error(result.error ?? 'Não foi possível liberar o acesso à ficha.');
-    }
-    return result.url;
-  };
-
   const removeCharacterSheet = async (): Promise<CharacterSheetUploadResult> => {
     const response = await fetch('/api/player/sheet', {
       method: 'DELETE',
@@ -495,7 +568,10 @@ export const createWebPlayerApi = ({
       headers: accountHeaders(),
     });
     const result = await response.json() as CharacterSheetUploadResult;
-    if (result.ok) currentSheet = result.sheet ?? null;
+    if (result.ok) {
+      currentSheet = result.sheet ?? null;
+      invalidateCharacterSheetViewUrl();
+    }
     return result;
   };
 
@@ -635,7 +711,7 @@ export const createWebPlayerApi = ({
     const queue = [...new Set(urls.filter((url): url is string => Boolean(url)))];
     let loaded = true;
     const workers = Array.from(
-      { length: Math.min(3, queue.length) },
+      { length: Math.min(4, queue.length) },
       async () => {
         while (queue.length > 0) {
           const url = queue.shift();
@@ -848,13 +924,11 @@ export const createWebPlayerApi = ({
       state: 'preloading',
       message: 'Carregando a cena e os sons do encontro…',
     });
-    const [, currentMediaLoaded] = await Promise.all([
-      preloadSessionManifest(),
-      waitForMediaUrls(
-        publicMediaUrlsFromSnapshot(snapshot),
-        () => loadSequence === snapshotLoadSequence,
-      ),
-    ]);
+    void preloadSessionManifest();
+    const currentMediaLoaded = await waitForMediaUrls(
+      criticalMediaUrlsFromSnapshot(snapshot),
+      () => loadSequence === snapshotLoadSequence,
+    );
     if (loadSequence !== snapshotLoadSequence) return;
     if (!currentMediaLoaded) {
       onConnectionState({

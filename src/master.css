@@ -21,8 +21,8 @@ button { font: inherit; cursor: pointer; }
     linear-gradient(150deg, #18141a, #0d0b0f 72%);
 }
 .master-loading { display: grid; min-height: 100vh; place-items: center; background: #0f0d11; color: #918794; }
-.master-header { padding-right: 130px; text-align: right; }
-.master-brand { display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; margin: 0; font-family: Georgia, "Times New Roman", serif; }
+.master-header { padding-right: 130px; text-align: left; }
+.master-brand { display: flex; align-items: baseline; justify-content: flex-start; gap: 5px; margin: 0; font-family: Georgia, "Times New Roman", serif; }
 .master-brand span { color: #f0d6ad; font-size: 1.2rem; font-weight: 800; }
 .master-brand small { color: #756b78; font-family: Inter, sans-serif; font-size: .55rem; font-weight: 900; text-transform: uppercase; }
 .master-brand strong { color: #d36975; font-size: 1rem; }
@@ -341,7 +341,9 @@ button { font: inherit; cursor: pointer; }
 .master-notes-tab-add { width: 32px; min-height: 32px; flex: 0 0 auto; border: 1px solid #59435a; border-radius: 7px; background: transparent; color: #d1b7c7; font-size: 1rem; }
 .master-notes-toolbar { display: flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px solid #493b4b; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 7px; background: #141015; }
 .master-notes-toolbar label { color: #aaa0ac; font-size: .62rem; font-weight: 800; }
+.master-notes-toolbar input,
 .master-notes-toolbar select { height: 29px; border: 1px solid #58485a; border-radius: 6px; padding: 0 7px; background: #100d12; color: #ddd2df; font-size: .63rem; }
+.master-notes-toolbar input { width: min(220px, 34vw); }
 .master-notes-toolbar button { min-width: 30px; min-height: 29px; border: 1px solid #58485a; border-radius: 6px; padding: 0 7px; background: transparent; color: #ddd2df; font-size: .68rem; }
 .master-notes-toolbar button:hover { border-color: #9b6681; background: rgba(128, 67, 96, .22); color: #fff; }
 .master-notes-editor { min-height: 330px; max-height: min(52vh, 480px); overflow: auto; border: 1px solid #493b4b; border-radius: 0 0 8px 8px; outline: none; padding: 13px; background: #100d12; color: #d9cedb; font: .72rem/1.55 Inter, sans-serif; white-space: pre-wrap; }

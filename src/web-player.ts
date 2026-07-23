@@ -84,6 +84,7 @@ const notesCard = notesDialog?.querySelector<HTMLElement>('.web-player-notes-car
 const notesDragHandle = document.getElementById('web-player-notes-drag-handle');
 const notesTabsElement = document.getElementById('web-player-notes-tabs');
 const notesEditor = document.getElementById('web-player-notes-editor');
+const notesTitleInput = document.getElementById('web-player-notes-title');
 const notesFontSize = document.getElementById('web-player-notes-font-size');
 const notesSaveButton = document.getElementById('web-player-notes-save');
 const notesClearButton = document.getElementById('web-player-notes-clear');
@@ -235,7 +236,12 @@ const boundedPercent = (current: number | null, maximum: number | null) => {
 
 const detailSection = (
   title: string,
-  rows: Array<{ label: string; value: string; calculation?: string }>,
+  rows: Array<{
+    label: string;
+    value: string;
+    calculation?: string;
+    highlighted?: boolean;
+  }>,
 ) => {
   const section = document.createElement('section');
   section.className = 'web-player-character-detail-section';
@@ -244,7 +250,7 @@ const detailSection = (
   section.append(heading);
   for (const row of rows) {
     const element = document.createElement('div');
-    element.className = 'web-player-character-detail-row';
+    element.className = `web-player-character-detail-row${row.highlighted ? ' is-trained' : ''}`;
     element.tabIndex = row.calculation ? 0 : -1;
     if (row.calculation) element.dataset.calculation = row.calculation;
     const label = document.createElement('span');
@@ -357,22 +363,30 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   }
   if (characterClassLevel) {
     characterClassLevel.textContent = `${summary.characterClass || 'Classe não informada'} • Nível ${summary.level ?? '—'}`;
-    characterClassLevel.tabIndex = 0;
-    characterClassLevel.dataset.calculation = `Classe ${summary.characterClass || 'não informada'} e nível ${summary.level ?? 'não informado'}, conforme a ficha enviada.`;
+    characterClassLevel.tabIndex = -1;
+    delete characterClassLevel.dataset.calculation;
   }
   if (characterHealthFill instanceof HTMLElement) {
     characterHealthFill.style.width = `${boundedPercent(currentHealth, maxHealth)}%`;
-    characterHealthFill.parentElement?.setAttribute(
+    const healthBar = characterHealthFill.parentElement;
+    const healthChanged = currentHealth !== summary.currentHealth || maxHealth !== summary.maxHealth;
+    healthBar?.setAttribute(
       'data-calculation',
-      `${currentHealth ?? '—'} PV atuais de ${maxHealth ?? '—'} PV máximos. Alterações da sessão não modificam o PDF.`,
+      healthChanged
+        ? `PV da ficha: ${summary.currentHealth ?? '—'}/${summary.maxHealth ?? '—'}. PV atuais: ${currentHealth ?? '—'}/${maxHealth ?? '—'}.`
+        : `PV da ficha: ${currentHealth ?? '—'}/${maxHealth ?? '—'}.`,
     );
   }
   if (characterHealthValue) characterHealthValue.textContent = `${currentHealth ?? '—'}/${maxHealth ?? '—'}`;
   if (characterManaFill instanceof HTMLElement) {
     characterManaFill.style.width = `${boundedPercent(currentMana, maxMana)}%`;
-    characterManaFill.parentElement?.setAttribute(
+    const manaBar = characterManaFill.parentElement;
+    const manaChanged = currentMana !== summary.currentMana || maxMana !== summary.maxMana;
+    manaBar?.setAttribute(
       'data-calculation',
-      `${currentMana ?? '—'} PM atuais de ${maxMana ?? '—'} PM máximos. Alterações da sessão não modificam o PDF.`,
+      manaChanged
+        ? `PM da ficha: ${summary.currentMana ?? '—'}/${summary.maxMana ?? '—'}. PM atuais: ${currentMana ?? '—'}/${maxMana ?? '—'}.`
+        : `PM da ficha: ${currentMana ?? '—'}/${maxMana ?? '—'}.`,
     );
   }
   if (characterManaValue) characterManaValue.textContent = `${currentMana ?? '—'}/${maxMana ?? '—'}`;
@@ -382,8 +396,9 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       ? defenseMelee - defenses.melee
       : 0;
     characterDefenseMelee.dataset.calculation = modifier === 0
-      ? defenses.calculation
-      : `${defenses.calculation}; ${modifier > 0 ? '+' : ''}${modifier} temporário = ${defenseMelee}.`;
+      ? `Defesa CaC: ${defenses.calculation}.`
+      : `Defesa CaC: ${defenses.calculation}; ${modifier > 0 ? '+' : '−'} ${Math.abs(modifier)} temporário = ${defenseMelee}.`;
+    characterDefenseMelee.tabIndex = 0;
     characterDefenseMelee.classList.toggle(
       'is-penalty',
       defenseMelee !== null && defenses.melee !== null && defenseMelee < defenses.melee,
@@ -399,8 +414,9 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       ? defenseRanged - defenses.ranged
       : 0;
     characterDefenseRanged.dataset.calculation = modifier === 0
-      ? defenses.calculation
-      : `${defenses.calculation}; ${modifier > 0 ? '+' : ''}${modifier} temporário = ${defenseRanged}.`;
+      ? `Defesa AaD: ${defenses.calculation}.`
+      : `Defesa AaD: ${defenses.calculation}; ${modifier > 0 ? '+' : '−'} ${Math.abs(modifier)} temporário = ${defenseRanged}.`;
+    characterDefenseRanged.tabIndex = 0;
     characterDefenseRanged.classList.toggle(
       'is-penalty',
       defenseRanged !== null && defenses.ranged !== null && defenseRanged < defenses.ranged,
@@ -435,28 +451,48 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
         return {
           label: attributeLabels[attribute],
           value: displayed,
-          calculation: `${attributeLabels[attribute]} ${displayed}: modificador oficial informado na ficha do Jogo do Ano.`,
         };
       }),
     ));
   }
   if (characterMovement) {
+    const strength = summary.attributes.for ?? 0;
+    const loadFormula = strength >= 0
+      ? `10 + 2 × FOR ${strength} = ${summary.maxLoad ?? '—'}`
+      : `10 + FOR ${strength} = ${summary.maxLoad ?? '—'}`;
     characterMovement.replaceChildren(detailSection('Movimento e carga', [
-      { label: 'Deslocamento', value: summary.movement || '—', calculation: 'Valor informado no campo Deslocamento da ficha.' },
-      { label: 'Tamanho', value: summary.size || '—', calculation: 'Categoria de tamanho selecionada na ficha.' },
+      {
+        label: 'Deslocamento',
+        value: summary.movement || '—',
+        calculation: `Deslocamento da ficha: ${summary.movement || '—'}.`,
+      },
+      {
+        label: 'Tamanho',
+        value: summary.size || '—',
+        calculation: `Tamanho da ficha: ${summary.size || '—'}.`,
+      },
       {
         label: 'Carga',
         value: `${summary.currentLoad ?? '—'}/${summary.maxLoad ?? '—'} espaços`,
-        calculation: `Regra do Jogo do Ano: limite calculado a partir de Força ${summary.attributes.for ?? 0}.`,
+        calculation: `Carga atual da ficha: ${summary.currentLoad ?? '—'} espaços. Limite: ${loadFormula} espaços.`,
       },
     ]));
   }
   if (characterSkills) {
-    characterSkills.replaceChildren(detailSection('Perícias', skills.map((skill) => ({
-      label: `${skill.name}${skill.trained ? ' • T' : ''}`,
-      value: skill.total === null ? '—' : `${skill.total >= 0 ? '+' : ''}${skill.total}`,
-      calculation: skill.calculation,
-    }))));
+    characterSkills.replaceChildren(detailSection('Perícias', skills.map((skill) => {
+      const encounterTotal = skill.id === '270' || skill.name === 'Reflexos'
+        ? playerEncounterState?.reflex ?? skill.total
+        : skill.total;
+      const changed = encounterTotal !== skill.total;
+      return {
+        label: skill.name,
+        value: encounterTotal === null ? '—' : `${encounterTotal >= 0 ? '+' : ''}${encounterTotal}`,
+        highlighted: skill.trained,
+        calculation: changed
+          ? `Reflexos ${skill.total ?? '—'} ${encounterTotal !== null && skill.total !== null && encounterTotal >= skill.total ? '+' : '−'} ${skill.total === null || encounterTotal === null ? '—' : Math.abs(encounterTotal - skill.total)} = ${encounterTotal ?? '—'}.`
+          : skill.calculation,
+      };
+    })));
   }
   if (characterAttacks) {
     characterAttacks.replaceChildren(detailSection('Ataques', attacks.length
@@ -593,6 +629,9 @@ const renderNotesTabs = () => {
 
 const renderNotesEditor = () => {
   renderNotesTabs();
+  if (notesTitleInput instanceof HTMLInputElement) {
+    notesTitleInput.value = activeNoteTab()?.title ?? '';
+  }
   if (notesEditor instanceof HTMLElement) {
     notesEditor.innerHTML = sanitizeNotesHtml(activeNoteTab()?.html ?? '');
   }
@@ -769,7 +808,20 @@ type NotesDragState = {
   offsetY: number;
 };
 
+type NotesResizeDirection = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
+type NotesResizeState = {
+  pointerId: number;
+  direction: NotesResizeDirection;
+  startX: number;
+  startY: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 let notesDragState: NotesDragState | null = null;
+let notesResizeState: NotesResizeState | null = null;
 
 function keepNotesCardInsideViewport() {
   if (!notesCard || notesDialog?.hasAttribute('hidden')) return;
@@ -829,9 +881,82 @@ const finishNotesDrag = (event: PointerEvent) => {
 
 notesDragHandle?.addEventListener('pointerup', finishNotesDrag);
 notesDragHandle?.addEventListener('pointercancel', finishNotesDrag);
+
+for (const handle of document.querySelectorAll<HTMLElement>('[data-notes-resize]')) {
+  handle.addEventListener('pointerdown', (event) => {
+    if (!notesCard || event.button !== 0) return;
+    const direction = handle.dataset.notesResize as NotesResizeDirection | undefined;
+    if (!direction) return;
+    const bounds = notesCard.getBoundingClientRect();
+    notesCard.style.width = `${bounds.width}px`;
+    notesCard.style.height = `${bounds.height}px`;
+    notesCard.style.transform = 'none';
+    notesCard.style.left = `${bounds.left}px`;
+    notesCard.style.top = `${bounds.top}px`;
+    notesResizeState = {
+      pointerId: event.pointerId,
+      direction,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!notesCard || notesResizeState?.pointerId !== event.pointerId) return;
+    const state = notesResizeState;
+    const gap = 8;
+    const minWidth = Math.min(440, window.innerWidth - gap * 2);
+    const minHeight = Math.min(380, window.innerHeight - gap * 2);
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    const west = state.direction.includes('w');
+    const east = state.direction.includes('e');
+    const north = state.direction.includes('n');
+    const south = state.direction.includes('s');
+    const widthLimit = west
+      ? state.left + state.width - gap
+      : window.innerWidth - state.left - gap;
+    const heightLimit = north
+      ? state.top + state.height - gap
+      : window.innerHeight - state.top - gap;
+    const requestedWidth = west
+      ? state.width - deltaX
+      : east ? state.width + deltaX : state.width;
+    const requestedHeight = north
+      ? state.height - deltaY
+      : south ? state.height + deltaY : state.height;
+    const width = Math.max(minWidth, Math.min(widthLimit, requestedWidth));
+    const height = Math.max(minHeight, Math.min(heightLimit, requestedHeight));
+    notesCard.style.width = `${width}px`;
+    notesCard.style.height = `${height}px`;
+    notesCard.style.left = `${west ? state.left + state.width - width : state.left}px`;
+    notesCard.style.top = `${north ? state.top + state.height - height : state.top}px`;
+  });
+  const finishResize = (event: PointerEvent) => {
+    if (notesResizeState?.pointerId !== event.pointerId) return;
+    notesResizeState = null;
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  };
+  handle.addEventListener('pointerup', finishResize);
+  handle.addEventListener('pointercancel', finishResize);
+}
+
 window.addEventListener('resize', keepNotesCardInsideViewport);
 
 notesEditor?.addEventListener('input', flushActiveNote);
+notesTitleInput?.addEventListener('input', () => {
+  if (!(notesTitleInput instanceof HTMLInputElement)) return;
+  const tab = activeNoteTab();
+  if (!tab) return;
+  tab.title = notesTitleInput.value.slice(0, 40);
+  renderNotesTabs();
+});
 notesEditor?.addEventListener('paste', (event) => {
   event.preventDefault();
   document.execCommand('insertText', false, event.clipboardData?.getData('text/plain') ?? '');
@@ -885,6 +1010,10 @@ notesClearConfirmButton?.addEventListener('click', () => {
 
 if (nameInput instanceof HTMLInputElement) {
   nameInput.value = window.localStorage.getItem('bossbar.multiplayer.player-name') ?? '';
+  nameInput.addEventListener('blur', () => {
+    const username = nameInput.value.trim().slice(0, 40);
+    if (username) void getAccountStatus(username).catch(() => undefined);
+  });
   nameInput.focus();
 }
 
