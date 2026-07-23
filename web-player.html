@@ -11,19 +11,59 @@
   </head>
   <body>
     <div id="root"></div>
+    <aside class="web-player-character-hud" id="web-player-character-hud" aria-label="Ficha resumida do personagem" hidden>
+      <div class="web-player-character-statuses" id="web-player-character-statuses" aria-label="Condições do personagem"></div>
+      <header>
+        <strong id="web-player-character-name">Personagem</strong>
+        <button id="web-player-character-expand" type="button" aria-label="Mostrar detalhes da ficha" aria-expanded="false">&#9776;</button>
+      </header>
+      <div class="web-player-character-vitals">
+        <div class="web-player-character-bar is-health" data-calculation="PV atuais em relação aos PV máximos">
+          <span id="web-player-character-health-fill"></span>
+          <output id="web-player-character-health-value">0/0</output>
+        </div>
+        <div class="web-player-character-bar is-mana" data-calculation="PM atuais em relação aos PM máximos">
+          <span id="web-player-character-mana-fill"></span>
+          <output id="web-player-character-mana-value">0/0</output>
+        </div>
+      </div>
+      <div class="web-player-character-defenses">
+        <span id="web-player-character-defense-melee" tabindex="0">CaC 0</span>
+        <span id="web-player-character-defense-ranged" tabindex="0">AaD 0</span>
+      </div>
+      <section class="web-player-character-details" id="web-player-character-details" hidden>
+        <p id="web-player-character-class-level"></p>
+        <div id="web-player-character-attributes"></div>
+        <div id="web-player-character-movement"></div>
+        <div id="web-player-character-skills"></div>
+        <div id="web-player-character-attacks"></div>
+      </section>
+    </aside>
+    <div class="web-player-calculation-tooltip" id="web-player-calculation-tooltip" role="tooltip" hidden></div>
+    <div class="web-player-reflex-results" id="web-player-reflex-results" aria-live="polite"></div>
     <section class="web-player-join" id="web-player-join" aria-labelledby="join-title">
       <form class="web-player-join-card" id="web-player-join-form">
         <span class="web-player-join-mark" aria-hidden="true"></span>
         <h1 id="join-title">Entrar no encontro</h1>
-        <p>Informe como o mestre identificará você nesta sessão.</p>
-        <label for="web-player-name">Nome do jogador</label>
+        <p>Informe seu usuário e senha.</p>
+        <label for="web-player-name">Usuário</label>
         <input
           id="web-player-name"
           name="playerName"
           type="text"
           minlength="1"
           maxlength="40"
-          autocomplete="nickname"
+          autocomplete="username"
+          required
+        />
+        <label for="web-player-password">Senha</label>
+        <input
+          id="web-player-password"
+          name="password"
+          type="password"
+          minlength="3"
+          maxlength="128"
+          autocomplete="current-password"
           required
         />
         <button type="submit">Entrar</button>
@@ -32,9 +72,14 @@
     <section class="web-player-dialog" id="web-player-name-confirm" role="dialog" aria-modal="true" aria-labelledby="name-confirm-title" hidden>
       <div class="web-player-dialog-card">
         <span class="web-player-join-mark" aria-hidden="true"></span>
-        <h1 id="name-confirm-title">Confirmar nome</h1>
-        <p>Você entrará no encontro como</p>
+        <h1 id="name-confirm-title">Confirmar usuário</h1>
+        <p id="web-player-confirm-message">Você entrará no encontro como</p>
         <strong id="web-player-confirmed-name"></strong>
+        <label class="web-player-password-confirm" id="web-player-password-confirm-label" for="web-player-password-confirm" hidden>
+          <span>Repita a senha para criar este usuário</span>
+          <input id="web-player-password-confirm" type="password" minlength="3" maxlength="128" autocomplete="new-password" />
+        </label>
+        <p class="web-player-dialog-error" id="web-player-auth-error" role="alert" hidden></p>
         <div class="web-player-dialog-actions">
           <button id="web-player-name-back" type="button">Alterar</button>
           <button id="web-player-name-submit" type="button">Confirmar</button>
@@ -56,6 +101,81 @@
       </div>
     </section>
     <button class="web-player-change-name" id="web-player-change-name" type="button" hidden>Trocar nome</button>
+    <nav class="web-player-tools" id="web-player-tools" aria-label="Ferramentas do jogador" hidden>
+      <button id="web-player-sheet-button" type="button">Ficha</button>
+      <button id="web-player-notes-button" type="button">Bloco de notas</button>
+    </nav>
+    <section class="web-player-dialog web-player-sheet-dialog" id="web-player-sheet-dialog" role="dialog" aria-modal="true" aria-labelledby="sheet-dialog-title" hidden>
+      <div class="web-player-dialog-card web-player-tools-card">
+        <button class="web-player-dialog-close" id="web-player-sheet-close" type="button" aria-label="Fechar">&times;</button>
+        <h1 id="sheet-dialog-title">Ficha do personagem</h1>
+        <p>Envie a Ficha T20 v.2.0 preenchida para validar os campos e cálculos.</p>
+        <div class="web-player-sheet-upload-row">
+          <div class="web-player-sheet-file-field">
+            <input id="web-player-sheet-input" type="file" accept="application/pdf,.pdf" />
+            <button class="web-player-sheet-remove-x" id="web-player-sheet-selection-remove" type="button" aria-label="Limpar arquivo escolhido" title="Limpar arquivo escolhido" hidden>&times;</button>
+          </div>
+          <a id="web-player-blank-sheet" href="/api/player/blank-sheet" download="Ficha_T20_v.2.0.pdf">Baixar ficha vazia</a>
+        </div>
+        <button class="web-player-sheet-open" id="web-player-sheet-open" type="button" disabled>Abrir para ajustar</button>
+        <div class="web-player-sheet-linked-row">
+          <p class="web-player-sheet-status" id="web-player-sheet-status" role="status"></p>
+          <button class="web-player-sheet-linked-remove" id="web-player-sheet-remove" type="button" aria-label="Remover ficha vinculada" title="Remover ficha vinculada" hidden>&times;</button>
+        </div>
+        <ul class="web-player-sheet-issues" id="web-player-sheet-issues"></ul>
+        <div class="web-player-dialog-actions web-player-sheet-actions">
+          <button id="web-player-sheet-fix" type="button" hidden>Corrigir automaticamente</button>
+        </div>
+      </div>
+    </section>
+    <section class="web-player-dialog" id="web-player-sheet-remove-confirm" role="dialog" aria-modal="true" aria-labelledby="sheet-remove-title" hidden>
+      <div class="web-player-dialog-card">
+        <h1 id="sheet-remove-title">Remover ficha?</h1>
+        <p>A ficha vinculada a este usuário será excluída. Esta ação não pode ser desfeita.</p>
+        <div class="web-player-dialog-actions">
+          <button id="web-player-sheet-remove-cancel" type="button">Cancelar</button>
+          <button class="web-player-confirm-danger" id="web-player-sheet-remove-confirm-button" type="button">Remover</button>
+        </div>
+      </div>
+    </section>
+    <section class="web-player-dialog web-player-notes-dialog" id="web-player-notes-dialog" role="dialog" aria-labelledby="notes-dialog-title" hidden>
+      <div class="web-player-dialog-card web-player-tools-card web-player-notes-card">
+        <button class="web-player-dialog-close" id="web-player-notes-close" type="button" aria-label="Fechar">&times;</button>
+        <header class="web-player-notes-drag-handle" id="web-player-notes-drag-handle">
+          <h1 id="notes-dialog-title">Bloco de notas</h1>
+        </header>
+        <div class="web-player-notes-tabs" id="web-player-notes-tabs" role="tablist" aria-label="Notas"></div>
+        <div class="web-player-notes-toolbar" aria-label="Formatação das notas">
+          <label for="web-player-notes-font-size">Tamanho</label>
+          <select id="web-player-notes-font-size" aria-label="Tamanho da fonte">
+            <option value="2">Pequena</option>
+            <option value="3" selected>Normal</option>
+            <option value="4">Grande</option>
+            <option value="5">Muito grande</option>
+          </select>
+          <button type="button" data-notes-command="bold" aria-label="Negrito"><strong>N</strong></button>
+          <button type="button" data-notes-command="italic" aria-label="Itálico"><em>I</em></button>
+          <button type="button" data-notes-command="underline" aria-label="Sublinhado"><u>S</u></button>
+          <button type="button" data-notes-command="insertOrderedList" aria-label="Lista numerada">1)</button>
+        </div>
+        <div class="web-player-notes-editor" id="web-player-notes-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Escreva suas notas…"></div>
+        <div class="web-player-dialog-actions web-player-notes-actions">
+          <span id="web-player-notes-status" role="status"></span>
+          <button id="web-player-notes-clear" type="button">Limpar</button>
+          <button id="web-player-notes-save" type="button">Salvar</button>
+        </div>
+      </div>
+    </section>
+    <section class="web-player-dialog" id="web-player-notes-clear-confirm" role="dialog" aria-modal="true" aria-labelledby="notes-clear-title" hidden>
+      <div class="web-player-dialog-card">
+        <h1 id="notes-clear-title">Limpar esta nota?</h1>
+        <p>Todo o conteúdo da aba atual será apagado.</p>
+        <div class="web-player-dialog-actions">
+          <button id="web-player-notes-clear-cancel" type="button">Cancelar</button>
+          <button class="web-player-confirm-danger" id="web-player-notes-clear-confirm-button" type="button">Limpar</button>
+        </div>
+      </div>
+    </section>
     <div id="web-player-status" role="status" aria-live="polite"></div>
     <script type="module" src="/src/web-player.ts"></script>
   </body>

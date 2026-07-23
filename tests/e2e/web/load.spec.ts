@@ -35,8 +35,10 @@ test('dez jogadores recebem mídia e o mesmo impacto sem divergência', async ({
     contexts.push(extraContext);
     const extraPage = await extraContext.newPage();
     await extraPage.goto(session.inviteUrl);
-    await extraPage.getByLabel('Nome do jogador').fill('Jogador Extra');
+    await extraPage.locator('#web-player-name').fill('Jogador Extra');
+    await extraPage.locator('#web-player-password').fill('test-password');
     await extraPage.getByRole('button', { name: 'Entrar' }).click();
+    await extraPage.locator('#web-player-password-confirm').fill('test-password');
     await extraPage.getByRole('button', { name: 'Confirmar' }).click();
     await expect(extraPage.locator('#web-player-status')).toContainText('limite de 10 jogadores');
     expect(session.server.getPresence().connectedPlayers).toBe(10);

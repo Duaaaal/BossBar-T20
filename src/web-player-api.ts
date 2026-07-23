@@ -1,5 +1,12 @@
 import { io, type Socket } from 'socket.io-client';
 import type { BossAPI } from './shared/api.ts';
+import type {
+  CharacterSheetUploadResult,
+  NotesSaveResult,
+  PlayerAccountStatus,
+  PlayerAuthenticationResult,
+  PlayerCharacterSheetStatus,
+} from './shared/character-sheet.ts';
 import {
   initialBattleState,
   initialEncounterEffectsState,
@@ -28,6 +35,10 @@ import {
   type MultiplayerServerToClientEvents,
   type MultiplayerSessionSnapshot,
 } from './shared/multiplayer.ts';
+import type {
+  PlayerAreaDamageImpact,
+  PlayerEncounterState,
+} from './shared/player-combat.ts';
 import {
   createScenePlan,
   type ScenePlan,
@@ -263,6 +274,7 @@ export const publicMediaUrlsFromSnapshot = (
 ].filter((url): url is string => Boolean(url)))];
 
 const connectionErrorMessages: Record<MultiplayerConnectionErrorCode, string> = {
+  ACCOUNT_AUTH_REQUIRED: 'Entre novamente com seu usuário e senha.',
   INVALID_AUTH: 'O link desta sessão é inválido.',
   INVALID_CLIENT_ID: 'Não foi possível identificar este navegador.',
   INVALID_NAME: 'O nome deste jogador não é válido.',
@@ -318,9 +330,13 @@ const getConnectionErrorCode = (error: Error & { data?: unknown }) => {
 export const createWebPlayerApi = ({
   onConnectionState,
   onSessionReady,
+  onPlayerState,
+  onPlayerCombatImpact,
 }: {
   onConnectionState: (state: WebPlayerConnectionState) => void;
   onSessionReady?: () => void;
+  onPlayerState?: (state: PlayerEncounterState | null) => void;
+  onPlayerCombatImpact?: (impact: PlayerAreaDamageImpact) => void;
 }) => {
   const battle = createChannel<BattleState>(initialBattleState);
   const background = createChannel<BackgroundState>(emptyBackgroundState);
@@ -362,6 +378,138 @@ export const createWebPlayerApi = ({
   let snapshotLoadSequence = 0;
   let manifestPreloadPromise: Promise<boolean> | null = null;
   let residentMediaBytes = 0;
+  let accountToken = '';
+  let authenticatedUsername = '';
+  let currentSheet: PlayerCharacterSheetStatus | null = null;
+  let currentNotes = '';
+
+  const inviteHeaders = () => ({
+    Authorization: `Bearer ${playerToken}`,
+    'Content-Type': 'application/json',
+    'X-BossBar-Room': roomCode,
+  });
+  const accountHeaders = (contentType?: string) => ({
+    Authorization: `Bearer ${accountToken}`,
+    ...(contentType ? { 'Content-Type': contentType } : {}),
+    'X-BossBar-Room': roomCode,
+  });
+  const readError = async (response: Response, fallback: string) => {
+    try {
+      const payload = await response.json() as { error?: unknown };
+      return typeof payload.error === 'string' ? payload.error : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const getAccountStatus = async (username: string): Promise<PlayerAccountStatus> => {
+    const response = await fetch('/api/player/account-status', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: inviteHeaders(),
+      body: JSON.stringify({ username }),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response, 'Não foi possível verificar este usuário.'));
+    }
+    return response.json() as Promise<PlayerAccountStatus>;
+  };
+
+  const authenticateAccount = async (
+    username: string,
+    password: string,
+    createAccount: boolean,
+  ): Promise<PlayerAuthenticationResult> => {
+    const response = await fetch('/api/player/authenticate', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: inviteHeaders(),
+      body: JSON.stringify({ username, password, createAccount, clientId }),
+    });
+    const result = await response.json() as PlayerAuthenticationResult;
+    if (!response.ok || !result.ok || !result.sessionToken || !result.username) {
+      return { ok: false, error: result.error ?? 'Não foi possível entrar.' };
+    }
+    accountToken = result.sessionToken;
+    authenticatedUsername = result.username;
+    currentSheet = result.sheet ?? null;
+    currentNotes = result.notes ?? '';
+    return result;
+  };
+
+  const uploadCharacterSheet = async (file: File): Promise<CharacterSheetUploadResult> => {
+    if (!accountToken) return { ok: false, error: 'Entre novamente para enviar a ficha.' };
+    const response = await fetch('/api/player/sheet', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        ...accountHeaders('application/pdf'),
+        'X-BossBar-Filename': encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const result = await response.json() as CharacterSheetUploadResult;
+    if (result.sheet) currentSheet = result.sheet;
+    return result;
+  };
+
+  const automaticallyFixCharacterSheet = async (): Promise<CharacterSheetUploadResult> => {
+    const response = await fetch('/api/player/sheet/autofix', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: accountHeaders('application/json'),
+    });
+    const result = await response.json() as CharacterSheetUploadResult;
+    if (result.sheet) currentSheet = result.sheet;
+    return result;
+  };
+
+  const fetchCharacterSheetBlob = async () => {
+    const response = await fetch('/api/player/sheet', {
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response, 'Não foi possível abrir a ficha.'));
+    }
+    return response.blob();
+  };
+
+  const createCharacterSheetViewUrl = async () => {
+    const response = await fetch('/api/player/sheet/view-ticket', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    const result = await response.json() as { ok?: boolean; url?: string; error?: string };
+    if (!response.ok || !result.ok || !result.url) {
+      throw new Error(result.error ?? 'Não foi possível liberar o acesso à ficha.');
+    }
+    return result.url;
+  };
+
+  const removeCharacterSheet = async (): Promise<CharacterSheetUploadResult> => {
+    const response = await fetch('/api/player/sheet', {
+      method: 'DELETE',
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    const result = await response.json() as CharacterSheetUploadResult;
+    if (result.ok) currentSheet = result.sheet ?? null;
+    return result;
+  };
+
+  const saveNotes = async (content: string): Promise<NotesSaveResult> => {
+    const response = await fetch('/api/player/notes', {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: accountHeaders('application/json'),
+      body: JSON.stringify({ content }),
+    });
+    const result = await response.json() as NotesSaveResult;
+    if (result.ok && typeof result.content === 'string') currentNotes = result.content;
+    return result;
+  };
 
   const verifyMediaCanLoad = (
     url: string,
@@ -798,10 +946,23 @@ export const createWebPlayerApi = ({
     return {
       api: api as BossAPI,
       canConnect: false,
-      connect: () => false,
+      getAccountStatus,
+      connect: async () => ({ ok: false, error: 'O link da sessão está incompleto.' }),
       leave: () => undefined,
       dispose: () => undefined,
       socket: null,
+      uploadCharacterSheet,
+      automaticallyFixCharacterSheet,
+      fetchCharacterSheetBlob,
+      createCharacterSheetViewUrl,
+      removeCharacterSheet,
+      blankCharacterSheetUrl: '/api/player/blank-sheet',
+      saveNotes,
+      getPlayerToolsState: () => ({
+        username: authenticatedUsername,
+        sheet: currentSheet,
+        notes: currentNotes,
+      }),
     };
   }
 
@@ -899,6 +1060,16 @@ export const createWebPlayerApi = ({
       if (loaded && isCurrent()) enqueueCombatImpact(withResolvedCombatImpact(impact));
     });
   });
+  socket.on('player:state', (state) => {
+    void eventQueue.enqueue(() => onPlayerState?.(state));
+  });
+  socket.on('player:combat-impact', (impact) => {
+    void eventQueue.enqueue(() => {
+      // Life, check result and temporary modifiers are delivered in the same
+      // private event so this browser paints them in one ordered update.
+      onPlayerCombatImpact?.(impact);
+    });
+  });
   socket.on('presentation:background', (nextBackground) => {
     void eventQueue.enqueue(async (isCurrent) => {
       const loaded = await waitForMediaUrls([nextBackground.url], isCurrent);
@@ -965,21 +1136,30 @@ export const createWebPlayerApi = ({
     });
   });
 
-  const connect = (requestedName: string) => {
+  const connect = async (
+    requestedName: string,
+    password: string,
+    createAccount: boolean,
+  ): Promise<PlayerAuthenticationResult> => {
     const playerName = requestedName.trim().slice(0, 40);
     if (!playerName) {
       onConnectionState({
         state: 'error',
         message: 'Informe seu nome para entrar na sessão.',
       });
-      return false;
+      return { ok: false, error: 'Informe seu usuário para entrar na sessão.' };
     }
-    window.localStorage.setItem('bossbar.multiplayer.player-name', playerName);
+    const authentication = await authenticateAccount(playerName, password, createAccount);
+    if (!authentication.ok || !authentication.sessionToken || !authentication.username) {
+      return authentication;
+    }
+    window.localStorage.setItem('bossbar.multiplayer.player-name', authentication.username);
     void preloadSessionManifest();
     socket.auth = {
       roomCode,
       playerToken,
-      playerName,
+      playerName: authentication.username,
+      accountToken: authentication.sessionToken,
       clientId,
       protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
       ...(hostToken ? { hostToken } : {}),
@@ -989,7 +1169,7 @@ export const createWebPlayerApi = ({
       message: `Conectando à sala ${roomCode}…`,
     });
     socket.connect();
-    return true;
+    return authentication;
   };
   const leave = () => {
     snapshotLoadSequence += 1;
@@ -1002,5 +1182,25 @@ export const createWebPlayerApi = ({
     clearTransientMediaCache();
     socket.disconnect();
   };
-  return { api: api as BossAPI, canConnect: true, connect, leave, dispose, socket };
+  return {
+    api: api as BossAPI,
+    canConnect: true,
+    getAccountStatus,
+    connect,
+    leave,
+    dispose,
+    socket,
+    uploadCharacterSheet,
+    automaticallyFixCharacterSheet,
+    fetchCharacterSheetBlob,
+    createCharacterSheetViewUrl,
+    removeCharacterSheet,
+    blankCharacterSheetUrl: '/api/player/blank-sheet',
+    saveNotes,
+    getPlayerToolsState: () => ({
+      username: authenticatedUsername,
+      sheet: currentSheet,
+      notes: currentNotes,
+    }),
+  };
 };

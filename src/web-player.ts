@@ -2,6 +2,27 @@ import {
   createWebPlayerApi,
   type WebPlayerConnectionState,
 } from './web-player-api';
+import {
+  MAX_CHARACTER_SHEET_BYTES,
+  type PlayerCharacterSheetStatus,
+} from './shared/character-sheet';
+import {
+  createPlayerNotesDocument,
+  nextPlayerNoteTab,
+  parsePlayerNotesDocument,
+  serializePlayerNotesDocument,
+  type PlayerNotesDocument,
+} from './shared/player-notes';
+import { statusIconUrl } from './shared/bundled-assets';
+import type {
+  PlayerAreaDamageImpact,
+  PlayerEncounterState,
+} from './shared/player-combat';
+import {
+  getActiveStatusDescription,
+  getActiveStatusName,
+  getStatusDefinition,
+} from './shared/status';
 import './web-player.css';
 
 window.__BOSS_WEB_PLAYER__ = true;
@@ -11,6 +32,11 @@ const joinElement = document.getElementById('web-player-join');
 const closedElement = document.getElementById('web-player-closed');
 const joinForm = document.getElementById('web-player-join-form');
 const nameInput = document.getElementById('web-player-name');
+const passwordInput = document.getElementById('web-player-password');
+const passwordConfirmInput = document.getElementById('web-player-password-confirm');
+const passwordConfirmLabel = document.getElementById('web-player-password-confirm-label');
+const confirmMessageElement = document.getElementById('web-player-confirm-message');
+const authErrorElement = document.getElementById('web-player-auth-error');
 const nameConfirmElement = document.getElementById('web-player-name-confirm');
 const confirmedNameElement = document.getElementById('web-player-confirmed-name');
 const nameBackButton = document.getElementById('web-player-name-back');
@@ -19,11 +45,61 @@ const pendingElement = document.getElementById('web-player-pending');
 const pendingTitleElement = document.getElementById('web-player-pending-title');
 const pendingMessageElement = document.getElementById('web-player-pending-message');
 const changeNameButton = document.getElementById('web-player-change-name');
+const toolsElement = document.getElementById('web-player-tools');
+const sheetButton = document.getElementById('web-player-sheet-button');
+const sheetDialog = document.getElementById('web-player-sheet-dialog');
+const sheetCloseButton = document.getElementById('web-player-sheet-close');
+const sheetInput = document.getElementById('web-player-sheet-input');
+const sheetStatusElement = document.getElementById('web-player-sheet-status');
+const sheetIssuesElement = document.getElementById('web-player-sheet-issues');
+const sheetOpenButton = document.getElementById('web-player-sheet-open');
+const sheetFixButton = document.getElementById('web-player-sheet-fix');
+const sheetRemoveButton = document.getElementById('web-player-sheet-remove');
+const sheetSelectionRemoveButton = document.getElementById('web-player-sheet-selection-remove');
+const sheetRemoveDialog = document.getElementById('web-player-sheet-remove-confirm');
+const sheetRemoveCancelButton = document.getElementById('web-player-sheet-remove-cancel');
+const sheetRemoveConfirmButton = document.getElementById('web-player-sheet-remove-confirm-button');
+const characterHud = document.getElementById('web-player-character-hud');
+const characterStatuses = document.getElementById('web-player-character-statuses');
+const characterName = document.getElementById('web-player-character-name');
+const characterExpandButton = document.getElementById('web-player-character-expand');
+const characterDetails = document.getElementById('web-player-character-details');
+const characterClassLevel = document.getElementById('web-player-character-class-level');
+const characterHealthFill = document.getElementById('web-player-character-health-fill');
+const characterHealthValue = document.getElementById('web-player-character-health-value');
+const characterManaFill = document.getElementById('web-player-character-mana-fill');
+const characterManaValue = document.getElementById('web-player-character-mana-value');
+const characterDefenseMelee = document.getElementById('web-player-character-defense-melee');
+const characterDefenseRanged = document.getElementById('web-player-character-defense-ranged');
+const characterAttributes = document.getElementById('web-player-character-attributes');
+const characterMovement = document.getElementById('web-player-character-movement');
+const characterSkills = document.getElementById('web-player-character-skills');
+const characterAttacks = document.getElementById('web-player-character-attacks');
+const calculationTooltip = document.getElementById('web-player-calculation-tooltip');
+const reflexResults = document.getElementById('web-player-reflex-results');
+const notesButton = document.getElementById('web-player-notes-button');
+const notesDialog = document.getElementById('web-player-notes-dialog');
+const notesCloseButton = document.getElementById('web-player-notes-close');
+const notesCard = notesDialog?.querySelector<HTMLElement>('.web-player-notes-card') ?? null;
+const notesDragHandle = document.getElementById('web-player-notes-drag-handle');
+const notesTabsElement = document.getElementById('web-player-notes-tabs');
+const notesEditor = document.getElementById('web-player-notes-editor');
+const notesFontSize = document.getElementById('web-player-notes-font-size');
+const notesSaveButton = document.getElementById('web-player-notes-save');
+const notesClearButton = document.getElementById('web-player-notes-clear');
+const notesClearDialog = document.getElementById('web-player-notes-clear-confirm');
+const notesClearCancelButton = document.getElementById('web-player-notes-clear-cancel');
+const notesClearConfirmButton = document.getElementById('web-player-notes-clear-confirm-button');
+const notesStatusElement = document.getElementById('web-player-notes-status');
 let hideStatusTimer: ReturnType<typeof setTimeout> | null = null;
 let playerMounted = false;
 let sessionReady = false;
 let sessionClosed = false;
 let unmountPlayer: (() => void) | null = null;
+let creatingAccount = false;
+let authenticating = false;
+let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
+let playerEncounterState: PlayerEncounterState | null = null;
 
 const showConnectionState = ({
   state,
@@ -44,6 +120,9 @@ const showConnectionState = ({
     nameConfirmElement?.setAttribute('hidden', '');
     pendingElement?.setAttribute('hidden', '');
     changeNameButton?.setAttribute('hidden', '');
+    toolsElement?.setAttribute('hidden', '');
+    playerEncounterState = null;
+    characterHud?.setAttribute('hidden', '');
     closedElement?.removeAttribute('hidden');
     statusElement.dataset.visible = 'false';
     return;
@@ -81,11 +160,39 @@ const showConnectionState = ({
   }
 };
 
-const { api, canConnect, connect, leave, dispose, socket } = createWebPlayerApi({
+const {
+  api,
+  canConnect,
+  getAccountStatus,
+  connect,
+  leave,
+  dispose,
+  socket,
+  uploadCharacterSheet,
+  automaticallyFixCharacterSheet,
+  fetchCharacterSheetBlob,
+  createCharacterSheetViewUrl,
+  removeCharacterSheet,
+  saveNotes,
+  getPlayerToolsState,
+} = createWebPlayerApi({
   onConnectionState: showConnectionState,
+  onPlayerState: (state) => {
+    playerEncounterState = state;
+    renderCharacterSheet(getPlayerToolsState().sheet);
+  },
+  onPlayerCombatImpact: (impact) => {
+    playerEncounterState = impact.playerState;
+    renderCharacterSheet(getPlayerToolsState().sheet);
+    showReflexResult(impact);
+  },
   onSessionReady: () => {
     sessionReady = true;
     mountPlayer();
+    toolsElement?.removeAttribute('hidden');
+    renderCharacterSheet(getPlayerToolsState().sheet);
+    notesDocument = parsePlayerNotesDocument(getPlayerToolsState().notes);
+    renderNotesEditor();
     queueMicrotask(() => {
       void api.getState().then((state) => {
         changeNameButton?.toggleAttribute(
@@ -117,6 +224,665 @@ const mountPlayer = () => {
   });
 };
 
+const prepareSheetPreview = (sheet: PlayerCharacterSheetStatus | null) => {
+  sheetOpenButton?.toggleAttribute('disabled', !sheet?.hasSheet);
+};
+
+const boundedPercent = (current: number | null, maximum: number | null) => {
+  if (current === null || maximum === null || maximum <= 0) return 0;
+  return Math.max(0, Math.min(100, (current / maximum) * 100));
+};
+
+const detailSection = (
+  title: string,
+  rows: Array<{ label: string; value: string; calculation?: string }>,
+) => {
+  const section = document.createElement('section');
+  section.className = 'web-player-character-detail-section';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  section.append(heading);
+  for (const row of rows) {
+    const element = document.createElement('div');
+    element.className = 'web-player-character-detail-row';
+    element.tabIndex = row.calculation ? 0 : -1;
+    if (row.calculation) element.dataset.calculation = row.calculation;
+    const label = document.createElement('span');
+    label.textContent = row.label;
+    const value = document.createElement('small');
+    value.textContent = row.value;
+    element.append(label, value);
+    section.append(element);
+  }
+  return section;
+};
+
+const hideCalculationTooltip = () => {
+  calculationTooltip?.setAttribute('hidden', '');
+};
+
+const showCalculationTooltip = (target: HTMLElement) => {
+  const calculation = target.dataset.calculation;
+  if (!calculation || !calculationTooltip) return;
+  calculationTooltip.textContent = calculation;
+  calculationTooltip.removeAttribute('hidden');
+  const targetBounds = target.getBoundingClientRect();
+  const tooltipBounds = calculationTooltip.getBoundingClientRect();
+  const gap = 8;
+  const preferredLeft = targetBounds.left - tooltipBounds.width - gap;
+  const left = preferredLeft >= gap
+    ? preferredLeft
+    : Math.min(
+      window.innerWidth - tooltipBounds.width - gap,
+      targetBounds.right + gap,
+    );
+  const top = Math.min(
+    window.innerHeight - tooltipBounds.height - gap,
+    Math.max(gap, targetBounds.top),
+  );
+  calculationTooltip.style.left = `${Math.max(gap, left)}px`;
+  calculationTooltip.style.top = `${Math.max(gap, top)}px`;
+};
+
+const calculationTargetFromEvent = (event: Event) => {
+  const target = event.target;
+  return target instanceof Element
+    ? target.closest<HTMLElement>('[data-calculation]')
+    : null;
+};
+
+const renderCharacterStatuses = (state: PlayerEncounterState | null) => {
+  if (!characterStatuses) return;
+  characterStatuses.replaceChildren();
+  for (const activeStatus of state?.statuses ?? []) {
+    const definition = getStatusDefinition(activeStatus.statusId);
+    if (!definition) continue;
+    const item = document.createElement('span');
+    item.className = 'web-player-character-status';
+    item.tabIndex = 0;
+    const damage = activeStatus.damageFormula
+      ? ` Dano: ${activeStatus.damageFormula}.`
+      : '';
+    const duration = activeStatus.turnsRemaining === 1
+      ? '1 turno restante'
+      : `${activeStatus.turnsRemaining} turnos restantes`;
+    item.dataset.calculation = `${getActiveStatusName(activeStatus)}: ${getActiveStatusDescription(activeStatus)}${damage} ${duration}.`;
+    item.setAttribute('aria-label', item.dataset.calculation);
+    const icon = document.createElement('img');
+    icon.alt = '';
+    icon.draggable = false;
+    icon.src = statusIconUrl(definition.iconFile);
+    item.append(icon);
+    characterStatuses.append(item);
+  }
+};
+
+function showReflexResult(impact: PlayerAreaDamageImpact) {
+  if (!reflexResults) return;
+  const result = document.createElement('output');
+  result.className = `web-player-reflex-result ${impact.check.success ? 'is-success' : 'is-failure'}`;
+  result.textContent = `(${impact.check.die}) + (${impact.check.reflex}) = (${impact.check.total})`;
+  const consequence = document.createElement('small');
+  consequence.textContent = impact.damage.applied > 0
+    ? ` −${impact.damage.applied} PV`
+    : ' sem dano';
+  result.append(consequence);
+  reflexResults.append(result);
+  window.setTimeout(() => result.remove(), 4_200);
+}
+
+const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
+  const summary = sheet?.hasSheet ? sheet.validation?.summary : null;
+  if (!summary) {
+    characterHud?.setAttribute('hidden', '');
+    return;
+  }
+  const defenses = summary.defenses ?? {
+    melee: summary.defense,
+    ranged: summary.defense,
+    calculation: 'Defesa informada na ficha.',
+  };
+  const skills = Array.isArray(summary.skills) ? summary.skills : [];
+  const attacks = Array.isArray(summary.attacks) ? summary.attacks : [];
+  const currentHealth = playerEncounterState?.currentHealth ?? summary.currentHealth;
+  const maxHealth = playerEncounterState?.maxHealth ?? summary.maxHealth;
+  const currentMana = playerEncounterState?.currentMana ?? summary.currentMana;
+  const maxMana = playerEncounterState?.maxMana ?? summary.maxMana;
+  const defenseMelee = playerEncounterState?.defenseMelee ?? defenses.melee;
+  const defenseRanged = playerEncounterState?.defenseRanged ?? defenses.ranged;
+  characterHud?.removeAttribute('hidden');
+  renderCharacterStatuses(playerEncounterState);
+  if (characterName) {
+    characterName.textContent = playerEncounterState?.characterName || summary.characterName || 'Personagem';
+  }
+  if (characterClassLevel) {
+    characterClassLevel.textContent = `${summary.characterClass || 'Classe não informada'} • Nível ${summary.level ?? '—'}`;
+    characterClassLevel.tabIndex = 0;
+    characterClassLevel.dataset.calculation = `Classe ${summary.characterClass || 'não informada'} e nível ${summary.level ?? 'não informado'}, conforme a ficha enviada.`;
+  }
+  if (characterHealthFill instanceof HTMLElement) {
+    characterHealthFill.style.width = `${boundedPercent(currentHealth, maxHealth)}%`;
+    characterHealthFill.parentElement?.setAttribute(
+      'data-calculation',
+      `${currentHealth ?? '—'} PV atuais de ${maxHealth ?? '—'} PV máximos. Alterações da sessão não modificam o PDF.`,
+    );
+  }
+  if (characterHealthValue) characterHealthValue.textContent = `${currentHealth ?? '—'}/${maxHealth ?? '—'}`;
+  if (characterManaFill instanceof HTMLElement) {
+    characterManaFill.style.width = `${boundedPercent(currentMana, maxMana)}%`;
+    characterManaFill.parentElement?.setAttribute(
+      'data-calculation',
+      `${currentMana ?? '—'} PM atuais de ${maxMana ?? '—'} PM máximos. Alterações da sessão não modificam o PDF.`,
+    );
+  }
+  if (characterManaValue) characterManaValue.textContent = `${currentMana ?? '—'}/${maxMana ?? '—'}`;
+  if (characterDefenseMelee) {
+    characterDefenseMelee.textContent = `CaC ${defenseMelee ?? '—'}`;
+    const modifier = defenseMelee !== null && defenses.melee !== null
+      ? defenseMelee - defenses.melee
+      : 0;
+    characterDefenseMelee.dataset.calculation = modifier === 0
+      ? defenses.calculation
+      : `${defenses.calculation}; ${modifier > 0 ? '+' : ''}${modifier} temporário = ${defenseMelee}.`;
+    characterDefenseMelee.classList.toggle(
+      'is-penalty',
+      defenseMelee !== null && defenses.melee !== null && defenseMelee < defenses.melee,
+    );
+    characterDefenseMelee.classList.toggle(
+      'is-bonus',
+      defenseMelee !== null && defenses.melee !== null && defenseMelee > defenses.melee,
+    );
+  }
+  if (characterDefenseRanged) {
+    characterDefenseRanged.textContent = `AaD ${defenseRanged ?? '—'}`;
+    const modifier = defenseRanged !== null && defenses.ranged !== null
+      ? defenseRanged - defenses.ranged
+      : 0;
+    characterDefenseRanged.dataset.calculation = modifier === 0
+      ? defenses.calculation
+      : `${defenses.calculation}; ${modifier > 0 ? '+' : ''}${modifier} temporário = ${defenseRanged}.`;
+    characterDefenseRanged.classList.toggle(
+      'is-penalty',
+      defenseRanged !== null && defenses.ranged !== null && defenseRanged < defenses.ranged,
+    );
+    characterDefenseRanged.classList.toggle(
+      'is-bonus',
+      defenseRanged !== null && defenses.ranged !== null && defenseRanged > defenses.ranged,
+    );
+  }
+  if (characterAttributes) {
+    const attributes = summary.attributes ?? {
+      for: null,
+      des: null,
+      con: null,
+      int: null,
+      sab: null,
+      car: null,
+    };
+    const attributeLabels = {
+      for: 'FOR',
+      des: 'DES',
+      con: 'CON',
+      int: 'INT',
+      sab: 'SAB',
+      car: 'CAR',
+    } as const;
+    characterAttributes.replaceChildren(detailSection(
+      'Modificadores de atributo',
+      (Object.keys(attributeLabels) as Array<keyof typeof attributeLabels>).map((attribute) => {
+        const value = attributes[attribute];
+        const displayed = value === null ? '—' : `${value >= 0 ? '+' : ''}${value}`;
+        return {
+          label: attributeLabels[attribute],
+          value: displayed,
+          calculation: `${attributeLabels[attribute]} ${displayed}: modificador oficial informado na ficha do Jogo do Ano.`,
+        };
+      }),
+    ));
+  }
+  if (characterMovement) {
+    characterMovement.replaceChildren(detailSection('Movimento e carga', [
+      { label: 'Deslocamento', value: summary.movement || '—', calculation: 'Valor informado no campo Deslocamento da ficha.' },
+      { label: 'Tamanho', value: summary.size || '—', calculation: 'Categoria de tamanho selecionada na ficha.' },
+      {
+        label: 'Carga',
+        value: `${summary.currentLoad ?? '—'}/${summary.maxLoad ?? '—'} espaços`,
+        calculation: `Regra do Jogo do Ano: limite calculado a partir de Força ${summary.attributes.for ?? 0}.`,
+      },
+    ]));
+  }
+  if (characterSkills) {
+    characterSkills.replaceChildren(detailSection('Perícias', skills.map((skill) => ({
+      label: `${skill.name}${skill.trained ? ' • T' : ''}`,
+      value: skill.total === null ? '—' : `${skill.total >= 0 ? '+' : ''}${skill.total}`,
+      calculation: skill.calculation,
+    }))));
+  }
+  if (characterAttacks) {
+    characterAttacks.replaceChildren(detailSection('Ataques', attacks.length
+      ? attacks.map((attack) => ({
+        label: attack.name || 'Ataque',
+        value: [attack.attackBonus, attack.damage, attack.critical, attack.damageType, attack.range]
+          .filter(Boolean).join(' • ') || '—',
+        calculation: `Teste ${attack.attackBonus || '—'}; dano ${attack.damage || '—'}; crítico ${attack.critical || '20/x2'}; tipo ${attack.damageType || '—'}; alcance ${attack.range || '—'}.`,
+      }))
+      : [{ label: 'Nenhum ataque informado', value: '—' }]));
+  }
+};
+
+const renderCharacterSheet = (sheet: PlayerCharacterSheetStatus | null) => {
+  if (sheetStatusElement) {
+    sheetStatusElement.textContent = sheet?.hasSheet
+      ? `Ficha vinculada: ${sheet.fileName ?? 'ficha-t20.pdf'}`
+      : 'Nenhuma ficha vinculada a este usuário.';
+  }
+  if (sheetIssuesElement) {
+    sheetIssuesElement.replaceChildren();
+    for (const issue of sheet?.validation?.issues ?? []) {
+      const item = document.createElement('li');
+      item.dataset.severity = issue.severity;
+      const details = issue.expected === undefined
+        ? ''
+        : ` Esperado: ${issue.expected}; encontrado: ${issue.actual ?? 'vazio'}.`;
+      item.textContent = `${issue.message}${details}`;
+      sheetIssuesElement.append(item);
+    }
+  }
+  const hasSheet = Boolean(sheet?.hasSheet);
+  renderCharacterHud(sheet);
+  prepareSheetPreview(sheet);
+  sheetRemoveButton?.toggleAttribute('hidden', !hasSheet);
+  sheetFixButton?.toggleAttribute(
+    'hidden',
+    !hasSheet || !(sheet?.validation?.issues.some(({ autoFixable }) => autoFixable) ?? false),
+  );
+};
+
+const allowedNoteTags = new Set([
+  'B', 'BR', 'DIV', 'EM', 'FONT', 'I', 'LI', 'OL', 'P', 'SPAN', 'STRONG', 'U',
+]);
+
+const sanitizeNotesHtml = (value: string) => {
+  const template = document.createElement('template');
+  template.innerHTML = value.slice(0, 90_000);
+  const sanitizeNode = (node: Node) => {
+    for (const child of [...node.childNodes]) sanitizeNode(child);
+    if (!(node instanceof HTMLElement)) return;
+    if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') {
+      node.remove();
+      return;
+    }
+    if (!allowedNoteTags.has(node.tagName)) {
+      node.replaceWith(...node.childNodes);
+      return;
+    }
+    const fontSize = node.tagName === 'FONT' ? node.getAttribute('size') : null;
+    for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
+    if (fontSize && /^[2-5]$/.test(fontSize)) node.setAttribute('size', fontSize);
+  };
+  sanitizeNode(template.content);
+  return template.innerHTML;
+};
+
+const activeNoteTab = () => notesDocument.tabs.find(
+  ({ id }) => id === notesDocument.activeTabId,
+) ?? notesDocument.tabs[0];
+
+const flushActiveNote = () => {
+  const tab = activeNoteTab();
+  if (tab && notesEditor instanceof HTMLElement) tab.html = sanitizeNotesHtml(notesEditor.innerHTML);
+};
+
+const renderNotesTabs = () => {
+  if (!notesTabsElement) return;
+  notesTabsElement.replaceChildren();
+  for (const tab of notesDocument.tabs) {
+    const group = document.createElement('span');
+    group.className = `web-player-notes-tab-group${tab.id === notesDocument.activeTabId ? ' is-active' : ''}`;
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.className = 'web-player-notes-tab';
+    select.setAttribute('role', 'tab');
+    select.setAttribute('aria-selected', String(tab.id === notesDocument.activeTabId));
+    select.textContent = tab.title;
+    select.addEventListener('click', () => {
+      flushActiveNote();
+      notesDocument.activeTabId = tab.id;
+      renderNotesEditor();
+      notesEditor?.focus();
+    });
+    group.append(select);
+    if (notesDocument.tabs.length > 1) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'web-player-notes-tab-remove';
+      remove.setAttribute('aria-label', `Excluir ${tab.title}`);
+      remove.textContent = '×';
+      remove.addEventListener('click', () => {
+        flushActiveNote();
+        const index = notesDocument.tabs.findIndex(({ id }) => id === tab.id);
+        notesDocument.tabs.splice(index, 1);
+        if (notesDocument.activeTabId === tab.id) {
+          notesDocument.activeTabId = notesDocument.tabs[Math.max(0, index - 1)].id;
+        }
+        renderNotesEditor();
+      });
+      group.append(remove);
+    }
+    notesTabsElement.append(group);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'web-player-notes-tab-add';
+  add.setAttribute('aria-label', 'Criar nova nota');
+  add.textContent = '+';
+  add.addEventListener('click', () => {
+    flushActiveNote();
+    const tab = nextPlayerNoteTab(notesDocument);
+    if (!tab) {
+      if (notesStatusElement) notesStatusElement.textContent = 'Limite de 20 notas atingido.';
+      return;
+    }
+    notesDocument.tabs.push(tab);
+    notesDocument.activeTabId = tab.id;
+    renderNotesEditor();
+    notesEditor?.focus();
+  });
+  notesTabsElement.append(add);
+};
+
+const renderNotesEditor = () => {
+  renderNotesTabs();
+  if (notesEditor instanceof HTMLElement) {
+    notesEditor.innerHTML = sanitizeNotesHtml(activeNoteTab()?.html ?? '');
+  }
+};
+
+sheetButton?.addEventListener('click', () => {
+  renderCharacterSheet(getPlayerToolsState().sheet);
+  sheetDialog?.removeAttribute('hidden');
+});
+sheetCloseButton?.addEventListener('click', () => sheetDialog?.setAttribute('hidden', ''));
+
+sheetInput?.addEventListener('change', () => {
+  if (!(sheetInput instanceof HTMLInputElement)) return;
+  const file = sheetInput.files?.[0];
+  sheetSelectionRemoveButton?.toggleAttribute('hidden', !file);
+  if (!file) return;
+  renderCharacterSheet(getPlayerToolsState().sheet);
+  if (file.size > MAX_CHARACTER_SHEET_BYTES) {
+    if (sheetStatusElement) sheetStatusElement.textContent = 'A ficha deve ter no máximo 25 MB.';
+    return;
+  }
+  const adjustmentWindow = window.open('', '_blank');
+  if (adjustmentWindow) adjustmentWindow.opener = null;
+  sheetInput.disabled = true;
+  sheetSelectionRemoveButton?.setAttribute('disabled', '');
+  if (sheetStatusElement) sheetStatusElement.textContent = 'Lendo e validando a ficha…';
+  void uploadCharacterSheet(file).then((result) => {
+    renderCharacterSheet(result.sheet ?? null);
+    const hasErrors = result.sheet?.validation?.issues.some(
+      ({ severity }) => severity === 'error',
+    ) ?? !result.ok;
+    if (hasErrors && adjustmentWindow) {
+      const source = result.sheet?.hasSheet
+        ? fetchCharacterSheetBlob()
+        : Promise.resolve(file as Blob);
+      void source.then((blob) => {
+        const url = URL.createObjectURL(blob);
+        adjustmentWindow.location.href = url;
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }).catch(() => adjustmentWindow.close());
+    } else {
+      adjustmentWindow?.close();
+    }
+    if (!result.ok && sheetStatusElement) {
+      sheetStatusElement.textContent = result.error ?? 'A ficha precisa de ajustes.';
+    }
+  }).catch((error: unknown) => {
+    adjustmentWindow?.close();
+    if (sheetStatusElement) {
+      sheetStatusElement.textContent = error instanceof Error
+        ? error.message
+        : 'Não foi possível enviar a ficha.';
+    }
+  }).finally(() => {
+    sheetInput.disabled = false;
+    sheetSelectionRemoveButton?.removeAttribute('disabled');
+  });
+});
+
+sheetSelectionRemoveButton?.addEventListener('click', () => {
+  if (!(sheetInput instanceof HTMLInputElement) || sheetInput.disabled) return;
+  sheetInput.value = '';
+  sheetSelectionRemoveButton.setAttribute('hidden', '');
+  renderCharacterSheet(getPlayerToolsState().sheet);
+});
+
+sheetOpenButton?.addEventListener('click', () => {
+  if (sheetOpenButton.hasAttribute('disabled')) return;
+  const previewWindow = window.open('', '_blank');
+  if (!previewWindow) {
+    if (sheetStatusElement) {
+      sheetStatusElement.textContent = 'O navegador bloqueou a abertura da ficha. Permita pop-ups para esta página.';
+    }
+    return;
+  }
+  previewWindow.opener = null;
+  sheetOpenButton.setAttribute('disabled', '');
+  if (sheetStatusElement) sheetStatusElement.textContent = 'Liberando acesso à ficha…';
+  void createCharacterSheetViewUrl().then((url) => {
+    previewWindow.location.replace(url);
+    renderCharacterSheet(getPlayerToolsState().sheet);
+  }).catch((error: unknown) => {
+    previewWindow.close();
+    if (sheetStatusElement) {
+      sheetStatusElement.textContent = error instanceof Error
+        ? error.message
+        : 'Não foi possível liberar o acesso à ficha.';
+    }
+  }).finally(() => {
+    sheetOpenButton.removeAttribute('disabled');
+  });
+  if (previewWindow.closed && sheetStatusElement) {
+    sheetStatusElement.textContent = 'O navegador bloqueou a abertura da ficha. Permita pop-ups para esta página.';
+  }
+});
+
+sheetRemoveButton?.addEventListener('click', () => {
+  sheetRemoveDialog?.removeAttribute('hidden');
+  sheetRemoveCancelButton?.focus();
+});
+sheetRemoveCancelButton?.addEventListener('click', () => {
+  sheetRemoveDialog?.setAttribute('hidden', '');
+});
+sheetRemoveConfirmButton?.addEventListener('click', () => {
+  sheetRemoveConfirmButton.setAttribute('disabled', '');
+  void removeCharacterSheet().then((result) => {
+    if (!result.ok) {
+      if (sheetStatusElement) {
+        sheetStatusElement.textContent = result.error ?? 'Não foi possível remover a ficha.';
+      }
+      return;
+    }
+    renderCharacterSheet(result.sheet ?? null);
+    sheetRemoveDialog?.setAttribute('hidden', '');
+    if (sheetStatusElement) sheetStatusElement.textContent = 'Ficha removida deste usuário.';
+  }).finally(() => sheetRemoveConfirmButton.removeAttribute('disabled'));
+});
+
+characterExpandButton?.addEventListener('click', () => {
+  const expanded = characterExpandButton.getAttribute('aria-expanded') !== 'true';
+  characterExpandButton.setAttribute('aria-expanded', String(expanded));
+  characterExpandButton.setAttribute('aria-label', expanded
+    ? 'Ocultar detalhes da ficha'
+    : 'Mostrar detalhes da ficha');
+  characterDetails?.toggleAttribute('hidden', !expanded);
+});
+
+characterHud?.addEventListener('mouseover', (event) => {
+  const target = calculationTargetFromEvent(event);
+  if (target) showCalculationTooltip(target);
+});
+characterHud?.addEventListener('mouseout', (event) => {
+  const target = calculationTargetFromEvent(event);
+  const related = event.relatedTarget;
+  if (
+    target &&
+    related instanceof Node &&
+    target.contains(related)
+  ) return;
+  hideCalculationTooltip();
+});
+characterHud?.addEventListener('focusin', (event) => {
+  const target = calculationTargetFromEvent(event);
+  if (target) showCalculationTooltip(target);
+});
+characterHud?.addEventListener('focusout', hideCalculationTooltip);
+characterDetails?.addEventListener('scroll', hideCalculationTooltip, { passive: true });
+window.addEventListener('resize', hideCalculationTooltip);
+
+sheetFixButton?.addEventListener('click', () => {
+  sheetFixButton.setAttribute('disabled', '');
+  void automaticallyFixCharacterSheet().then((result) => {
+    renderCharacterSheet(result.sheet ?? null);
+    if (sheetStatusElement) {
+      sheetStatusElement.textContent = result.ok
+        ? 'Os campos objetivamente corrigíveis foram atualizados.'
+        : result.error ?? 'Não foi possível corrigir a ficha.';
+    }
+  }).finally(() => sheetFixButton.removeAttribute('disabled'));
+});
+
+notesButton?.addEventListener('click', () => {
+  notesDocument = parsePlayerNotesDocument(getPlayerToolsState().notes);
+  renderNotesEditor();
+  notesDialog?.removeAttribute('hidden');
+  requestAnimationFrame(() => keepNotesCardInsideViewport());
+  notesEditor?.focus();
+});
+notesCloseButton?.addEventListener('click', () => notesDialog?.setAttribute('hidden', ''));
+
+type NotesDragState = {
+  pointerId: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+let notesDragState: NotesDragState | null = null;
+
+function keepNotesCardInsideViewport() {
+  if (!notesCard || notesDialog?.hasAttribute('hidden')) return;
+  const bounds = notesCard.getBoundingClientRect();
+  const gap = 8;
+  notesCard.style.width = `${Math.min(bounds.width, window.innerWidth - gap * 2)}px`;
+  notesCard.style.height = `${Math.min(bounds.height, window.innerHeight - gap * 2)}px`;
+  notesCard.style.transform = 'none';
+  notesCard.style.left = `${Math.min(
+    Math.max(gap, bounds.left),
+    Math.max(gap, window.innerWidth - Math.min(bounds.width, window.innerWidth - gap * 2) - gap),
+  )}px`;
+  notesCard.style.top = `${Math.min(
+    Math.max(gap, bounds.top),
+    Math.max(gap, window.innerHeight - Math.min(bounds.height, window.innerHeight - gap * 2) - gap),
+  )}px`;
+}
+
+notesDragHandle?.addEventListener('pointerdown', (event) => {
+  if (!notesCard || event.button !== 0) return;
+  const bounds = notesCard.getBoundingClientRect();
+  notesCard.style.width = `${bounds.width}px`;
+  notesCard.style.height = `${bounds.height}px`;
+  notesCard.style.transform = 'none';
+  notesCard.style.left = `${bounds.left}px`;
+  notesCard.style.top = `${bounds.top}px`;
+  notesDragState = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - bounds.left,
+    offsetY: event.clientY - bounds.top,
+  };
+  notesDragHandle.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+
+notesDragHandle?.addEventListener('pointermove', (event) => {
+  if (!notesCard || notesDragState?.pointerId !== event.pointerId) return;
+  const gap = 8;
+  const bounds = notesCard.getBoundingClientRect();
+  notesCard.style.left = `${Math.min(
+    Math.max(gap, event.clientX - notesDragState.offsetX),
+    Math.max(gap, window.innerWidth - bounds.width - gap),
+  )}px`;
+  notesCard.style.top = `${Math.min(
+    Math.max(gap, event.clientY - notesDragState.offsetY),
+    Math.max(gap, window.innerHeight - bounds.height - gap),
+  )}px`;
+});
+
+const finishNotesDrag = (event: PointerEvent) => {
+  if (notesDragState?.pointerId !== event.pointerId) return;
+  notesDragState = null;
+  if (notesDragHandle?.hasPointerCapture(event.pointerId)) {
+    notesDragHandle.releasePointerCapture(event.pointerId);
+  }
+};
+
+notesDragHandle?.addEventListener('pointerup', finishNotesDrag);
+notesDragHandle?.addEventListener('pointercancel', finishNotesDrag);
+window.addEventListener('resize', keepNotesCardInsideViewport);
+
+notesEditor?.addEventListener('input', flushActiveNote);
+notesEditor?.addEventListener('paste', (event) => {
+  event.preventDefault();
+  document.execCommand('insertText', false, event.clipboardData?.getData('text/plain') ?? '');
+});
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-notes-command]')) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+  button.addEventListener('click', () => {
+    notesEditor?.focus();
+    document.execCommand(button.dataset.notesCommand ?? '', false);
+    flushActiveNote();
+  });
+}
+notesFontSize?.addEventListener('change', () => {
+  if (!(notesFontSize instanceof HTMLSelectElement)) return;
+  notesEditor?.focus();
+  document.execCommand('fontSize', false, notesFontSize.value);
+  flushActiveNote();
+});
+notesSaveButton?.addEventListener('click', () => {
+  flushActiveNote();
+  notesSaveButton.setAttribute('disabled', '');
+  if (notesStatusElement) notesStatusElement.textContent = 'Salvando…';
+  void saveNotes(serializePlayerNotesDocument(notesDocument)).then((result) => {
+    if (notesStatusElement) {
+      notesStatusElement.textContent = result.ok
+        ? 'Notas salvas'
+        : result.error ?? 'Não foi possível salvar.';
+    }
+  }).finally(() => notesSaveButton.removeAttribute('disabled'));
+});
+notesClearButton?.addEventListener('click', () => {
+  notesClearDialog?.removeAttribute('hidden');
+  notesClearCancelButton?.focus();
+});
+notesClearCancelButton?.addEventListener('click', () => notesClearDialog?.setAttribute('hidden', ''));
+notesClearConfirmButton?.addEventListener('click', () => {
+  const tab = activeNoteTab();
+  if (!tab) return;
+  tab.html = '';
+  renderNotesEditor();
+  notesClearConfirmButton.setAttribute('disabled', '');
+  void saveNotes(serializePlayerNotesDocument(notesDocument)).then((result) => {
+    if (result.ok) {
+      notesClearDialog?.setAttribute('hidden', '');
+      if (notesStatusElement) notesStatusElement.textContent = 'Nota limpa.';
+    } else if (notesStatusElement) {
+      notesStatusElement.textContent = result.error ?? 'Não foi possível limpar a nota.';
+    }
+  }).finally(() => notesClearConfirmButton.removeAttribute('disabled'));
+});
+
 if (nameInput instanceof HTMLInputElement) {
   nameInput.value = window.localStorage.getItem('bossbar.multiplayer.player-name') ?? '';
   nameInput.focus();
@@ -129,29 +895,92 @@ if (!canConnect && joinForm instanceof HTMLFormElement) {
 
 joinForm?.addEventListener('submit', (event) => {
   event.preventDefault();
-  if (!(nameInput instanceof HTMLInputElement)) return;
+  if (
+    !(nameInput instanceof HTMLInputElement) ||
+    !(passwordInput instanceof HTMLInputElement) ||
+    authenticating
+  ) return;
   const requestedName = nameInput.value.trim().slice(0, 40);
-  if (!requestedName) return;
-  if (confirmedNameElement) confirmedNameElement.textContent = requestedName;
-  joinElement?.setAttribute('hidden', '');
-  nameConfirmElement?.removeAttribute('hidden');
-  nameSubmitButton?.focus();
+  if (!requestedName || passwordInput.value.length < 3) return;
+  authenticating = true;
+  const submit = joinForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  void getAccountStatus(requestedName).then((status) => {
+    creatingAccount = !status.exists;
+    if (confirmedNameElement) confirmedNameElement.textContent = status.username;
+    if (confirmMessageElement) {
+      confirmMessageElement.textContent = creatingAccount
+        ? 'Este usuário ainda não existe. Confirme a senha para criá-lo como'
+        : 'Você entrará no encontro como';
+    }
+    passwordConfirmLabel?.toggleAttribute('hidden', !creatingAccount);
+    if (passwordConfirmInput instanceof HTMLInputElement) {
+      passwordConfirmInput.value = '';
+      passwordConfirmInput.required = creatingAccount;
+    }
+    authErrorElement?.setAttribute('hidden', '');
+    joinElement?.setAttribute('hidden', '');
+    nameConfirmElement?.removeAttribute('hidden');
+    if (creatingAccount) passwordConfirmInput?.focus();
+    else nameSubmitButton?.focus();
+  }).catch((error: unknown) => {
+    showConnectionState({
+      state: 'error',
+      message: error instanceof Error ? error.message : 'Não foi possível verificar o usuário.',
+    });
+  }).finally(() => {
+    authenticating = false;
+    if (submit) submit.disabled = false;
+  });
 });
 
 nameBackButton?.addEventListener('click', () => {
   nameConfirmElement?.setAttribute('hidden', '');
   joinElement?.removeAttribute('hidden');
   nameInput?.focus();
+  authErrorElement?.setAttribute('hidden', '');
 });
 
 nameSubmitButton?.addEventListener('click', () => {
-  if (!(nameInput instanceof HTMLInputElement)) return;
-  if (!connect(nameInput.value)) return;
+  if (
+    !(nameInput instanceof HTMLInputElement) ||
+    !(passwordInput instanceof HTMLInputElement) ||
+    authenticating
+  ) return;
+  if (
+    creatingAccount &&
+    (!(passwordConfirmInput instanceof HTMLInputElement) ||
+      passwordConfirmInput.value !== passwordInput.value)
+  ) {
+    if (authErrorElement) {
+      authErrorElement.textContent = 'As senhas não coincidem.';
+      authErrorElement.removeAttribute('hidden');
+    }
+    passwordConfirmInput?.focus();
+    return;
+  }
+  authenticating = true;
   nameSubmitButton.setAttribute('disabled', '');
   const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = true;
-  nameInput.readOnly = true;
-  nameConfirmElement?.setAttribute('hidden', '');
+  authErrorElement?.setAttribute('hidden', '');
+  void connect(nameInput.value, passwordInput.value, creatingAccount).then((result) => {
+    if (!result.ok) {
+      if (authErrorElement) {
+        authErrorElement.textContent = result.error ?? 'Não foi possível entrar.';
+        authErrorElement.removeAttribute('hidden');
+      }
+      return;
+    }
+    nameInput.readOnly = true;
+    passwordInput.value = '';
+    if (passwordConfirmInput instanceof HTMLInputElement) passwordConfirmInput.value = '';
+    nameConfirmElement?.setAttribute('hidden', '');
+  }).finally(() => {
+    authenticating = false;
+    nameSubmitButton.removeAttribute('disabled');
+    if (submit) submit.disabled = false;
+  });
 });
 
 api.subscribe((state) => {
@@ -163,6 +992,9 @@ api.subscribe((state) => {
 changeNameButton?.addEventListener('click', () => {
   leave();
   sessionReady = false;
+  playerEncounterState = null;
+  characterHud?.setAttribute('hidden', '');
+  toolsElement?.setAttribute('hidden', '');
   changeNameButton.setAttribute('hidden', '');
   pendingElement?.setAttribute('hidden', '');
   nameConfirmElement?.setAttribute('hidden', '');
@@ -171,6 +1003,10 @@ changeNameButton?.addEventListener('click', () => {
     nameInput.readOnly = false;
     nameInput.select();
   }
+  if (passwordInput instanceof HTMLInputElement) {
+    passwordInput.value = '';
+    passwordInput.focus();
+  }
   const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = false;
   nameSubmitButton?.removeAttribute('disabled');
@@ -178,8 +1014,11 @@ changeNameButton?.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || nameConfirmElement?.hasAttribute('hidden')) return;
-  nameBackButton?.click();
+  if (event.key !== 'Escape') return;
+  if (!notesClearDialog?.hasAttribute('hidden')) notesClearCancelButton?.click();
+  else if (!sheetRemoveDialog?.hasAttribute('hidden')) sheetRemoveCancelButton?.click();
+  else if (!sheetDialog?.hasAttribute('hidden')) sheetCloseButton?.click();
+  else if (!nameConfirmElement?.hasAttribute('hidden')) nameBackButton?.click();
 });
 
 window.addEventListener('beforeunload', () => {

@@ -34,11 +34,22 @@ import type {
   BossLibrarySaveResult,
 } from './library';
 import type {
+  HostedPlayerPasswordResetResult,
+  NotesSaveResult,
+  PlayerProfileSummary,
+} from './character-sheet';
+import type {
+  CustomStatusLibraryMutationResult,
+  CustomStatusPreset,
+  CustomStatusPresetDraft,
+} from './custom-status-library';
+import type {
   HostedEncounterStartResult,
   HostedSessionStartupProgress,
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './multiplayer';
+import type { AreaDamageRequest, AreaDamageResult } from './player-combat';
 import type {
   SceneMediaSelectionResult,
   SceneMediaSlot,
@@ -62,9 +73,17 @@ export type BossAPI = {
   applyHealthSequence: (
     request: HealthSequenceRequest,
   ) => Promise<HealthSequenceResult>;
+  applyAreaDamage: (request: AreaDamageRequest) => Promise<AreaDamageResult>;
   openPresentation: () => Promise<boolean>;
   isPresentationOpen: () => Promise<boolean>;
   setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
+  getCustomStatusLibrary: () => Promise<CustomStatusPreset[]>;
+  createCustomStatusPreset: (
+    draft: CustomStatusPresetDraft,
+  ) => Promise<CustomStatusLibraryMutationResult>;
+  deleteCustomStatusPreset: (
+    presetId: string,
+  ) => Promise<CustomStatusLibraryMutationResult>;
   openSoundboardWindow: () => Promise<boolean>;
   openSceneEditor: () => Promise<boolean>;
   confirmSceneEditorClose: () => void;
@@ -107,6 +126,19 @@ export type BossAPI = {
   openHostedSessionAsPlayer: () => Promise<boolean>;
   approveHostedPlayer: (requestId: string) => Promise<boolean>;
   rejectHostedPlayer: (requestId: string) => Promise<boolean>;
+  openHostedPlayerSheet: (playerId: string) => Promise<boolean>;
+  resetHostedPlayerPassword: (
+    playerId: string,
+    password: string,
+  ) => Promise<HostedPlayerPasswordResetResult>;
+  getPlayerProfiles: () => Promise<PlayerProfileSummary[]>;
+  openPlayerProfileSheet: (profileId: string) => Promise<boolean>;
+  resetPlayerProfilePassword: (
+    profileId: string,
+    password: string,
+  ) => Promise<HostedPlayerPasswordResetResult>;
+  getMasterNotes: () => Promise<string>;
+  saveMasterNotes: (content: string) => Promise<NotesSaveResult>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
   saveBossToLibrary: (
     draft: BossLibraryDraft,

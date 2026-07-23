@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
@@ -12,6 +12,11 @@ import {
   type Socket as ServerSocket,
 } from 'socket.io';
 import { z } from 'zod';
+import {
+  BLANK_CHARACTER_SHEET_ASSET_PATH,
+  MAX_CHARACTER_SHEET_BYTES,
+  type PlayerAuthenticationRequest,
+} from '../shared/character-sheet.ts';
 import type {
   BackgroundState,
   EncounterEffectsState,
@@ -43,6 +48,15 @@ import {
 } from '../shared/multiplayer.ts';
 import { resolveByteRange } from '../shared/media.ts';
 import type { SceneTransitionEvent } from '../shared/scene.ts';
+import {
+  isAreaDamageRequest,
+  resolveAreaDamage,
+  type AreaDamageRequest,
+  type AreaDamageResult,
+  type PlayerEncounterState,
+} from '../shared/player-combat.ts';
+import { inspectCharacterSheetPdf } from './character-sheet-pdf.ts';
+import { PlayerProfileStore } from './player-profile-store.ts';
 import { SessionRoster, normalizePlayerName } from './session-roster.ts';
 import {
   createSessionCredentials,
@@ -90,6 +104,7 @@ export type MultiplayerSessionServerOptions = {
   logger?: boolean;
   onPresenceChanged?: (presence: MultiplayerPresence) => void;
   onJoinRequestsChanged?: (requests: MultiplayerJoinRequest[]) => void;
+  playerProfileStore: PlayerProfileStore;
 };
 
 export type MultiplayerSnapshotContext = {
@@ -140,6 +155,16 @@ type SnapshotReference = {
   current: MultiplayerSessionSnapshot;
 };
 
+type AccountSession = {
+  profileId: string;
+  username: string;
+  clientId: string;
+  expiresAt: number;
+};
+
+const ACCOUNT_SESSION_DURATION_MS = 12 * 60 * 60 * 1_000;
+const SHEET_VIEW_TICKET_DURATION_MS = 10 * 60 * 1_000;
+
 const publicSnapshotMediaUrls = (snapshot: MultiplayerSessionSnapshot) =>
   [...new Set([
     snapshot.background.url,
@@ -159,9 +184,25 @@ const playerAuthSchema = z.object({
   roomCode: z.string().min(1).max(32),
   playerToken: z.string().min(32).max(128),
   playerName: z.string().min(1).max(80),
+  accountToken: z.string().min(32).max(128),
   clientId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
   protocolVersion: z.number().int(),
   hostToken: z.string().min(32).max(128).optional(),
+}).strict();
+
+const accountStatusSchema = z.object({
+  username: z.string().min(1).max(80),
+}).strict();
+
+const accountAuthenticationSchema = z.object({
+  username: z.string().min(1).max(80),
+  password: z.string().min(3).max(128),
+  createAccount: z.boolean(),
+  clientId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
+}).strict() satisfies z.ZodType<PlayerAuthenticationRequest>;
+
+const notesSchema = z.object({
+  content: z.string().max(100_000),
 }).strict();
 
 const mediaIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
@@ -346,6 +387,12 @@ export class MultiplayerSessionServer {
 
   private readonly allowedOrigins: Set<string>;
 
+  private readonly accountSessions: Map<string, AccountSession>;
+
+  private readonly playerCombatStates = new Map<string, PlayerEncounterState>();
+
+  private playerImpactSequence = 0;
+
   private publicOrigin: string | null;
 
   private closing = false;
@@ -361,6 +408,7 @@ export class MultiplayerSessionServer {
     options: MultiplayerSessionServerOptions,
     allowedOrigins: Set<string>,
     publicOrigin: string | null,
+    accountSessions: Map<string, AccountSession>,
   ) {
     this.fastify = fastify;
     this.io = io;
@@ -371,6 +419,7 @@ export class MultiplayerSessionServer {
     this.snapshotReference = snapshotReference;
     this.allowedOrigins = allowedOrigins;
     this.publicOrigin = publicOrigin;
+    this.accountSessions = accountSessions;
     this.currentSnapshot = initialSnapshot;
     const intervalMs = Math.max(
       250,
@@ -391,6 +440,9 @@ export class MultiplayerSessionServer {
       })
       : options.initialSnapshot;
     const snapshotReference: SnapshotReference = { current: initialSnapshot };
+    const accountSessions = new Map<string, AccountSession>();
+    const sheetViewTickets = new Map<string, { profileId: string; expiresAt: number }>();
+    let serverReference: MultiplayerSessionServer | null = null;
     if (initialSnapshot.protocolVersion !== MULTIPLAYER_PROTOCOL_VERSION) {
       throw new Error('O snapshot inicial usa uma versão de protocolo inválida.');
     }
@@ -409,6 +461,12 @@ export class MultiplayerSessionServer {
       trustProxy: false,
       bodyLimit: 64 * 1024,
     });
+
+    app.addContentTypeParser(
+      'application/pdf',
+      { parseAs: 'buffer', bodyLimit: MAX_CHARACTER_SHEET_BYTES },
+      (_request, body, done) => done(null, body),
+    );
 
     await app.register(helmet, {
       crossOriginEmbedderPolicy: false,
@@ -430,6 +488,36 @@ export class MultiplayerSessionServer {
     });
     await app.register(rateLimit, { global: false });
 
+    const bearerToken = (authorization: string | undefined) =>
+      authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const inviteIsValid = (headers: {
+      authorization?: string;
+      'x-bossbar-room'?: string | string[];
+    }) => {
+      const room = headers['x-bossbar-room'];
+      return typeof room === 'string' &&
+        room.trim().toUpperCase() === credentials.roomCode &&
+        tokensMatch(bearerToken(headers.authorization), credentials.playerToken);
+    };
+    const authenticatedAccount = (headers: {
+      authorization?: string;
+      'x-bossbar-room'?: string | string[];
+    }) => {
+      const room = headers['x-bossbar-room'];
+      const token = bearerToken(headers.authorization);
+      const session = accountSessions.get(token);
+      if (
+        typeof room !== 'string' ||
+        room.trim().toUpperCase() !== credentials.roomCode ||
+        !session ||
+        session.expiresAt <= Date.now()
+      ) {
+        if (session) accountSessions.delete(token);
+        return null;
+      }
+      return { token, session };
+    };
+
     app.get('/api/health', {
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
     }, async (_request, reply) => {
@@ -450,6 +538,242 @@ export class MultiplayerSessionServer {
         connectedPlayers: presence.connectedPlayers,
         maxPlayers: presence.maxPlayers,
       };
+    });
+    app.post('/api/player/account-status', {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!inviteIsValid(request.headers)) {
+        return reply.code(403).send({ error: 'Convite inválido.' });
+      }
+      const parsed = accountStatusSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'Usuário inválido.' });
+      try {
+        return options.playerProfileStore.accountStatus(parsed.data.username);
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : 'Usuário inválido.',
+        });
+      }
+    });
+    app.post('/api/player/authenticate', {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!inviteIsValid(request.headers)) {
+        return reply.code(403).send({ ok: false, error: 'Convite inválido.' });
+      }
+      const parsed = accountAuthenticationSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ ok: false, error: 'Informe um usuário e uma senha válidos.' });
+      }
+      try {
+        const profile = parsed.data.createAccount
+          ? await options.playerProfileStore.register(parsed.data.username, parsed.data.password)
+          : await options.playerProfileStore.authenticate(parsed.data.username, parsed.data.password);
+        const sessionToken = randomBytes(32).toString('base64url');
+        accountSessions.set(sessionToken, {
+          profileId: profile.id,
+          username: profile.username,
+          clientId: parsed.data.clientId,
+          expiresAt: Date.now() + ACCOUNT_SESSION_DURATION_MS,
+        });
+        return {
+          ok: true,
+          username: profile.username,
+          sessionToken,
+          sheet: profile.sheet,
+          notes: profile.notes,
+        };
+      } catch (error) {
+        return reply.code(401).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Não foi possível entrar.',
+        });
+      }
+    });
+    app.get('/api/player/profile', {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ error: 'Entre novamente para continuar.' });
+      const profile = options.playerProfileStore.profileById(account.session.profileId);
+      if (!profile) return reply.code(404).send({ error: 'Perfil não encontrado.' });
+      return { username: profile.username, sheet: profile.sheet, notes: profile.notes };
+    });
+    app.put('/api/player/notes', {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const parsed = notesSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ ok: false, error: 'O texto das notas é inválido.' });
+      try {
+        const profile = await options.playerProfileStore.saveNotes(
+          account.session.profileId,
+          parsed.data.content,
+        );
+        return { ok: true, content: profile.notes };
+      } catch (error) {
+        return reply.code(400).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Não foi possível salvar as notas.',
+        });
+      }
+    });
+    app.get('/api/player/blank-sheet', {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    }, async (_request, reply) => reply.redirect(
+      `/session-assets/${encodeURIComponent(BLANK_CHARACTER_SHEET_ASSET_PATH)}`,
+    ));
+    app.route({
+      method: ['GET', 'HEAD'],
+      url: '/api/player/sheet',
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      handler: async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const account = authenticatedAccount(request.headers);
+        if (!account) return reply.code(401).send({ error: 'Entre novamente para continuar.' });
+        const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
+        if (!sheet) return reply.code(404).send({ error: 'Nenhuma ficha foi enviada.' });
+        reply
+          .header('Content-Type', 'application/pdf')
+          .header('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(sheet.fileName)}`)
+          .header('Content-Length', sheet.bytes.byteLength);
+        return request.method === 'HEAD' ? reply.send() : reply.send(sheet.bytes);
+      },
+    });
+    app.post('/api/player/sheet/view-ticket', {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
+      if (!sheet) return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
+      const now = Date.now();
+      for (const [ticket, value] of sheetViewTickets) {
+        if (value.expiresAt <= now) sheetViewTickets.delete(ticket);
+      }
+      const ticket = randomBytes(32).toString('base64url');
+      sheetViewTickets.set(ticket, {
+        profileId: account.session.profileId,
+        expiresAt: now + SHEET_VIEW_TICKET_DURATION_MS,
+      });
+      return { ok: true, url: `/api/player/sheet/view?ticket=${encodeURIComponent(ticket)}` };
+    });
+    app.get('/api/player/sheet/view', {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store, max-age=0');
+      const query = request.query as { ticket?: unknown };
+      const ticket = typeof query.ticket === 'string' ? query.ticket : '';
+      const authorization = sheetViewTickets.get(ticket);
+      if (!authorization || authorization.expiresAt <= Date.now()) {
+        if (authorization) sheetViewTickets.delete(ticket);
+        return reply.code(403).type('text/plain').send(
+          'O acesso temporário a esta ficha expirou. Abra-a novamente pelo BossBar.',
+        );
+      }
+      const sheet = await options.playerProfileStore.readSheet(authorization.profileId);
+      if (!sheet) {
+        return reply.code(404).type('text/plain').send(
+          'Esta ficha não está mais vinculada ao jogador.',
+        );
+      }
+      return reply
+        .type('application/pdf')
+        .header('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(sheet.fileName)}`)
+        .header('Content-Length', sheet.bytes.byteLength)
+        .send(sheet.bytes);
+    });
+    app.delete('/api/player/sheet', {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      try {
+        const profile = await options.playerProfileStore.removeSheet(account.session.profileId);
+        serverReference?.refreshCharacterSheet(account.session.clientId, false);
+        return { ok: true, sheet: profile.sheet };
+      } catch (error) {
+        return reply.code(400).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Não foi possível remover a ficha.',
+        });
+      }
+    });
+    app.post('/api/player/sheet', {
+      bodyLimit: MAX_CHARACTER_SHEET_BYTES,
+      config: { rateLimit: { max: 8, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const bytes = request.body;
+      if (!Buffer.isBuffer(bytes) || bytes.byteLength < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        return reply.code(400).send({ ok: false, error: 'Selecione um arquivo PDF válido.' });
+      }
+      try {
+        const inspected = await inspectCharacterSheetPdf(bytes);
+        if (!inspected.validation.supported) {
+          return reply.code(422).send({
+            ok: false,
+            sheet: {
+              hasSheet: false,
+              fileName: null,
+              uploadedAt: null,
+              validation: inspected.validation,
+            },
+            error: inspected.validation.issues[0]?.message,
+          });
+        }
+        const encodedFileName = request.headers['x-bossbar-filename'];
+        const fileName = typeof encodedFileName === 'string'
+          ? decodeURIComponent(encodedFileName)
+          : 'ficha-t20.pdf';
+        const profile = await options.playerProfileStore.saveSheet(
+          account.session.profileId,
+          fileName,
+          bytes,
+          inspected.validation,
+        );
+        serverReference?.refreshCharacterSheet(account.session.clientId, true);
+        return { ok: true, sheet: profile.sheet, corrected: false };
+      } catch (error) {
+        return reply.code(422).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Não foi possível ler esta ficha.',
+        });
+      }
+    });
+    app.post('/api/player/sheet/autofix', {
+      config: { rateLimit: { max: 8, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
+      if (!sheet) return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
+      try {
+        const inspected = await inspectCharacterSheetPdf(sheet.bytes, true);
+        const correctedBytes = inspected.bytes ?? sheet.bytes;
+        const profile = await options.playerProfileStore.saveSheet(
+          account.session.profileId,
+          sheet.fileName,
+          correctedBytes,
+          inspected.validation,
+        );
+        return { ok: true, sheet: profile.sheet, corrected: true };
+      } catch (error) {
+        return reply.code(422).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Não foi possível corrigir a ficha.',
+        });
+      }
     });
     app.get('/api/preload', {
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
@@ -644,6 +968,22 @@ export class MultiplayerSessionServer {
         next(socketError(result.code, result.message));
         return;
       }
+      const accountSession = accountSessions.get(result.auth.accountToken);
+      if (
+        !accountSession ||
+        accountSession.expiresAt <= Date.now() ||
+        accountSession.clientId !== result.auth.clientId ||
+        normalizePlayerName(accountSession.username) !== result.auth.playerName
+      ) {
+        if (accountSession && accountSession.expiresAt <= Date.now()) {
+          accountSessions.delete(result.auth.accountToken);
+        }
+        next(socketError(
+          'ACCOUNT_AUTH_REQUIRED',
+          'Entre com seu usuário e senha antes de conectar.',
+        ));
+        return;
+      }
       if (!roster.canRegister(result.auth.clientId)) {
         next(socketError(
           'ROOM_FULL',
@@ -653,7 +993,8 @@ export class MultiplayerSessionServer {
       }
       socket.data = {
         playerId: '',
-        playerName: result.auth.playerName,
+        playerName: accountSession.username,
+        profileId: accountSession.profileId,
         clientId: result.auth.clientId,
         isHost: typeof result.auth.hostToken === 'string'
           && tokensMatch(result.auth.hostToken, credentials.hostToken),
@@ -721,7 +1062,9 @@ export class MultiplayerSessionServer {
       normalizedPublicBaseUrl
         ? new URL(normalizedPublicBaseUrl).origin
         : null,
+      accountSessions,
     );
+    serverReference = server;
     server.attachSocketHandlers();
     server.notifyPresenceChanged();
     return server;
@@ -735,6 +1078,77 @@ export class MultiplayerSessionServer {
     return [...this.pendingJoinRequests.values()]
       .map(({ request }) => ({ ...request }))
       .sort((first, second) => first.requestedAt - second.requestedAt);
+  }
+
+  refreshCharacterSheet(clientId: string, hasCharacterSheet: boolean) {
+    if (this.roster.setCharacterSheet(clientId, hasCharacterSheet)) {
+      this.notifyPresenceChanged();
+    }
+    const sockets = [...this.io.sockets.sockets.values()]
+      .filter((socket) => socket.data.clientId === clientId);
+    if (!hasCharacterSheet) {
+      this.playerCombatStates.delete(clientId);
+      for (const socket of sockets) socket.emit('player:state', null);
+      return;
+    }
+    const socket = sockets[0];
+    if (!socket) return;
+    const state = this.createPlayerEncounterState(clientId, socket.data.profileId);
+    if (!state) return;
+    this.playerCombatStates.set(clientId, state);
+    for (const candidate of sockets) candidate.emit('player:state', state);
+  }
+
+  applyAreaDamage(request: AreaDamageRequest): AreaDamageResult {
+    if (!isAreaDamageRequest(request)) throw new Error('Informe dano, CD e resultado de sucesso válidos.');
+    const skippedPlayers: string[] = [];
+    let appliedPlayers = 0;
+    const handledClients = new Set<string>();
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (!socket.data.playerId || handledClients.has(socket.data.clientId)) continue;
+      handledClients.add(socket.data.clientId);
+      const state = this.playerCombatStates.get(socket.data.clientId) ??
+        this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
+      if (!state) {
+        skippedPlayers.push(socket.data.playerName);
+        continue;
+      }
+      const impact = resolveAreaDamage(
+        state,
+        request,
+        randomInt(1, 21),
+        ++this.playerImpactSequence,
+      );
+      this.playerCombatStates.set(socket.data.clientId, impact.playerState);
+      socket.emit('player:combat-impact', impact);
+      appliedPlayers += 1;
+    }
+    return { ok: true, appliedPlayers, skippedPlayers };
+  }
+
+  async playerSheet(playerId: string) {
+    const socket = [...this.io.sockets.sockets.values()]
+      .find((candidate) => candidate.data.playerId === playerId);
+    if (!socket) return null;
+    return this.options.playerProfileStore.readSheet(socket.data.profileId);
+  }
+
+  async resetPlayerPassword(playerId: string, password: string) {
+    const sockets = [...this.io.sockets.sockets.values()]
+      .filter((candidate) => candidate.data.playerId === playerId);
+    const profileId = sockets[0]?.data.profileId;
+    if (!profileId) throw new Error('O jogador não está conectado.');
+    await this.resetProfilePassword(profileId, password);
+  }
+
+  async resetProfilePassword(profileId: string, password: string) {
+    await this.options.playerProfileStore.resetPassword(profileId, password);
+    for (const [token, session] of this.accountSessions) {
+      if (session.profileId === profileId) this.accountSessions.delete(token);
+    }
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.profileId === profileId) socket.disconnect(true);
+    }
   }
 
   approveJoinRequest(requestId: string) {
@@ -893,10 +1307,41 @@ export class MultiplayerSessionServer {
     this.io.disconnectSockets(true);
     this.pendingJoinRequests.clear();
     this.approvedClientIds.clear();
+    this.accountSessions.clear();
+    this.playerCombatStates.clear();
     if (this.fastify.server.listening) await this.fastify.close();
     await new Promise<void>((resolveClose) => {
       this.io.close(() => resolveClose());
     });
+  }
+
+  private createPlayerEncounterState(clientId: string, profileId: string) {
+    const validation = this.options.playerProfileStore.profileById(profileId)?.sheet.validation;
+    if (
+      !validation?.supported ||
+      validation.issues.some(({ severity }) => severity === 'error')
+    ) return null;
+    const summary = validation.summary;
+    const reflex = Array.isArray(summary?.skills)
+      ? summary.skills.find(({ id }) => id === '270')?.total
+      : null;
+    if (
+      !summary || summary.currentHealth === null || summary.maxHealth === null ||
+      summary.currentMana === null || summary.maxMana === null || reflex === null || reflex === undefined
+    ) return null;
+    return {
+      clientId,
+      characterName: summary.characterName || 'Personagem',
+      currentHealth: Math.max(0, Math.min(summary.maxHealth, summary.currentHealth)),
+      maxHealth: Math.max(1, summary.maxHealth),
+      currentMana: Math.max(0, Math.min(summary.maxMana, summary.currentMana)),
+      maxMana: Math.max(0, summary.maxMana),
+      defenseMelee: Math.max(0, summary.defenses?.melee ?? summary.defense ?? 0),
+      defenseRanged: Math.max(0, summary.defenses?.ranged ?? summary.defense ?? 0),
+      reflex,
+      statuses: [],
+      revision: 0,
+    } satisfies PlayerEncounterState;
   }
 
   private attachSocketHandlers() {
@@ -937,6 +1382,9 @@ export class MultiplayerSessionServer {
       socketId: socket.id,
       isHost: socket.data.isHost,
       now: socket.data.connectedAt,
+      hasCharacterSheet: Boolean(
+        this.options.playerProfileStore.profileById(socket.data.profileId)?.sheet.hasSheet
+      ),
     });
     if (!result.accepted) {
       socket.disconnect(true);
@@ -954,6 +1402,12 @@ export class MultiplayerSessionServer {
       }));
     }
     socket.emit('session:snapshot', this.currentSnapshot);
+    const playerState = this.playerCombatStates.get(socket.data.clientId) ??
+      this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
+    if (playerState) {
+      this.playerCombatStates.set(socket.data.clientId, playerState);
+      socket.emit('player:state', playerState);
+    }
     this.notifyPresenceChanged();
   }
 

@@ -40,11 +40,22 @@ import type {
   BossLibrarySaveResult,
 } from './shared/library';
 import type {
+  HostedPlayerPasswordResetResult,
+  NotesSaveResult,
+  PlayerProfileSummary,
+} from './shared/character-sheet';
+import type {
+  CustomStatusLibraryMutationResult,
+  CustomStatusPreset,
+  CustomStatusPresetDraft,
+} from './shared/custom-status-library';
+import type {
   HostedEncounterStartResult,
   HostedSessionStartupProgress,
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './shared/multiplayer';
+import type { AreaDamageRequest, AreaDamageResult } from './shared/player-combat';
 import type {
   SceneAudioSlot,
   SceneMediaSelectionResult,
@@ -155,12 +166,25 @@ const bossAPI = {
   applyHealthSequence: (
     request: HealthSequenceRequest,
   ): Promise<HealthSequenceResult> => ipcRenderer.invoke('health:sequence', request),
+  applyAreaDamage: (
+    request: AreaDamageRequest,
+  ): Promise<AreaDamageResult> => ipcRenderer.invoke('player-combat:area-damage', request),
   openPresentation: (): Promise<boolean> =>
     ipcRenderer.invoke('presentation:open'),
   isPresentationOpen: (): Promise<boolean> =>
     ipcRenderer.invoke('presentation:is-open'),
   setControlPanelMinimized: (minimized: boolean): Promise<boolean> =>
     ipcRenderer.invoke('control:set-minimized', minimized),
+  getCustomStatusLibrary: (): Promise<CustomStatusPreset[]> =>
+    ipcRenderer.invoke('custom-status-library:get'),
+  createCustomStatusPreset: (
+    draft: CustomStatusPresetDraft,
+  ): Promise<CustomStatusLibraryMutationResult> =>
+    ipcRenderer.invoke('custom-status-library:create', draft),
+  deleteCustomStatusPreset: (
+    presetId: string,
+  ): Promise<CustomStatusLibraryMutationResult> =>
+    ipcRenderer.invoke('custom-status-library:delete', presetId),
   openSoundboardWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('soundboard:open-window'),
   openSceneEditor: (): Promise<boolean> =>
@@ -228,6 +252,25 @@ const bossAPI = {
     ipcRenderer.invoke('multiplayer:approve-player', requestId),
   rejectHostedPlayer: (requestId: string): Promise<boolean> =>
     ipcRenderer.invoke('multiplayer:reject-player', requestId),
+  openHostedPlayerSheet: (playerId: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:open-player-sheet', playerId),
+  resetHostedPlayerPassword: (
+    playerId: string,
+    password: string,
+  ): Promise<HostedPlayerPasswordResetResult> =>
+    ipcRenderer.invoke('multiplayer:reset-player-password', playerId, password),
+  getPlayerProfiles: (): Promise<PlayerProfileSummary[]> =>
+    ipcRenderer.invoke('multiplayer:get-player-profiles'),
+  openPlayerProfileSheet: (profileId: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:open-profile-sheet', profileId),
+  resetPlayerProfilePassword: (
+    profileId: string,
+    password: string,
+  ): Promise<HostedPlayerPasswordResetResult> =>
+    ipcRenderer.invoke('multiplayer:reset-profile-password', profileId, password),
+  getMasterNotes: (): Promise<string> => ipcRenderer.invoke('notes:get-master'),
+  saveMasterNotes: (content: string): Promise<NotesSaveResult> =>
+    ipcRenderer.invoke('notes:save-master', content),
   getBossLibraryEntries: (): Promise<BossLibraryEntrySummary[]> =>
     ipcRenderer.invoke('library:get-entries'),
   saveBossToLibrary: (

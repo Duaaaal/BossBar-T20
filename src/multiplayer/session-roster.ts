@@ -19,6 +19,7 @@ export type RegisterPlayerRequest = {
   socketId: string;
   isHost?: boolean;
   now?: number;
+  hasCharacterSheet?: boolean;
 };
 
 export type RegisterPlayerResult =
@@ -66,6 +67,7 @@ const publicPlayer = (player: RosterPlayer): MultiplayerPlayer => ({
   latencyMs: player.latencyMs,
   connectionQuality: player.connectionQuality,
   hasConnectionIssue: player.hasConnectionIssue,
+  hasCharacterSheet: player.hasCharacterSheet,
 });
 
 export class SessionRoster {
@@ -96,6 +98,7 @@ export class SessionRoster {
     socketId,
     isHost = false,
     now = Date.now(),
+    hasCharacterSheet = false,
   }: RegisterPlayerRequest): RegisterPlayerResult {
     const existing = this.playersByClientId.get(clientId);
     if (!existing && this.playersByClientId.size >= this.maxPlayers) {
@@ -117,6 +120,7 @@ export class SessionRoster {
       latencyMs: existing?.latencyMs ?? null,
       connectionQuality: existing?.connectionQuality ?? 'unknown',
       hasConnectionIssue: existing?.hasConnectionIssue ?? false,
+      hasCharacterSheet,
       missedProbes: 0,
       latencySamples: existing?.latencySamples ?? [],
     };
@@ -128,6 +132,13 @@ export class SessionRoster {
       player: publicPlayer(player),
       replacedSocketId,
     };
+  }
+
+  setCharacterSheet(clientId: string, hasCharacterSheet: boolean) {
+    const player = this.playersByClientId.get(clientId);
+    if (!player || player.hasCharacterSheet === hasCharacterSheet) return false;
+    player.hasCharacterSheet = hasCharacterSheet;
+    return true;
   }
 
   unregisterSocket(socketId: string) {

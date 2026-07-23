@@ -16,11 +16,19 @@ import { bundledAssetUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
+import type { PlayerProfileSummary } from './shared/character-sheet';
 import type {
   ConnectionQuality,
   HostedSessionState,
 } from './shared/multiplayer';
 import type { ScenePlan } from './shared/scene';
+import {
+  createPlayerNotesDocument,
+  nextPlayerNoteTab,
+  parsePlayerNotesDocument,
+  serializePlayerNotesDocument,
+  type PlayerNotesDocument,
+} from './shared/player-notes';
 import './master.css';
 import './scrollbars.css';
 
@@ -88,6 +96,36 @@ const connectionQualityLabels: Record<ConnectionQuality, string> = {
   poor: 'Ruim',
 };
 
+const allowedNoteTags = new Set([
+  'B', 'BR', 'DIV', 'EM', 'FONT', 'I', 'LI', 'OL', 'P', 'SPAN', 'STRONG', 'U',
+]);
+
+const sanitizeNotesHtml = (value: string) => {
+  const template = document.createElement('template');
+  template.innerHTML = value.slice(0, 90_000);
+  const sanitizeNode = (node: Node) => {
+    for (const child of [...node.childNodes]) sanitizeNode(child);
+    if (!(node instanceof Element)) return;
+    if (!(node instanceof HTMLElement)) {
+      node.remove();
+      return;
+    }
+    if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') {
+      node.remove();
+      return;
+    }
+    if (!allowedNoteTags.has(node.tagName)) {
+      node.replaceWith(...node.childNodes);
+      return;
+    }
+    const fontSize = node.tagName === 'FONT' ? node.getAttribute('size') : null;
+    for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
+    if (fontSize && /^[2-5]$/.test(fontSize)) node.setAttribute('size', fontSize);
+  };
+  sanitizeNode(template.content);
+  return template.innerHTML;
+};
+
 type SoundCategoryMenuPosition = {
   left: number;
   width: number;
@@ -127,12 +165,30 @@ const MasterApp = () => {
   const [savingLibrary, setSavingLibrary] = useState(false);
   const [closingApp, setClosingApp] = useState(false);
   const [returningToLauncher, setReturningToLauncher] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [masterNotes, setMasterNotes] = useState<PlayerNotesDocument>(
+    createPlayerNotesDocument,
+  );
+  const [masterNotesStatus, setMasterNotesStatus] = useState('');
+  const [notesClearConfirmationOpen, setNotesClearConfirmationOpen] = useState(false);
+  const [playerProfilesOpen, setPlayerProfilesOpen] = useState(false);
+  const [playerProfiles, setPlayerProfiles] = useState<PlayerProfileSummary[]>([]);
+  const [playerProfilesError, setPlayerProfilesError] = useState('');
+  const [passwordResetPlayer, setPasswordResetPlayer] = useState<{
+    id: string;
+    name: string;
+    source: 'connected' | 'profile';
+  } | null>(null);
+  const [passwordResetValue, setPasswordResetValue] = useState('');
+  const [passwordResetConfirm, setPasswordResetConfirm] = useState('');
+  const [passwordResetError, setPasswordResetError] = useState('');
   const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
   const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
   const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const soundPreviewRef = useRef<HTMLAudioElement | null>(null);
   const soundCategoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const soundCategoryMenuRef = useRef<HTMLDivElement | null>(null);
+  const masterNotesEditorRef = useRef<HTMLDivElement | null>(null);
   const hostedSessionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -200,6 +256,30 @@ const MasterApp = () => {
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [soundCategoryMenuOpen]);
+
+  useLayoutEffect(() => {
+    const editor = masterNotesEditorRef.current;
+    if (!notesOpen || !editor) return;
+    const activeTab = masterNotes.tabs.find(
+      ({ id }) => id === masterNotes.activeTabId,
+    ) ?? masterNotes.tabs[0];
+    const html = sanitizeNotesHtml(activeTab?.html ?? '');
+    if (editor.innerHTML !== html) editor.innerHTML = html;
+  }, [masterNotes.activeTabId, notesOpen]);
+
+  useEffect(() => {
+    if (!notesOpen) return;
+    const closeNotesOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (notesClearConfirmationOpen) {
+        setNotesClearConfirmationOpen(false);
+      } else {
+        setNotesOpen(false);
+      }
+    };
+    document.addEventListener('keydown', closeNotesOnEscape);
+    return () => document.removeEventListener('keydown', closeNotesOnEscape);
+  }, [notesClearConfirmationOpen, notesOpen]);
 
   useEffect(() => {
     let active = true;
@@ -608,6 +688,171 @@ const MasterApp = () => {
     }
   };
 
+  const captureMasterNotesEditor = (source: PlayerNotesDocument) => {
+    const editor = masterNotesEditorRef.current;
+    if (!editor) return source;
+    const html = sanitizeNotesHtml(editor.innerHTML);
+    return {
+      ...source,
+      tabs: source.tabs.map((tab) => tab.id === source.activeTabId
+        ? { ...tab, html }
+        : tab),
+    };
+  };
+
+  const updateActiveMasterNote = (html: string) => {
+    const sanitized = sanitizeNotesHtml(html);
+    setMasterNotes((current) => ({
+      ...current,
+      tabs: current.tabs.map((tab) => tab.id === current.activeTabId
+        ? { ...tab, html: sanitized }
+        : tab),
+    }));
+  };
+
+  const selectMasterNoteTab = (tabId: string) => {
+    setMasterNotes((current) => ({
+      ...captureMasterNotesEditor(current),
+      activeTabId: tabId,
+    }));
+    setMasterNotesStatus('');
+  };
+
+  const addMasterNoteTab = () => {
+    setMasterNotes((current) => {
+      const captured = captureMasterNotesEditor(current);
+      const tab = nextPlayerNoteTab(captured);
+      if (!tab) {
+        setMasterNotesStatus('Limite de 20 notas atingido.');
+        return captured;
+      }
+      setMasterNotesStatus('');
+      return {
+        ...captured,
+        activeTabId: tab.id,
+        tabs: [...captured.tabs, tab],
+      };
+    });
+  };
+
+  const removeMasterNoteTab = (tabId: string) => {
+    setMasterNotes((current) => {
+      const captured = captureMasterNotesEditor(current);
+      if (captured.tabs.length <= 1) return captured;
+      const removedIndex = captured.tabs.findIndex(({ id }) => id === tabId);
+      if (removedIndex < 0) return captured;
+      const tabs = captured.tabs.filter(({ id }) => id !== tabId);
+      const activeTabId = captured.activeTabId === tabId
+        ? tabs[Math.max(0, removedIndex - 1)].id
+        : captured.activeTabId;
+      return { ...captured, activeTabId, tabs };
+    });
+    setMasterNotesStatus('');
+  };
+
+  const applyMasterNotesCommand = (command: string, value?: string) => {
+    const editor = masterNotesEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    document.execCommand(command, false, value);
+    updateActiveMasterNote(editor.innerHTML);
+  };
+
+  const openMasterNotes = async () => {
+    setMasterNotesStatus('');
+    try {
+      setMasterNotes(parsePlayerNotesDocument(await window.bossAPI.getMasterNotes()));
+      setNotesOpen(true);
+    } catch {
+      setMasterNotesStatus('Não foi possível carregar as notas.');
+      setMasterNotes(createPlayerNotesDocument());
+      setNotesOpen(true);
+    }
+  };
+
+  const saveMasterNotes = async () => {
+    setMasterNotesStatus('Salvando…');
+    const notes = captureMasterNotesEditor(masterNotes);
+    setMasterNotes(notes);
+    try {
+      const result = await window.bossAPI.saveMasterNotes(
+        serializePlayerNotesDocument(notes),
+      );
+      setMasterNotesStatus(result.ok ? 'Notas salvas.' : result.error ?? 'Falha ao salvar.');
+    } catch {
+      setMasterNotesStatus('Não foi possível salvar as notas.');
+    }
+  };
+
+  const clearActiveMasterNote = async () => {
+    const notes = captureMasterNotesEditor(masterNotes);
+    const cleared = {
+      ...notes,
+      tabs: notes.tabs.map((tab) => tab.id === notes.activeTabId
+        ? { ...tab, html: '' }
+        : tab),
+    };
+    setMasterNotes(cleared);
+    if (masterNotesEditorRef.current) masterNotesEditorRef.current.innerHTML = '';
+    setMasterNotesStatus('Limpando…');
+    try {
+      const result = await window.bossAPI.saveMasterNotes(
+        serializePlayerNotesDocument(cleared),
+      );
+      if (result.ok) {
+        setNotesClearConfirmationOpen(false);
+        setMasterNotesStatus('Nota limpa.');
+      } else {
+        setMasterNotesStatus(result.error ?? 'Falha ao limpar a nota.');
+      }
+    } catch {
+      setMasterNotesStatus('Não foi possível limpar a nota.');
+    }
+  };
+
+  const openPlayerProfiles = async () => {
+    setPlayerProfilesOpen(true);
+    setPlayerProfilesError('');
+    try {
+      setPlayerProfiles(await window.bossAPI.getPlayerProfiles());
+    } catch {
+      setPlayerProfilesError('Não foi possível carregar os usuários cadastrados.');
+    }
+  };
+
+  const confirmPasswordReset = async () => {
+    if (!passwordResetPlayer) return;
+    if (passwordResetValue.length < 3) {
+      setPasswordResetError('A senha deve ter ao menos 3 caracteres.');
+      return;
+    }
+    if (passwordResetValue !== passwordResetConfirm) {
+      setPasswordResetError('As senhas não coincidem.');
+      return;
+    }
+    const result = passwordResetPlayer.source === 'profile'
+      ? await window.bossAPI.resetPlayerProfilePassword(
+        passwordResetPlayer.id,
+        passwordResetValue,
+      )
+      : await window.bossAPI.resetHostedPlayerPassword(
+        passwordResetPlayer.id,
+        passwordResetValue,
+      );
+    if (!result.ok) {
+      setPasswordResetError(result.error ?? 'Não foi possível redefinir a senha.');
+      return;
+    }
+    setPasswordResetPlayer(null);
+    setPasswordResetValue('');
+    setPasswordResetConfirm('');
+    setPasswordResetError('');
+    if (playerProfilesOpen) {
+      setPlayerProfiles(await window.bossAPI.getPlayerProfiles());
+    }
+    showHostedSessionFeedback('Senha redefinida. O jogador precisará entrar novamente.');
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const unpreparedBosses = state.bosses.filter(
@@ -631,6 +876,16 @@ const MasterApp = () => {
         onClick={() => setSettingsOpen(true)}
       >
         <img src={bundledAssetUrl('cog.png')} alt="" />
+      </button>
+      <button
+        className="notes-button"
+        type="button"
+        title="Bloco de notas"
+        aria-label="Abrir bloco de notas"
+        aria-haspopup="dialog"
+        onClick={() => void openMasterNotes()}
+      >
+        📝
       </button>
       <button
         className={`universal-mute-button ${universalMuted ? 'is-muted' : ''}`}
@@ -705,6 +960,11 @@ const MasterApp = () => {
               <h2 id="hosted-session-title">Sala hospedada</h2>
             </div>
             <div className="hosted-session-heading-actions">
+              <button
+                className="hosted-open-button"
+                type="button"
+                onClick={() => void openPlayerProfiles()}
+              >Usuários</button>
               <button
                 className="hosted-open-button"
                 type="button"
@@ -806,6 +1066,27 @@ const MasterApp = () => {
                       ? 'Problema de conexão'
                       : connectionQualityLabels[player.connectionQuality]}
                   </span>
+                  <button
+                    className="hosted-player-tool"
+                    type="button"
+                    disabled={!player.hasCharacterSheet}
+                    data-disabled-reason="Este jogador ainda não enviou uma ficha"
+                    onClick={() => void window.bossAPI.openHostedPlayerSheet(player.id)}
+                  >
+                    Ficha
+                  </button>
+                  <button
+                    className="hosted-player-tool is-password"
+                    type="button"
+                    onClick={() => {
+                      setPasswordResetPlayer({ id: player.id, name: player.name, source: 'connected' });
+                      setPasswordResetValue('');
+                      setPasswordResetConfirm('');
+                      setPasswordResetError('');
+                    }}
+                  >
+                    Senha
+                  </button>
                 </li>
               ))}
             </ol>
@@ -854,6 +1135,222 @@ const MasterApp = () => {
       </section>
 
       <footer className="master-footer">@Criado por: Brian Nascimento - Versão {appVersion}</footer>
+
+      {notesOpen && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal master-notes-modal" role="dialog" aria-modal="true" aria-labelledby="master-notes-title">
+            <button
+              className="settings-close-button"
+              type="button"
+              aria-label="Fechar"
+              onClick={() => {
+                setMasterNotes((current) => captureMasterNotesEditor(current));
+                setNotesClearConfirmationOpen(false);
+                setNotesOpen(false);
+              }}
+            >×</button>
+            <h2 id="master-notes-title">Bloco de notas</h2>
+            <div className="master-notes-tabs" role="tablist" aria-label="Notas do mestre">
+              {masterNotes.tabs.map((tab) => (
+                <span
+                  className={`master-notes-tab-group ${tab.id === masterNotes.activeTabId ? 'is-active' : ''}`}
+                  key={tab.id}
+                >
+                  <button
+                    className="master-notes-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected={tab.id === masterNotes.activeTabId}
+                    onClick={() => selectMasterNoteTab(tab.id)}
+                  >
+                    {tab.title}
+                  </button>
+                  {masterNotes.tabs.length > 1 && (
+                    <button
+                      className="master-notes-tab-remove"
+                      type="button"
+                      aria-label={`Excluir ${tab.title}`}
+                      onClick={() => removeMasterNoteTab(tab.id)}
+                    >×</button>
+                  )}
+                </span>
+              ))}
+              <button
+                className="master-notes-tab-add"
+                type="button"
+                aria-label="Criar nova nota"
+                onClick={addMasterNoteTab}
+              >+</button>
+            </div>
+            <div className="master-notes-toolbar" aria-label="Formatação da nota">
+              <label htmlFor="master-notes-font-size">Tamanho</label>
+              <select
+                id="master-notes-font-size"
+                defaultValue="3"
+                aria-label="Tamanho da fonte"
+                onChange={(event) => applyMasterNotesCommand('fontSize', event.target.value)}
+              >
+                <option value="2">Pequeno</option>
+                <option value="3">Normal</option>
+                <option value="4">Grande</option>
+                <option value="5">Muito grande</option>
+              </select>
+              <button
+                type="button"
+                aria-label="Negrito"
+                title="Negrito"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyMasterNotesCommand('bold')}
+              ><strong>B</strong></button>
+              <button
+                type="button"
+                aria-label="Itálico"
+                title="Itálico"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyMasterNotesCommand('italic')}
+              ><em>I</em></button>
+              <button
+                type="button"
+                aria-label="Sublinhado"
+                title="Sublinhado"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyMasterNotesCommand('underline')}
+              ><u>U</u></button>
+              <button
+                type="button"
+                aria-label="Lista numerada"
+                title="Lista numerada"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyMasterNotesCommand('insertOrderedList')}
+              >1.</button>
+            </div>
+            <div
+              ref={masterNotesEditorRef}
+              className="master-notes-editor"
+              role="textbox"
+              aria-label="Conteúdo da nota"
+              aria-multiline="true"
+              contentEditable
+              suppressContentEditableWarning
+              data-placeholder="Escreva suas anotações…"
+              onInput={(event) => updateActiveMasterNote(event.currentTarget.innerHTML)}
+              onPaste={(event) => {
+                event.preventDefault();
+                document.execCommand(
+                  'insertText',
+                  false,
+                  event.clipboardData.getData('text/plain'),
+                );
+              }}
+            />
+            <div className="modal-actions master-notes-actions">
+              <span role="status">{masterNotesStatus}</span>
+              <button
+                className="master-notes-clear-button"
+                type="button"
+                onClick={() => setNotesClearConfirmationOpen(true)}
+              >Limpar nota</button>
+              <button className="modal-confirm-button" type="button" onClick={() => void saveMasterNotes()}>Salvar</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {notesClearConfirmationOpen && (
+        <div className="modal-backdrop master-notes-confirmation-backdrop">
+          <section
+            className="confirmation-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="master-notes-clear-title"
+            aria-describedby="master-notes-clear-description"
+          >
+            <p className="modal-eyebrow">Confirmação</p>
+            <h2 id="master-notes-clear-title">Limpar esta nota?</h2>
+            <p id="master-notes-clear-description">
+              Todo o conteúdo da aba atual será apagado imediatamente.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="modal-cancel-button"
+                type="button"
+                onClick={() => setNotesClearConfirmationOpen(false)}
+              >Cancelar</button>
+              <button
+                className="modal-confirm-button"
+                type="button"
+                onClick={() => void clearActiveMasterNote()}
+              >Limpar</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {playerProfilesOpen && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal player-profiles-modal" role="dialog" aria-modal="true" aria-labelledby="player-profiles-title">
+            <button className="settings-close-button" type="button" aria-label="Fechar" onClick={() => setPlayerProfilesOpen(false)}>×</button>
+            <h2 id="player-profiles-title">Usuários cadastrados</h2>
+            <p>Consulte fichas e redefina senhas mesmo quando o jogador não estiver conectado.</p>
+            {playerProfiles.length > 0 ? (
+              <ol className="player-profile-list">
+                {playerProfiles.map((profile) => (
+                  <li key={profile.id}>
+                    <span className="player-profile-name" title={profile.username}>{profile.username}</span>
+                    <small>{profile.sheet.hasSheet ? profile.sheet.fileName : 'Sem ficha'}</small>
+                    <button
+                      type="button"
+                      disabled={!profile.sheet.hasSheet}
+                      data-disabled-reason="Este usuário ainda não enviou uma ficha"
+                      onClick={() => void window.bossAPI.openPlayerProfileSheet(profile.id)}
+                    >Ficha</button>
+                    <button
+                      className="is-password"
+                      type="button"
+                      onClick={() => {
+                        setPasswordResetPlayer({
+                          id: profile.id,
+                          name: profile.username,
+                          source: 'profile',
+                        });
+                        setPasswordResetValue('');
+                        setPasswordResetConfirm('');
+                        setPasswordResetError('');
+                      }}
+                    >Senha</button>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="hosted-player-empty">Nenhum usuário foi cadastrado nesta instalação.</p>
+            )}
+            {playerProfilesError && <p className="master-error" role="alert">{playerProfilesError}</p>}
+          </section>
+        </div>
+      )}
+
+      {passwordResetPlayer && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="password-reset-title">
+            <p className="modal-eyebrow">Jogador: {passwordResetPlayer.name}</p>
+            <h2 id="password-reset-title">Redefinir senha</h2>
+            <p>Ao confirmar, o jogador será desconectado e deverá entrar com a nova senha.</p>
+            <label className="password-reset-field">
+              <span>Nova senha</span>
+              <input type="password" minLength={3} maxLength={128} value={passwordResetValue} onChange={(event) => setPasswordResetValue(event.target.value)} />
+            </label>
+            <label className="password-reset-field">
+              <span>Confirmar senha</span>
+              <input type="password" minLength={3} maxLength={128} value={passwordResetConfirm} onChange={(event) => setPasswordResetConfirm(event.target.value)} />
+            </label>
+            {passwordResetError && <p className="master-error" role="alert">{passwordResetError}</p>}
+            <div className="modal-actions">
+              <button className="modal-cancel-button" type="button" onClick={() => setPasswordResetPlayer(null)}>Cancelar</button>
+              <button className="modal-confirm-button" type="button" onClick={() => void confirmPasswordReset()}>Redefinir</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {settingsOpen && encounterEffects && (
         <div className="modal-backdrop">

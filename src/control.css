@@ -100,7 +100,7 @@ button { cursor: pointer; }
 
 .control-form { display: grid; min-height: 0; align-content: end; gap: 9px; overflow: visible; }
 .control-form label { display: grid; min-width: 0; gap: 4px; color: #aaa0ac; font-size: .64rem; font-weight: 800; letter-spacing: .025em; }
-.control-form input, .control-form textarea {
+.control-form input, .control-form textarea, .control-form select {
   min-width: 0;
   border: 1px solid #39313c;
   border-radius: 7px;
@@ -108,16 +108,20 @@ button { cursor: pointer; }
   background: #100e12;
   color: #eee7ef;
 }
-.control-form input { height: 34px; padding: 6px 9px; font-size: .72rem; }
+.control-form input, .control-form select { height: 34px; padding: 6px 9px; font-size: .72rem; }
+.control-form select { cursor: pointer; }
 .control-form textarea { height: 54px; resize: none; padding: 7px 9px; font-size: .7rem; line-height: 1.3; }
 .control-form input:not(:focus),
 .control-form textarea:not(:focus) { font-weight: 750; }
-.control-form input:focus, .control-form textarea:focus { border-color: #b25b75; box-shadow: 0 0 0 2px rgba(178, 82, 110, .18); }
+.control-form input:focus, .control-form textarea:focus, .control-form select:focus { border-color: #b25b75; box-shadow: 0 0 0 2px rgba(178, 82, 110, .18); }
 .required-star { margin-left: 3px; color: #ff5f70; font-size: .82rem; text-shadow: 0 0 8px rgba(255, 80, 102, .55); }
 
 .control-combat-row { display: grid; grid-template-columns: minmax(170px, 2fr) minmax(72px, .58fr) 44px repeat(3, minmax(88px, .76fr)); gap: 7px; align-items: end; }
 .control-rd-toggle { place-items: center; }
 .control-rd-toggle input { width: 18px; height: 18px; accent-color: #a95265; }
+.control-reflex-dc, .control-area-result { min-width: 0; }
+.control-reflex-dc > span, .control-area-result > span { overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.control-reflex-dc input, .control-area-result select { width: 100%; padding-inline: 5px; text-align: center; }
 .control-combat-row button, .control-apply, .control-action-row > button {
   min-height: 34px;
   border: 1px solid rgba(226, 124, 151, .38);
@@ -130,6 +134,7 @@ button { cursor: pointer; }
 .control-combat-row button > span { max-width: 100%; overflow: hidden; text-overflow: clip; white-space: nowrap; }
 .control-combat-row button small { color: rgba(255, 255, 255, .64); font-size: inherit; }
 .control-damage { background: linear-gradient(145deg, #9c2038, #df4057); box-shadow: inset 0 1px rgba(255, 255, 255, .1); }
+.control-area-damage { border-color: rgba(255, 143, 92, .58) !important; background: linear-gradient(145deg, #8e2c22, #d85b37); box-shadow: inset 0 1px rgba(255, 255, 255, .12); }
 .control-heal { background: linear-gradient(145deg, #207346, #43ad68); box-shadow: inset 0 1px rgba(255, 255, 255, .1); }
 .control-full-heal { background: linear-gradient(145deg, #167381, #2da9b3); box-shadow: inset 0 1px rgba(255, 255, 255, .1); }
 .control-combat-row button:hover, .control-apply:hover, .control-action-row > button:hover { filter: brightness(1.14) saturate(1.08); }
@@ -587,7 +592,8 @@ button { cursor: pointer; }
 }
 .control-status-modal label small { color: #7e727e; font-weight: 700; }
 .control-status-modal input,
-.control-status-modal textarea {
+.control-status-modal textarea,
+.control-status-modal select {
   width: 100%;
   border: 1px solid #453743;
   border-radius: 8px;
@@ -599,7 +605,8 @@ button { cursor: pointer; }
 }
 .control-status-modal textarea { resize: none; line-height: 1.38; }
 .control-status-modal input:focus,
-.control-status-modal textarea:focus {
+.control-status-modal textarea:focus,
+.control-status-modal select:focus {
   border-color: #c26784;
   box-shadow: 0 0 0 2px rgba(194, 83, 121, .2);
 }
@@ -630,7 +637,109 @@ button { cursor: pointer; }
 }
 .control-status-modal-cancel { background: linear-gradient(145deg, #40343f, #5e4758); }
 .control-status-modal-apply { background: linear-gradient(145deg, #71365c, #bd4f7e); }
+.control-status-modal-delete-confirm { background: linear-gradient(145deg, #792238, #c43c53); }
 .control-status-modal footer button:hover { filter: brightness(1.15) saturate(1.08); }
+.control-status-library-modal { width: min(520px, calc(100vw - 24px)); }
+.control-status-library-list {
+  display: grid;
+  max-height: min(230px, calc(100vh - 155px));
+  gap: 6px;
+  overflow-y: auto;
+  padding: 2px 3px 2px 0;
+}
+.control-status-library-empty {
+  margin: 5px 0;
+  border: 1px dashed #433542;
+  border-radius: 9px;
+  padding: 18px 10px;
+  color: #8f828e;
+  font-size: .7rem;
+  text-align: center;
+}
+.control-status-library-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #493945;
+  border-radius: 9px;
+  background: linear-gradient(145deg, rgba(47, 31, 45, .92), rgba(18, 14, 20, .96));
+}
+.control-status-library-item:hover { border-color: #9b5977; }
+.control-status-library-select {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  border: 0;
+  padding: 8px 10px;
+  background: transparent;
+  color: #d9cdd7;
+  text-align: left;
+}
+.control-status-library-select strong {
+  overflow: hidden;
+  color: #f2dce5;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: .78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.control-status-library-select > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #b8aeb7;
+  font-size: .64rem;
+  line-height: 1.32;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.control-status-library-select small {
+  overflow: hidden;
+  color: #9b7491;
+  font-size: .56rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.control-status-library-delete {
+  align-self: stretch;
+  border: 0;
+  border-left: 1px solid #493945;
+  background: rgba(70, 21, 34, .48);
+  color: #df6b7d;
+  font-size: 1rem;
+  font-weight: 900;
+}
+.control-status-library-delete:hover {
+  background: rgba(137, 36, 55, .72);
+  color: #fff;
+}
+.control-status-preset-values { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.control-status-runtime-description,
+.control-status-confirm-modal > p {
+  margin: 0;
+  color: #c7bbc5;
+  font-size: .7rem;
+  line-height: 1.42;
+}
+.control-status-runtime-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.control-status-runtime-details span {
+  border: 1px solid #584050;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: rgba(94, 51, 77, .35);
+  color: #d3a8c2;
+  font-size: .56rem;
+  font-weight: 800;
+}
+.control-confirm-backdrop { z-index: 310; }
+.control-status-confirm-modal { width: min(360px, calc(100vw - 24px)); }
+.control-status-confirm-modal h2 { margin: 0; }
 .control-action-row { display: grid; grid-template-columns: minmax(0, .84fr) minmax(112px, .18fr) minmax(112px, .18fr); grid-template-areas: "description normal grave" "description music music"; column-gap: 7px; row-gap: 4px; align-items: start; }
 .control-action-field { grid-area: description; }
 .control-action-field > span { height: 14px; line-height: 14px; }
@@ -659,6 +768,8 @@ button { cursor: pointer; }
   .control-header { gap: 7px; }
   .control-tab button, .control-add-boss { padding-inline: 7px; font-size: .62rem; }
   .control-combat-row { grid-template-columns: minmax(130px, 1.6fr) 66px 40px repeat(3, minmax(70px, .68fr)); }
+  .control-reflex-dc > span, .control-area-result > span { font-size: .5rem; }
+  .control-reflex-dc input, .control-area-result select { padding-inline: 2px; font-size: .55rem; }
   .control-attributes-row { gap: 4px; }
   .control-number-heading > label,
   .control-split-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

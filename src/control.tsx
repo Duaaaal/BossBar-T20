@@ -18,8 +18,15 @@ import {
   initialEncounterEffectsState,
 } from './shared/battle';
 import { statusIconUrl } from './shared/bundled-assets';
+import {
+  CUSTOM_STATUS_AFFECTED_TARGET_LABELS,
+  CUSTOM_STATUS_AFFECTED_TARGETS,
+  type CustomStatusAffectedTarget,
+  type CustomStatusPreset,
+} from './shared/custom-status-library';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
+import type { AreaDamageSuccessRule } from './shared/player-combat';
 import {
   deriveStatusAttributes,
   getStatusSkillAnnotations,
@@ -43,6 +50,9 @@ import './scrollbars.css';
 
 installDisabledControlTooltips();
 installUndoShortcut(() => window.bossAPI.undoLastChange());
+
+// Mantém a implementação pronta para a etapa em que o dano em área voltar ao painel.
+const AREA_DAMAGE_CONTROLS_VISIBLE = false;
 
 const parseHealthExpression = (value: string) => {
   const parts = value.trim().replace(',', '.').split('/');
@@ -261,6 +271,8 @@ const ControlApp = () => {
   const [music, setMusic] = useState<MusicState | null>(null);
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
+  const [areaReflexDc, setAreaReflexDc] = useState('20');
+  const [areaSuccessRule, setAreaSuccessRule] = useState<AreaDamageSuccessRule>('half');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
   const [maxHealth, setMaxHealth] = useState('500');
   const [attack, setAttack] = useState('10');
@@ -275,9 +287,18 @@ const ControlApp = () => {
   const [statusDamage, setStatusDamage] = useState('');
   const [statusTurns, setStatusTurns] = useState('1');
   const [statusTooltip, setStatusTooltip] = useState<StatusTooltipState | null>(null);
+  const [customStatusLibrary, setCustomStatusLibrary] = useState<CustomStatusPreset[]>([]);
+  const [customStatusLibraryOpen, setCustomStatusLibraryOpen] = useState(false);
+  const [customStatusLibraryLoading, setCustomStatusLibraryLoading] = useState(false);
   const [customStatusOpen, setCustomStatusOpen] = useState(false);
+  const [customStatusApplyOpen, setCustomStatusApplyOpen] = useState(false);
+  const [selectedCustomStatus, setSelectedCustomStatus] = useState<CustomStatusPreset | null>(null);
+  const [customStatusDeleteCandidate, setCustomStatusDeleteCandidate] = useState<CustomStatusPreset | null>(null);
   const [customStatusName, setCustomStatusName] = useState('');
   const [customStatusDescription, setCustomStatusDescription] = useState('');
+  const [customStatusInflictedStatusId, setCustomStatusInflictedStatusId] = useState('');
+  const [customStatusAffectedTarget, setCustomStatusAffectedTarget] =
+    useState<CustomStatusAffectedTarget>('none');
   const [customStatusDamage, setCustomStatusDamage] = useState('');
   const [customStatusTurns, setCustomStatusTurns] = useState('1');
   const [customStatusError, setCustomStatusError] = useState('');
@@ -296,6 +317,21 @@ const ControlApp = () => {
       active = false;
       unsubscribe();
     };
+  }, []);
+
+  const loadCustomStatusLibrary = async () => {
+    setCustomStatusLibraryLoading(true);
+    try {
+      setCustomStatusLibrary(await window.bossAPI.getCustomStatusLibrary());
+    } catch {
+      setCustomStatusError('Não foi possível carregar a biblioteca de status.');
+    } finally {
+      setCustomStatusLibraryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCustomStatusLibrary();
   }, []);
 
   useEffect(() => {
@@ -444,7 +480,11 @@ const ControlApp = () => {
     setStatusDamage('');
     setStatusTurns('1');
     setStatusTooltip(null);
+    setCustomStatusLibraryOpen(false);
     setCustomStatusOpen(false);
+    setCustomStatusApplyOpen(false);
+    setSelectedCustomStatus(null);
+    setCustomStatusDeleteCandidate(null);
     setCustomStatusError('');
   }, [activeBoss?.id]);
 
@@ -519,12 +559,11 @@ const ControlApp = () => {
     setStatusTurns(String(activeStatus?.turnsRemaining ?? 1));
     setFormError('');
     if (definition.customizable) {
-      setCustomStatusName(activeStatus?.customName ?? '');
-      setCustomStatusDescription(activeStatus?.customDescription ?? '');
       setCustomStatusDamage(activeStatus?.damageFormula ?? '');
       setCustomStatusTurns(String(activeStatus?.turnsRemaining ?? 1));
       setCustomStatusError('');
-      setCustomStatusOpen(true);
+      setCustomStatusLibraryOpen(true);
+      void loadCustomStatusLibrary();
     }
   };
 
@@ -534,7 +573,7 @@ const ControlApp = () => {
       return;
     }
     if (selectedStatusDefinition.customizable) {
-      setCustomStatusOpen(true);
+      setCustomStatusLibraryOpen(true);
       return;
     }
 
@@ -565,20 +604,10 @@ const ControlApp = () => {
   };
 
   const applyCustomStatus = () => {
-    if (!activeBoss) return;
-    const name = customStatusName.trim();
-    const description = customStatusDescription.trim();
+    if (!activeBoss || !selectedCustomStatus) return;
     const turns = Number(customStatusTurns);
-    if (!name || name.length > 60) {
-      setCustomStatusError('Informe um nome de atÃ© 60 caracteres.');
-      return;
-    }
-    if (!description || description.length > 300) {
-      setCustomStatusError('Descreva o efeito em atÃ© 300 caracteres.');
-      return;
-    }
     if (!Number.isInteger(turns) || turns < 1 || turns > 999) {
-      setCustomStatusError('Informe uma duraÃ§Ã£o entre 1 e 999 turnos.');
+      setCustomStatusError('Informe uma duração entre 1 e 999 turnos.');
       return;
     }
     const damageFormula = customStatusDamage.trim()
@@ -598,10 +627,75 @@ const ControlApp = () => {
       statusId: 'coringa',
       damageFormula,
       turns,
-      customName: name,
-      customDescription: description,
+      customName: selectedCustomStatus.name,
+      customDescription: selectedCustomStatus.description,
+      customPresetId: selectedCustomStatus.id,
+      customInflictedStatusId: selectedCustomStatus.inflictedStatusId ?? undefined,
+      customAffectedTarget: selectedCustomStatus.affectedTarget,
     });
+    setCustomStatusApplyOpen(false);
+  };
+
+  const openCustomStatusEditor = () => {
+    setCustomStatusName('');
+    setCustomStatusDescription('');
+    setCustomStatusInflictedStatusId('');
+    setCustomStatusAffectedTarget('none');
+    setCustomStatusError('');
+    setCustomStatusLibraryOpen(false);
+    setCustomStatusOpen(true);
+  };
+
+  const saveCustomStatusPreset = async () => {
+    const name = customStatusName.trim();
+    const description = customStatusDescription.trim();
+    if (!name || name.length > 60) {
+      setCustomStatusError('Informe um nome de até 60 caracteres.');
+      return;
+    }
+    if (!description || description.length > 300) {
+      setCustomStatusError('Descreva o efeito em até 300 caracteres.');
+      return;
+    }
+    setCustomStatusError('');
+    const result = await window.bossAPI.createCustomStatusPreset({
+      name,
+      description,
+      inflictedStatusId: customStatusInflictedStatusId
+        ? customStatusInflictedStatusId as Exclude<StatusId, 'coringa'>
+        : null,
+      affectedTarget: customStatusAffectedTarget,
+    });
+    if (!result.ok || !result.preset) {
+      setCustomStatusError(result.error ?? 'Não foi possível salvar o status.');
+      return;
+    }
+    await loadCustomStatusLibrary();
     setCustomStatusOpen(false);
+    setCustomStatusLibraryOpen(true);
+  };
+
+  const chooseCustomStatus = (preset: CustomStatusPreset) => {
+    const activeStatus = activeStatusesById.get('coringa');
+    const sameActivePreset = activeStatus?.customPresetId === preset.id;
+    setSelectedCustomStatus(preset);
+    setCustomStatusDamage(sameActivePreset ? activeStatus.damageFormula ?? '' : '');
+    setCustomStatusTurns(String(sameActivePreset ? activeStatus.turnsRemaining : 1));
+    setCustomStatusError('');
+    setCustomStatusLibraryOpen(false);
+    setCustomStatusApplyOpen(true);
+  };
+
+  const deleteCustomStatusPreset = async () => {
+    if (!customStatusDeleteCandidate) return;
+    const result = await window.bossAPI.deleteCustomStatusPreset(
+      customStatusDeleteCandidate.id,
+    );
+    if (!result.ok) {
+      setCustomStatusError(result.error ?? 'Não foi possível excluir o status.');
+    }
+    setCustomStatusDeleteCandidate(null);
+    await loadCustomStatusLibrary();
   };
 
   const removeStatus = () => {
@@ -734,6 +828,34 @@ const ControlApp = () => {
     if (!result.ok) setFormError(result.error ?? 'Não foi possível aplicar o valor.');
   };
 
+  const applyAreaDamage = async () => {
+    const reflexDc = Number(areaReflexDc);
+    if (!parsedAmount || rawAmount <= 0 || !Number.isInteger(reflexDc) || reflexDc < 0) {
+      setFormError('Informe um dano válido e uma CD de Reflexos inteira.');
+      return;
+    }
+    setFormError('');
+    const result = await window.bossAPI.applyAreaDamage({
+      damage: Math.ceil(rawAmount),
+      reflexDc,
+      successRule: areaSuccessRule,
+    });
+    if (!result.ok) {
+      setFormError(result.error ?? 'Não foi possível aplicar o dano em área.');
+      return;
+    }
+    if (result.appliedPlayers === 0 || result.skippedPlayers.length > 0) {
+      const skipped = result.skippedPlayers.length > 0
+        ? ` Sem ficha válida: ${result.skippedPlayers.join(', ')}.`
+        : '';
+      setFormError(
+        result.appliedPlayers === 0
+          ? `Nenhum jogador recebeu o dano em área.${skipped}`
+          : `Dano aplicado a ${result.appliedPlayers} jogador(es).${skipped}`,
+      );
+    }
+  };
+
   const publishAction = (severity: 'normal' | 'grave') => {
     if (!activeBoss) return;
     window.bossAPI.dispatch({
@@ -821,6 +943,34 @@ const ControlApp = () => {
             }} />
           </label>
           <button className="control-damage" type="button" onClick={() => void applyHealthChange('damage')}><span style={{ fontSize: healthButtonFontSize('Dano', displayedDamage) }}>Dano <small>({displayedDamage})</small></span></button>
+          {AREA_DAMAGE_CONTROLS_VISIBLE && (
+            <>
+              <button className="control-area-damage" type="button" onClick={() => void applyAreaDamage()}><span style={{ fontSize: healthButtonFontSize('Dano em área', rawAmount) }}>Dano em área <small>({rawAmount})</small></span></button>
+              <label className="control-reflex-dc">
+                <span>CD Ref.</span>
+                <input
+                  aria-label="CD do teste de Reflexos"
+                  inputMode="numeric"
+                  min={0}
+                  max={999}
+                  type="number"
+                  value={areaReflexDc}
+                  onChange={(event) => setAreaReflexDc(event.target.value)}
+                />
+              </label>
+              <label className="control-area-result">
+                <span>Sucesso</span>
+                <select
+                  aria-label="Dano sofrido ao passar no teste de Reflexos"
+                  value={areaSuccessRule}
+                  onChange={(event) => setAreaSuccessRule(event.target.value as AreaDamageSuccessRule)}
+                >
+                  <option value="half">Metade</option>
+                  <option value="none">Nenhum</option>
+                </select>
+              </label>
+            </>
+          )}
           <button className="control-heal" type="button" onClick={() => void applyHealthChange('heal')}><span style={{ fontSize: healthButtonFontSize('Cura', rawAmount) }}>Cura <small>({rawAmount})</small></span></button>
           <button className="control-full-heal" type="button" onClick={() => window.bossAPI.dispatch({ type: 'reset-health', bossId: activeBoss.id })}><span style={{ fontSize: healthButtonFontSize('Full Heal', activeBoss.maxHealth) }}>Full Heal <small>({activeBoss.maxHealth})</small></span></button>
         </div>
@@ -1178,14 +1328,58 @@ const ControlApp = () => {
           </div>
         );
       })()}
+      {customStatusLibraryOpen && (
+        <div className="control-modal-backdrop" role="presentation">
+          <section className="control-status-modal control-status-library-modal" role="dialog" aria-modal="true" aria-labelledby="custom-status-library-title">
+            <header>
+              <img src={statusIconUrl('status-36-coringa.png')} alt="" />
+              <div>
+                <h2 id="custom-status-library-title">Biblioteca de status</h2>
+                <span>Condições personalizadas do mestre</span>
+              </div>
+            </header>
+            <div className="control-status-library-list" aria-live="polite">
+              {customStatusLibraryLoading ? (
+                <p className="control-status-library-empty">Carregando biblioteca...</p>
+              ) : customStatusLibrary.length === 0 ? (
+                <p className="control-status-library-empty">Nenhum status personalizado foi criado.</p>
+              ) : customStatusLibrary.map((preset) => (
+                <article className="control-status-library-item" key={preset.id}>
+                  <button type="button" className="control-status-library-select" onClick={() => chooseCustomStatus(preset)}>
+                    <strong>{preset.name}</strong>
+                    <span>{preset.description}</span>
+                    <small>
+                      {preset.inflictedStatusId
+                        ? `Também inflige ${getStatusDefinition(preset.inflictedStatusId).name}`
+                        : 'Não inflige outra condição'}
+                      {' · '}
+                      {CUSTOM_STATUS_AFFECTED_TARGET_LABELS[preset.affectedTarget]}
+                    </small>
+                  </button>
+                  <button
+                    type="button"
+                    className="control-status-library-delete"
+                    aria-label={`Excluir ${preset.name}`}
+                    title="Excluir da biblioteca"
+                    onClick={() => setCustomStatusDeleteCandidate(preset)}
+                  >×</button>
+                </article>
+              ))}
+            </div>
+            {customStatusError && <p className="control-status-modal-error" role="alert">{customStatusError}</p>}
+            <footer>
+              <button type="button" className="control-status-modal-cancel" onClick={() => setCustomStatusLibraryOpen(false)}>Fechar</button>
+              <button type="button" className="control-status-modal-apply" onClick={openCustomStatusEditor}>+ Criar novo</button>
+            </footer>
+          </section>
+        </div>
+      )}
       {customStatusOpen && (
         <div className="control-modal-backdrop" role="presentation">
           <section className="control-status-modal" role="dialog" aria-modal="true" aria-labelledby="custom-status-title">
             <header>
               <img src={statusIconUrl('status-36-coringa.png')} alt="" />
-              <div>
-                <h2 id="custom-status-title">Status personalizado</h2>
-              </div>
+              <div><h2 id="custom-status-title">Criar status personalizado</h2></div>
             </header>
             <label>
               <span>Nome do status</span>
@@ -1195,10 +1389,54 @@ const ControlApp = () => {
               <span>Descrição do efeito</span>
               <textarea maxLength={300} rows={3} value={customStatusDescription} onChange={(event) => setCustomStatusDescription(event.target.value)} placeholder="Explique brevemente o que esta condição faz." />
             </label>
+            <div className="control-status-modal-values control-status-preset-values">
+              <label>
+                <span>Também inflige <small>(opcional)</small></span>
+                <select value={customStatusInflictedStatusId} onChange={(event) => setCustomStatusInflictedStatusId(event.target.value)}>
+                  <option value="">Nenhum outro status</option>
+                  {STATUS_DEFINITIONS.filter(({ id }) => id !== 'coringa').map((definition) => (
+                    <option key={definition.id} value={definition.id}>{definition.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Valor afetado</span>
+                <select value={customStatusAffectedTarget} onChange={(event) => setCustomStatusAffectedTarget(event.target.value as CustomStatusAffectedTarget)}>
+                  {CUSTOM_STATUS_AFFECTED_TARGETS.map((target) => (
+                    <option key={target} value={target}>{CUSTOM_STATUS_AFFECTED_TARGET_LABELS[target]}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {customStatusError && <p className="control-status-modal-error" role="alert">{customStatusError}</p>}
+            <footer>
+              <button type="button" className="control-status-modal-cancel" onClick={() => { setCustomStatusOpen(false); setCustomStatusLibraryOpen(true); }}>Cancelar</button>
+              <button type="button" className="control-status-modal-apply" onClick={() => void saveCustomStatusPreset()}>Salvar na biblioteca</button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {customStatusApplyOpen && selectedCustomStatus && (
+        <div className="control-modal-backdrop" role="presentation">
+          <section className="control-status-modal control-status-runtime-modal" role="dialog" aria-modal="true" aria-labelledby="custom-status-apply-title">
+            <header>
+              <img src={statusIconUrl('status-36-coringa.png')} alt="" />
+              <div>
+                <h2 id="custom-status-apply-title">{selectedCustomStatus.name}</h2>
+                <span>Aplicar status personalizado</span>
+              </div>
+            </header>
+            <p className="control-status-runtime-description">{selectedCustomStatus.description}</p>
+            <div className="control-status-runtime-details">
+              <span>{CUSTOM_STATUS_AFFECTED_TARGET_LABELS[selectedCustomStatus.affectedTarget]}</span>
+              {selectedCustomStatus.inflictedStatusId && (
+                <span>Também inflige {getStatusDefinition(selectedCustomStatus.inflictedStatusId).name}</span>
+              )}
+            </div>
             <div className="control-status-modal-values">
               <label>
                 <span>Dano por turno <small>(opcional)</small></span>
-                <input maxLength={128} value={customStatusDamage} onChange={(event) => setCustomStatusDamage(event.target.value)} placeholder="Ex.: 1d6 + 2d8 + 10" />
+                <input autoFocus maxLength={128} value={customStatusDamage} onChange={(event) => setCustomStatusDamage(event.target.value)} placeholder="Ex.: 1d6 + 2d8 + 10" />
               </label>
               <label>
                 <span>Turnos</span>
@@ -1207,8 +1445,20 @@ const ControlApp = () => {
             </div>
             {customStatusError && <p className="control-status-modal-error" role="alert">{customStatusError}</p>}
             <footer>
-              <button type="button" className="control-status-modal-cancel" onClick={() => setCustomStatusOpen(false)}>Cancelar</button>
+              <button type="button" className="control-status-modal-cancel" onClick={() => { setCustomStatusApplyOpen(false); setCustomStatusLibraryOpen(true); }}>Voltar</button>
               <button type="button" className="control-status-modal-apply" onClick={applyCustomStatus}>Aplicar</button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {customStatusDeleteCandidate && (
+        <div className="control-modal-backdrop control-confirm-backdrop" role="presentation">
+          <section className="control-status-modal control-status-confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="custom-status-delete-title">
+            <h2 id="custom-status-delete-title">Excluir status personalizado?</h2>
+            <p>“{customStatusDeleteCandidate.name}” será removido da biblioteca. Condições já ativas permanecem até o fim de sua duração.</p>
+            <footer>
+              <button type="button" className="control-status-modal-cancel" onClick={() => setCustomStatusDeleteCandidate(null)}>Cancelar</button>
+              <button type="button" className="control-status-modal-delete-confirm" onClick={() => void deleteCustomStatusPreset()}>Sim, excluir</button>
             </footer>
           </section>
         </div>

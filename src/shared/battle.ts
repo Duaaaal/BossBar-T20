@@ -9,6 +9,13 @@ import {
   type StatusId,
 } from './status.ts';
 import { applyStatusRules } from './status-rules.ts';
+import {
+  isCustomStatusAffectedTarget,
+  isCustomStatusInflictedStatusId,
+  isCustomStatusPresetId,
+  type CustomStatusAffectedTarget,
+  type CustomStatusInflictedStatusId,
+} from './custom-status-library.ts';
 
 export type BossState = {
   id: string;
@@ -471,6 +478,9 @@ export type BattleCommand =
       turns: number;
       customName?: string;
       customDescription?: string;
+      customPresetId?: string;
+      customInflictedStatusId?: CustomStatusInflictedStatusId;
+      customAffectedTarget?: CustomStatusAffectedTarget;
     }
   | { type: 'remove-status'; bossId: string; statusId: StatusId }
   | { type: 'start-turn'; bossId: string }
@@ -582,6 +592,20 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
           customName.length <= 60 &&
           customDescription.length >= 1 &&
           customDescription.length <= 300 &&
+          (
+            command.customPresetId === undefined ||
+            (
+              isCustomStatusPresetId(command.customPresetId)
+            )
+          ) &&
+          (
+            command.customInflictedStatusId === undefined ||
+            isCustomStatusInflictedStatusId(command.customInflictedStatusId)
+          ) &&
+          (
+            command.customAffectedTarget === undefined ||
+            isCustomStatusAffectedTarget(command.customAffectedTarget)
+          ) &&
           (
             command.damageFormula === null ||
             (
@@ -727,6 +751,15 @@ export const applyBattleCommand = (
           turnsRemaining: clampInteger(command.turns, 1, 999),
           ...(customName ? { customName } : {}),
           ...(customDescription ? { customDescription } : {}),
+          ...(definition.customizable && command.customPresetId
+            ? { customPresetId: command.customPresetId }
+            : {}),
+          ...(definition.customizable && command.customInflictedStatusId
+            ? { customInflictedStatusId: command.customInflictedStatusId }
+            : {}),
+          ...(definition.customizable && command.customAffectedTarget
+            ? { customAffectedTarget: command.customAffectedTarget }
+            : {}),
         };
         return {
           ...boss,

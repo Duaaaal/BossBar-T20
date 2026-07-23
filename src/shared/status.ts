@@ -1,3 +1,8 @@
+import type {
+  CustomStatusAffectedTarget,
+  CustomStatusInflictedStatusId,
+} from './custom-status-library';
+
 const STATUS_IDS = [
   'abalado',
   'agarrado',
@@ -55,6 +60,9 @@ export type ActiveBossStatus = Readonly<{
   turnsRemaining: number;
   customName?: string;
   customDescription?: string;
+  customPresetId?: string;
+  customInflictedStatusId?: CustomStatusInflictedStatusId;
+  customAffectedTarget?: CustomStatusAffectedTarget;
 }>;
 
 export type StatusValueKind =
@@ -326,7 +334,7 @@ export const STATUS_DEFINITIONS: readonly StatusDefinition[] = Object.freeze([
   statusDefinition(
     'coringa',
     'Status personalizado',
-    'Condição criada pelo mestre. Clique para definir nome, descrição, dano opcional e duração.',
+    'Condição criada pelo mestre. Clique para abrir a biblioteca de status personalizados.',
     36,
     true,
     null,
@@ -590,6 +598,9 @@ export const normalizeActiveStatuses = (value: unknown): ActiveBossStatus[] => {
     let damageFormula: string | null = null;
     let customName: string | undefined;
     let customDescription: string | undefined;
+    let customPresetId: string | undefined;
+    let customInflictedStatusId: CustomStatusInflictedStatusId | undefined;
+    let customAffectedTarget: CustomStatusAffectedTarget | undefined;
     if (definition.customizable) {
       if (
         typeof candidate.customName !== 'string' ||
@@ -598,6 +609,31 @@ export const normalizeActiveStatuses = (value: unknown): ActiveBossStatus[] => {
       customName = candidate.customName.trim().slice(0, 60);
       customDescription = candidate.customDescription.trim().slice(0, 300);
       if (!customName || !customDescription) continue;
+      if (
+        typeof candidate.customPresetId === 'string' &&
+        /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(candidate.customPresetId)
+      ) customPresetId = candidate.customPresetId;
+      if (
+        isStatusId(candidate.customInflictedStatusId) &&
+        candidate.customInflictedStatusId !== 'coringa'
+      ) customInflictedStatusId = candidate.customInflictedStatusId;
+      if (
+        typeof candidate.customAffectedTarget === 'string' &&
+        [
+          'none',
+          'currentHealth',
+          'maxHealth',
+          'attack',
+          'rangedAttack',
+          'skills',
+          'meleeDefense',
+          'rangedDefense',
+          'damageReduction',
+          'shield',
+        ].includes(candidate.customAffectedTarget)
+      ) {
+        customAffectedTarget = candidate.customAffectedTarget as CustomStatusAffectedTarget;
+      }
       if (
         candidate.damageFormula !== null &&
         candidate.damageFormula !== undefined &&
@@ -629,6 +665,9 @@ export const normalizeActiveStatuses = (value: unknown): ActiveBossStatus[] => {
       turnsRemaining: candidate.turnsRemaining as number,
       ...(customName ? { customName } : {}),
       ...(customDescription ? { customDescription } : {}),
+      ...(customPresetId ? { customPresetId } : {}),
+      ...(customInflictedStatusId ? { customInflictedStatusId } : {}),
+      ...(customAffectedTarget ? { customAffectedTarget } : {}),
     });
   }
 

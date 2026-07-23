@@ -9,8 +9,9 @@ import type {
 } from './battle';
 import type { SceneTransitionEvent } from './scene';
 import type { ActiveBossStatus } from './status';
+import type { PlayerAreaDamageImpact, PlayerEncounterState } from './player-combat';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 2;
+export const MULTIPLAYER_PROTOCOL_VERSION = 4;
 export const MAX_MULTIPLAYER_PLAYERS = 10;
 
 export type ConnectionQuality =
@@ -29,6 +30,7 @@ export type MultiplayerPlayer = {
   latencyMs: number | null;
   connectionQuality: ConnectionQuality;
   hasConnectionIssue: boolean;
+  hasCharacterSheet: boolean;
 };
 
 export type MultiplayerJoinRequest = {
@@ -153,6 +155,7 @@ export type MultiplayerPlayerAuth = {
   roomCode: string;
   playerToken: string;
   playerName: string;
+  accountToken: string;
   clientId: string;
   protocolVersion: number;
   hostToken?: string;
@@ -182,6 +185,7 @@ export type MultiplayerConnectionErrorCode =
   | 'INVALID_CLIENT_ID'
   | 'INVALID_NAME'
   | 'INVALID_TOKEN'
+  | 'ACCOUNT_AUTH_REQUIRED'
   | 'PROTOCOL_MISMATCH'
   | 'ROOM_FULL'
   | 'ROOM_NOT_FOUND';
@@ -206,6 +210,8 @@ export interface MultiplayerServerToClientEvents {
   'battle:state': (state: PublicBattlePresentationState) => void;
   'battle:health-effect': (effect: HealthEffect) => void;
   'battle:impact': (impact: PublicCombatImpact) => void;
+  'player:state': (state: PlayerEncounterState | null) => void;
+  'player:combat-impact': (impact: PlayerAreaDamageImpact) => void;
   'presentation:background': (background: BackgroundState) => void;
   'presentation:scene': (scene: PublicScenePresentationState) => void;
   'presentation:scene-transition': (transition: SceneTransitionEvent) => void;
@@ -229,6 +235,7 @@ export type MultiplayerInterServerEvents = Record<never, never>;
 export type MultiplayerSocketData = {
   playerId: string;
   playerName: string;
+  profileId: string;
   clientId: string;
   isHost: boolean;
   connectedAt: number;

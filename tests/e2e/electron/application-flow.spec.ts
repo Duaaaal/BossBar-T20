@@ -53,6 +53,11 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     const player = await windowByTitle(application, 'Apresentação do Chefão - BossBar T20');
     const control = await windowByTitle(application, 'Painel Privado do Encontro - BossBar T20');
 
+    await expect(master.getByRole('button', { name: 'Abrir bloco de notas' })).toHaveText('📝');
+    await expect(master.locator('.master-header')).toHaveCSS('text-align', 'right');
+    await expect(control.getByRole('button', { name: /Dano em área/ })).toHaveCount(0);
+    await expect(control.getByLabel('CD do teste de Reflexos')).toHaveCount(0);
+
     await control.locator('.control-name-field input').fill('Titã Automatizado');
     await control.locator('#control-max-health').fill('600');
     await control.locator('.control-apply').click();
@@ -64,7 +69,7 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(control.locator('.health-difference strong')).toHaveText('600/600');
 
     await control.locator('.control-amount-field input').fill('50');
-    await control.getByRole('button', { name: /Dano/ }).click();
+    await control.getByRole('button', { name: /^Dano \(/ }).click();
     await expect(control.locator('.health-difference strong')).toHaveText('560/600');
     await expect(player.locator('.health-bar-fill')).toHaveAttribute('style', /93\.333/);
 
@@ -73,6 +78,28 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(control.getByRole('button', { name: 'Expandir painel' })).toHaveAttribute('aria-expanded', 'false');
     await control.getByRole('button', { name: 'Expandir painel' }).click();
     await expect(control.getByRole('button', { name: 'Minimizar painel' })).toHaveAttribute('aria-expanded', 'true');
+
+    await control.getByRole('button', { name: 'Status personalizado' }).click();
+    await expect(control.getByRole('heading', { name: 'Biblioteca de status' })).toBeVisible();
+    await control.getByRole('button', { name: '+ Criar novo' }).click();
+    await control.getByLabel('Nome do status').fill('Marca automatizada');
+    await control.getByLabel('Descrição do efeito').fill('Reduz a defesa e causa dano por turno.');
+    await control.getByLabel('Também inflige (opcional)').selectOption('vulneravel');
+    await control.getByLabel('Valor afetado').selectOption('meleeDefense');
+    await control.getByRole('button', { name: 'Salvar na biblioteca' }).click();
+    await expect(control.getByText('Marca automatizada', { exact: true })).toBeVisible();
+    await control.locator('.control-status-library-select').filter({ hasText: 'Marca automatizada' }).click();
+    await control.getByLabel('Dano por turno (opcional)').fill('1d6 + 2');
+    await control.getByLabel('Turnos', { exact: true }).fill('3');
+    await control
+      .getByRole('dialog', { name: 'Marca automatizada' })
+      .getByRole('button', { name: 'Aplicar', exact: true })
+      .click();
+
+    await expect(player.getByRole('listitem', { name: /Marca automatizada/ })).toBeVisible();
+    await expect(player.getByRole('listitem', { name: /Vulnerável/ })).toBeVisible();
+    await control.getByRole('button', { name: /Marca automatizada, ativo por 3 turnos/ }).click();
+    await expect(control.getByText('Marca automatizada', { exact: true })).toBeVisible();
   } finally {
     await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
     await application.close().catch(() => undefined);

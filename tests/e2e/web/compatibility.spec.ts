@@ -14,10 +14,12 @@ test('confirma o nome e só revela a apresentação depois de carregar as mídia
     });
 
     await page.goto(session.inviteUrl);
-    await page.getByLabel('Nome do jogador').fill('Jogador Compatível');
+    await page.locator('#web-player-name').fill('Jogador Compatível');
+    await page.locator('#web-player-password').fill('test-password');
     await page.getByRole('button', { name: 'Entrar' }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirmar nome' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Confirmar usuário' })).toBeVisible();
     await expect(page.locator('#web-player-confirmed-name')).toHaveText('Jogador Compatível');
+    await page.locator('#web-player-password-confirm').fill('test-password');
     await page.getByRole('button', { name: 'Confirmar' }).click();
 
     await expect(page.locator('#web-player-pending')).toBeVisible();

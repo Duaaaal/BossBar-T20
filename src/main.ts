@@ -78,6 +78,14 @@ import type {
   BossLibrarySaveResult,
   MissingLibraryFile,
 } from './shared/library';
+import type {
+  HostedPlayerPasswordResetResult,
+  NotesSaveResult,
+} from './shared/character-sheet';
+import {
+  isCustomStatusPresetId,
+  type CustomStatusLibraryMutationResult,
+} from './shared/custom-status-library';
 import {
   backgroundImageExtensions,
   backgroundMediaTypeForFile,
@@ -94,6 +102,10 @@ import type {
   HostedSessionPublicUrlResult,
   MultiplayerPresence,
 } from './shared/multiplayer';
+import {
+  isAreaDamageRequest,
+  type AreaDamageResult,
+} from './shared/player-combat';
 import {
   normalizeActiveStatuses,
   type ActiveBossStatus,
@@ -137,6 +149,8 @@ import {
   MultiplayerSessionServer,
   type SessionMediaResource,
 } from './multiplayer/session-server';
+import { PlayerProfileStore } from './multiplayer/player-profile-store';
+import { CustomStatusLibraryStore } from './custom-status-library-store';
 import {
   CLOUDFLARED_VERSION,
   ensureCloudflaredBinary,
@@ -210,6 +224,21 @@ let hostedPublicBaseUrl: string | null = null;
 let hostedPublicInviteUrl: string | null = null;
 let hostedQuickTunnel: QuickTunnelHandle | null = null;
 let hostedSessionError: string | null = null;
+let playerProfileStorePromise: Promise<PlayerProfileStore> | null = null;
+const getPlayerProfileStore = () => {
+  playerProfileStorePromise ??= PlayerProfileStore.open(path.join(
+    app.getPath('userData'),
+    'multiplayer-players',
+  ));
+  return playerProfileStorePromise;
+};
+let customStatusLibraryStorePromise: Promise<CustomStatusLibraryStore> | null = null;
+const getCustomStatusLibraryStore = () => {
+  customStatusLibraryStorePromise ??= CustomStatusLibraryStore.open(
+    app.getPath('userData'),
+  );
+  return customStatusLibraryStorePromise;
+};
 let returningToLauncher = false;
 const hostedMediaSources = new Map<string, SessionMediaResource>();
 const hostedMediaIdsBySource = new Map<string, string>();
@@ -980,6 +1009,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
   let startingServer: MultiplayerSessionServer | null = null;
   let startingTunnel: QuickTunnelHandle | null = null;
   try {
+    const playerProfileStore = await getPlayerProfileStore();
     reportHostedSessionStartupProgress(5, 'Preparando o encontro...');
     reportHostedSessionStartupProgress(10, 'Verificando o componente de conexão segura...');
     const binaryPath = await ensureCloudflaredBinary({
@@ -1003,6 +1033,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
       webRoot: hostedWebDirectory(),
       webIndexFile: 'web-player.html',
       assetRoot: bundledAssetsDirectory(),
+      playerProfileStore,
       initialSnapshot: ({ mediaUrl }) =>
         createHostedPresentationSnapshot(mediaUrl),
       resolveMedia: ({ id }) => hostedMediaSources.get(id) ?? null,
@@ -1106,6 +1137,9 @@ const getEncounterSoundCustomizationState = (): EncounterSoundCustomizationState
 
 const bossLibraryPath = () =>
   path.join(app.getPath('userData'), 'boss-library.json');
+
+const masterNotesPath = () =>
+  path.join(app.getPath('userData'), 'master-notes.md');
 
 const encounterEffectsSettingsPath = () =>
   path.join(app.getPath('userData'), 'encounter-effects-settings.json');
@@ -4854,6 +4888,63 @@ ipcMain.handle('launcher:new-encounter', (event) => {
   return true;
 });
 
+ipcMain.handle('custom-status-library:get', async (event) => {
+  assertAuthorizedIpcSender(isControlSender(event.sender.id));
+  return (await getCustomStatusLibraryStore()).list();
+});
+
+ipcMain.handle(
+  'custom-status-library:create',
+  async (
+    event,
+    draft: unknown,
+  ): Promise<CustomStatusLibraryMutationResult> => {
+    if (!isControlSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    try {
+      const preset = await (await getCustomStatusLibraryStore()).create(
+        draft,
+      );
+      return { ok: true, preset };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Não foi possível salvar o status personalizado.',
+      };
+    }
+  },
+);
+
+ipcMain.handle(
+  'custom-status-library:delete',
+  async (
+    event,
+    presetId: unknown,
+  ): Promise<CustomStatusLibraryMutationResult> => {
+    if (
+      !isControlSender(event.sender.id) ||
+      typeof presetId !== 'string' ||
+      !isCustomStatusPresetId(presetId)
+    ) return { ok: false, error: 'Ação solicitada é inválida.' };
+    try {
+      const deleted = await (await getCustomStatusLibraryStore()).delete(presetId);
+      return deleted
+        ? { ok: true }
+        : { ok: false, error: 'O status personalizado não foi encontrado.' };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Não foi possível excluir o status personalizado.',
+      };
+    }
+  },
+);
+
 ipcMain.handle(
   'launcher:host-encounter',
   async (event): Promise<HostedEncounterStartResult> => {
@@ -4954,6 +5045,123 @@ ipcMain.handle('multiplayer:open-local-player', async (event) => {
     return false;
   }
 });
+
+ipcMain.handle('multiplayer:open-player-sheet', async (event, playerId: unknown) => {
+  if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(playerId)) return false;
+  const sheet = await hostedSessionServer?.playerSheet(playerId);
+  if (!sheet) return false;
+  return (await shell.openPath(sheet.filePath)) === '';
+});
+
+ipcMain.handle(
+  'multiplayer:reset-player-password',
+  async (
+    event,
+    playerId: unknown,
+    password: unknown,
+  ): Promise<HostedPlayerPasswordResetResult> => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      !isValidJoinRequestId(playerId) ||
+      typeof password !== 'string' ||
+      password.length < 3 ||
+      password.length > 128
+    ) return { ok: false, error: 'Ação ou a nova senha é inválida.' };
+    if (!hostedSessionServer) return { ok: false, error: 'Nenhuma sala está hospedada.' };
+    try {
+      await hostedSessionServer.resetPlayerPassword(playerId, password);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Não foi possível redefinir a senha.',
+      };
+    }
+  },
+);
+
+ipcMain.handle('multiplayer:get-player-profiles', async (event) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  return (await getPlayerProfileStore()).listProfiles();
+});
+
+ipcMain.handle('multiplayer:open-profile-sheet', async (event, profileId: unknown) => {
+  if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(profileId)) return false;
+  const sheet = await (await getPlayerProfileStore()).readSheet(profileId);
+  if (!sheet) return false;
+  return (await shell.openPath(sheet.filePath)) === '';
+});
+
+ipcMain.handle(
+  'multiplayer:reset-profile-password',
+  async (
+    event,
+    profileId: unknown,
+    password: unknown,
+  ): Promise<HostedPlayerPasswordResetResult> => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      !isValidJoinRequestId(profileId) ||
+      typeof password !== 'string' ||
+      password.length < 3 ||
+      password.length > 128
+    ) return { ok: false, error: 'Ação ou a nova senha é inválida.' };
+    try {
+      if (hostedSessionServer) {
+        await hostedSessionServer.resetProfilePassword(profileId, password);
+      } else {
+        await (await getPlayerProfileStore()).resetPassword(profileId, password);
+      }
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Não foi possível redefinir a senha.',
+      };
+    }
+  },
+);
+
+ipcMain.handle('notes:get-master', async (event) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  try {
+    return await readFile(masterNotesPath(), 'utf8');
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ENOENT') return '';
+    throw error;
+  }
+});
+
+ipcMain.handle(
+  'notes:save-master',
+  async (event, content: unknown): Promise<NotesSaveResult> => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof content !== 'string' ||
+      content.length > 100_000
+    ) return { ok: false, error: 'O texto das notas é inválido.' };
+    const destination = masterNotesPath();
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    try {
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(temporary, content, 'utf8');
+      try {
+        await rename(temporary, destination);
+      } catch (error) {
+        if (!isRecord(error) || (error.code !== 'EEXIST' && error.code !== 'EPERM')) throw error;
+        await rm(destination, { force: true });
+        await rename(temporary, destination);
+      }
+      return { ok: true, content };
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Não foi possível salvar as notas.',
+      };
+    }
+  },
+);
 
 ipcMain.handle(
   'library:save-boss',
@@ -6479,6 +6687,27 @@ ipcMain.handle(
       hits: request.hits,
       amountPerHit: effectiveAmountPerHit,
     };
+  },
+);
+
+ipcMain.handle(
+  'player-combat:area-damage',
+  (event, request: unknown): AreaDamageResult => {
+    if (!isEncounterControllerSender(event.sender.id)) {
+      return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'Ação não autorizada.' };
+    }
+    if (!isAreaDamageRequest(request)) {
+      return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'Dano em área inválido.' };
+    }
+    if (!hostedSessionServer) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Não há uma sessão multiplayer hospedada.',
+      };
+    }
+    return hostedSessionServer.applyAreaDamage(request);
   },
 );
 

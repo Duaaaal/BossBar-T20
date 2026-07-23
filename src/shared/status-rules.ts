@@ -397,6 +397,18 @@ const applyOneStatus = (
     : incoming;
   setStatus(statuses, status);
 
+  if (
+    status.statusId === 'coringa' &&
+    status.customInflictedStatusId
+  ) {
+    applyOneStatus(
+      statuses,
+      standardStatus(status.customInflictedStatusId, status.turnsRemaining),
+      'replace',
+      depth + 1,
+    );
+  }
+
   for (const rule of DERIVED_STATUSES[status.statusId] ?? []) {
     applyOneStatus(
       statuses,

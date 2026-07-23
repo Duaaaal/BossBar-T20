@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { io as createSocketClient } from 'socket.io-client';
 import {
@@ -29,6 +31,7 @@ import {
   SessionConnectionRateLimiter,
   tokensMatch,
 } from '../src/multiplayer/session-security.ts';
+import { PlayerProfileStore } from '../src/multiplayer/player-profile-store.ts';
 
 const initialMusic = {
   tracks: [],
@@ -89,7 +92,7 @@ const waitFor = async (predicate, timeoutMs = 2_000) => {
   }
 };
 
-const connectPlayer = (server, {
+const connectPlayer = async (server, {
   clientId,
   playerName,
   token = server.credentials.playerToken,
@@ -98,11 +101,36 @@ const connectPlayer = (server, {
   hostToken,
 }) => {
   const endpoint = new URL(server.info.invite.localUrl).origin;
+  const accountName = normalizePlayerName(playerName) || `Player-${clientId}`;
+  const headers = {
+    Authorization: `Bearer ${server.credentials.playerToken}`,
+    'Content-Type': 'application/json',
+    'X-BossBar-Room': server.credentials.roomCode,
+  };
+  const statusResponse = await fetch(`${endpoint}/api/player/account-status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ username: accountName }),
+  });
+  const status = await statusResponse.json();
+  const authResponse = await fetch(`${endpoint}/api/player/authenticate`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      username: accountName,
+      password: 'test-password',
+      createAccount: !status.exists,
+      clientId,
+    }),
+  });
+  const authentication = await authResponse.json();
+  assert.equal(authentication.ok, true);
   const socket = createSocketClient(endpoint, {
     auth: {
       roomCode: server.credentials.roomCode,
       playerToken: token,
       playerName,
+      accountToken: authentication.sessionToken,
       clientId,
       protocolVersion: MULTIPLAYER_PROTOCOL_VERSION,
       ...(hostToken ? { hostToken } : {}),
@@ -121,6 +149,72 @@ const connectPlayer = (server, {
   socket.on('session:join-rejected', (_message, acknowledge) => acknowledge());
   return socket;
 };
+
+const createTestPlayerProfileStore = () => PlayerProfileStore.open(path.join(
+  tmpdir(),
+  `bossbar-unit-players-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+));
+
+const createValidCharacterSheetValidation = ({
+  characterName,
+  currentHealth,
+  maxHealth,
+  currentMana,
+  maxMana,
+  defense,
+  reflex,
+}) => ({
+  supported: true,
+  template: 'ficha-t20-editavel-v2',
+  summary: {
+    characterName,
+    playerName: '',
+    race: 'Humano',
+    origin: 'Aventureiro',
+    characterClass: 'Guerreiro',
+    level: 3,
+    currentHealth,
+    maxHealth,
+    currentMana,
+    maxMana,
+    defense,
+    attributes: {
+      for: 2,
+      des: 1,
+      con: 2,
+      int: 0,
+      sab: 0,
+      car: 0,
+    },
+    defenses: {
+      melee: defense,
+      ranged: defense,
+      calculation: `Defesa ${defense}`,
+    },
+    skills: [{
+      id: '270',
+      name: 'Reflexos',
+      total: reflex,
+      trained: true,
+      attribute: 'DES',
+      attributeValue: 1,
+      halfLevel: 1,
+      trainingBonus: Math.max(0, reflex - 2),
+      otherBonus: 0,
+      armorPenalty: 0,
+      sizeModifier: 0,
+      calculation: `1 + 1 + ${Math.max(0, reflex - 2)} = ${reflex}`,
+    }],
+    attacks: [],
+    movement: '9m',
+    size: 'Médio',
+    currentLoad: 4,
+    maxLoad: 14,
+  },
+  issues: [],
+  fieldCount: 50,
+  checkedAt: Date.now(),
+});
 
 test('gera credenciais fortes e compara tokens sem aceitar variações', () => {
   const first = createSessionCredentials();
@@ -253,6 +347,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const mediaFile = fileURLToPath(new URL('../package.json', import.meta.url));
   const webRoot = fileURLToPath(new URL('..', import.meta.url));
   const server = await MultiplayerSessionServer.start({
+    playerProfileStore: await createTestPlayerProfileStore(),
     initialSnapshot: publicSnapshot(),
     port: 0,
     maxPlayers: 2,
@@ -284,7 +379,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   assert.equal(new URLSearchParams(publicInvite.hash.slice(1)).has('host'), false);
 
   server.clearPublicInviteUrl();
-  const revokedOrigin = connectPlayer(server, {
+  const revokedOrigin = await connectPlayer(server, {
     clientId: 'browser-origin-revoked',
     playerName: 'Origem removida',
     origin: 'https://bossbar.example.org',
@@ -293,7 +388,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   await once(revokedOrigin, 'connect_error');
   server.publicInviteUrl('https://bossbar.example.org');
 
-  const blockedOrigin = connectPlayer(server, {
+  const blockedOrigin = await connectPlayer(server, {
     clientId: 'browser-origin-blocked',
     playerName: 'Origem bloqueada',
     origin: 'https://malicioso.example.org',
@@ -352,7 +447,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   assert.equal(rangeResponse.headers.get('content-range')?.startsWith('bytes 0-9/'), true);
   assert.equal((await rangeResponse.arrayBuffer()).byteLength, 10);
 
-  const first = connectPlayer(server, {
+  const first = await connectPlayer(server, {
     clientId: 'browser-client-01',
     playerName: 'Alice',
     origin: 'https://bossbar.example.org',
@@ -363,7 +458,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   await once(first, 'connect');
   assert.equal((await firstSnapshot)[0].protocolVersion, MULTIPLAYER_PROTOCOL_VERSION);
 
-  const second = connectPlayer(server, {
+  const second = await connectPlayer(server, {
     clientId: 'browser-client-02',
     playerName: 'Bruno',
   });
@@ -380,7 +475,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
     ({ hasConnectionIssue }) => !hasConnectionIssue,
   ), true);
 
-  const extra = connectPlayer(server, {
+  const extra = await connectPlayer(server, {
     clientId: 'browser-client-03',
     playerName: 'Carla',
   });
@@ -388,7 +483,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const [roomFullError] = await once(extra, 'connect_error');
   assert.equal(roomFullError.data?.code, 'ROOM_FULL');
 
-  const invalid = connectPlayer(server, {
+  const invalid = await connectPlayer(server, {
     clientId: 'browser-client-04',
     playerName: 'Davi',
     token: 'x'.repeat(43),
@@ -397,7 +492,7 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const [invalidTokenError] = await once(invalid, 'connect_error');
   assert.equal(invalidTokenError.data?.code, 'INVALID_TOKEN');
 
-  const invalidName = connectPlayer(server, {
+  const invalidName = await connectPlayer(server, {
     clientId: 'browser-client-05',
     playerName: String.fromCharCode(1, 2),
   });
@@ -433,10 +528,131 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   assert.deepEqual((await closedNotice)[0], { reason: 'host-ended-session' });
 });
 
+test('aplica dano em área de forma privada e preserva PV na reconexão', async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const server = await MultiplayerSessionServer.start({
+    playerProfileStore: profileStore,
+    initialSnapshot: publicSnapshot(),
+    port: 0,
+    maxPlayers: 3,
+    networkMode: 'loopback',
+  });
+  t.after(async () => server.close('server-shutdown'));
+
+  const alice = await connectPlayer(server, {
+    clientId: 'area-client-alice',
+    playerName: 'Alice',
+  });
+  t.after(() => alice.close());
+  await once(alice, 'connect');
+
+  const bruno = await connectPlayer(server, {
+    clientId: 'area-client-bruno',
+    playerName: 'Bruno',
+  });
+  t.after(() => bruno.close());
+  await once(bruno, 'connect');
+
+  const carla = await connectPlayer(server, {
+    clientId: 'area-client-carla',
+    playerName: 'Carla',
+  });
+  t.after(() => carla.close());
+  await once(carla, 'connect');
+
+  const aliceProfile = profileStore.profileByUsername('Alice');
+  const brunoProfile = profileStore.profileByUsername('Bruno');
+  assert.ok(aliceProfile);
+  assert.ok(brunoProfile);
+
+  await profileStore.saveSheet(
+    aliceProfile.id,
+    'alice.pdf',
+    new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    createValidCharacterSheetValidation({
+      characterName: 'Valora',
+      currentHealth: 80,
+      maxHealth: 80,
+      currentMana: 12,
+      maxMana: 12,
+      defense: 18,
+      reflex: 7,
+    }),
+  );
+  const aliceInitialState = once(alice, 'player:state');
+  server.refreshCharacterSheet('area-client-alice', true);
+  assert.equal((await aliceInitialState)[0].currentHealth, 80);
+
+  await profileStore.saveSheet(
+    brunoProfile.id,
+    'bruno.pdf',
+    new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    createValidCharacterSheetValidation({
+      characterName: 'Arton',
+      currentHealth: 65,
+      maxHealth: 70,
+      currentMana: 9,
+      maxMana: 10,
+      defense: 16,
+      reflex: 4,
+    }),
+  );
+  const brunoInitialState = once(bruno, 'player:state');
+  server.refreshCharacterSheet('area-client-bruno', true);
+  assert.equal((await brunoInitialState)[0].currentHealth, 65);
+
+  const aliceImpacts = [];
+  const brunoImpacts = [];
+  const carlaImpacts = [];
+  alice.on('player:combat-impact', (impact) => aliceImpacts.push(impact));
+  bruno.on('player:combat-impact', (impact) => brunoImpacts.push(impact));
+  carla.on('player:combat-impact', (impact) => carlaImpacts.push(impact));
+
+  const result = server.applyAreaDamage({
+    damage: 20,
+    reflexDc: 0,
+    successRule: 'half',
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    appliedPlayers: 2,
+    skippedPlayers: ['Carla'],
+  });
+
+  await waitFor(() => aliceImpacts.length === 1 && brunoImpacts.length === 1);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  assert.equal(aliceImpacts.length, 1);
+  assert.equal(brunoImpacts.length, 1);
+  assert.equal(carlaImpacts.length, 0);
+  assert.equal(aliceImpacts[0].playerState.clientId, 'area-client-alice');
+  assert.equal(brunoImpacts[0].playerState.clientId, 'area-client-bruno');
+  assert.notEqual(aliceImpacts[0].id, brunoImpacts[0].id);
+  assert.ok(aliceImpacts[0].playerState.currentHealth < 80);
+  assert.ok(brunoImpacts[0].playerState.currentHealth < 65);
+
+  const aliceHealthAfterImpact = aliceImpacts[0].playerState.currentHealth;
+  const aliceRevisionAfterImpact = aliceImpacts[0].playerState.revision;
+  const aliceDisconnected = once(alice, 'disconnect');
+  alice.disconnect();
+  await aliceDisconnected;
+
+  const reconnectedAlice = await connectPlayer(server, {
+    clientId: 'area-client-alice',
+    playerName: 'Alice',
+  });
+  t.after(() => reconnectedAlice.close());
+  const reconnectedState = once(reconnectedAlice, 'player:state');
+  await once(reconnectedAlice, 'connect');
+  const [restoredState] = await reconnectedState;
+  assert.equal(restoredState.currentHealth, aliceHealthAfterImpact);
+  assert.equal(restoredState.revision, aliceRevisionAfterImpact);
+});
+
 test('exige aprovação do mestre para novos jogadores durante a batalha', async (t) => {
   const requests = [];
   const snapshot = publicSnapshot();
   const server = await MultiplayerSessionServer.start({
+    playerProfileStore: await createTestPlayerProfileStore(),
     initialSnapshot: {
       ...snapshot,
       battle: { ...snapshot.battle, battleStarted: true },
@@ -447,7 +663,7 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   });
   t.after(async () => server.close('server-shutdown'));
 
-  const player = connectPlayer(server, {
+  const player = await connectPlayer(server, {
     clientId: 'approval-player-01',
     playerName: 'Alice',
   });
@@ -470,7 +686,7 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   await reconnected;
   assert.equal((await reconnectedSnapshot)[0].battle.battleStarted, true);
 
-  const rejected = connectPlayer(server, {
+  const rejected = await connectPlayer(server, {
     clientId: 'approval-player-02',
     playerName: 'Bruno',
   });

@@ -1,6 +1,8 @@
 import { expect, type Page } from '@playwright/test';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { PDFDocument } from 'pdf-lib';
 import {
   initialEncounterEffectsState,
   type BackgroundState,
@@ -16,6 +18,7 @@ import {
   MultiplayerSessionServer,
   type SessionMediaResource,
 } from '../../../src/multiplayer/session-server';
+import { PlayerProfileStore } from '../../../src/multiplayer/player-profile-store';
 
 const projectRoot = path.resolve(process.cwd());
 const mediaRoot = path.join(projectRoot, 'tests', 'fixtures', 'media');
@@ -104,6 +107,54 @@ export type HostedTestSession = {
   close: () => Promise<void>;
 };
 
+export const createEditableCharacterSheet = async () => {
+  const document = await PDFDocument.create();
+  document.addPage([600, 800]);
+  const form = document.getForm();
+  const values: Record<string, string> = {
+    'NOME DO PERSONAGEM': 'Valora',
+    JOGADOR: 'Jogador Ferramentas',
+    'RAÇA': 'Humana',
+    ORIGEM: 'Guarda',
+    CLASSE: 'Guerreiro',
+    Lv: '1',
+    For: '14', ModFor: '2',
+    Des: '10', ModDes: '0',
+    Con: '12', ModCon: '1',
+    Int: '10', ModInt: '0',
+    Sab: '10', ModSab: '0',
+    Car: '10', ModCar: '0',
+    'PVs Totais': '21', 'PVs Atuais': '21',
+    'PMs Totais': '3', 'PMs Atuais': '3',
+    CA: '10', 'Base CA': '10', 'B.Arm': '0', 'B.Esc': '0',
+    'Outros B.CA': '0', ModAtribDefe: '0',
+    TesteResist: '10', ModAtribMagia: '0',
+    'Descrição': '', Pa: '0', Pe: '0', ModFurtTam: '0',
+  };
+  for (let index = 1; index <= 30; index += 1) {
+    const code = String(index * 10).padStart(3, '0');
+    values[code] = '0';
+    values[index === 30 ? '301' : `${String(index).padStart(2, '0')}1`] = '0';
+    values[index === 30 ? '303' : `${String(index).padStart(2, '0')}3`] = '0';
+    values[index === 30 ? '304' : `${String(index).padStart(2, '0')}4`] = '0';
+  }
+  for (const name of [
+    'ModAtribAcro', 'ModAtribAdes', 'ModAtribAtle', 'ModAtribAtua',
+    'ModAtribCava', 'ModAtribConh', 'ModAtribCura', 'ModAtribDipl',
+    'ModAtribEnga', 'ModAtribFort', 'ModAtribFurt', 'ModAtribGuer',
+    'ModAtribInic', 'ModAtribInti', 'ModAtribIntu', 'ModAtribInve',
+    'ModAtribJoga', 'ModAtribLadi', 'ModAtribLuta', 'ModAtribMist',
+    'ModAtribPilo', 'ModAtribNobr', 'ModAtribOfi1', 'ModAtribOfi2',
+    'ModAtribPerc', 'ModAtribPont', 'ModAtribRefl', 'ModAtribReli',
+    'ModAtribSobr', 'ModAtribVont',
+  ]) values[name] = '0';
+  for (const [name, value] of Object.entries(values)) {
+    form.createTextField(name).setText(value);
+  }
+  form.createCheckBox('arm pesa').check();
+  return Buffer.from(await document.save({ updateFieldAppearances: false }));
+};
+
 export const startHostedTestSession = async ({
   battleStarted = false,
   preloadMediaIds = [
@@ -117,7 +168,13 @@ export const startHostedTestSession = async ({
   preloadMediaIds?: string[];
 } = {}): Promise<HostedTestSession> => {
   const mediaRequests = new Map<string, number>();
+  const profileDirectory = path.join(
+    tmpdir(),
+    `bossbar-e2e-players-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const playerProfileStore = await PlayerProfileStore.open(profileDirectory);
   const server = await MultiplayerSessionServer.start({
+    playerProfileStore,
     networkMode: 'loopback',
     port: 0,
     webRoot,
@@ -180,7 +237,10 @@ export const startHostedTestSession = async ({
     inviteUrl: playerOnlyInvite(server.info.invite.localUrl),
     mediaRequests,
     mediaUrl: (id) => server.mediaUrl(id),
-    close: () => server.close('server-shutdown'),
+    close: async () => {
+      await server.close('server-shutdown');
+      await rm(profileDirectory, { recursive: true, force: true });
+    },
   };
 };
 
@@ -190,10 +250,13 @@ export const joinHostedSession = async (
   playerName: string,
 ) => {
   await page.goto(inviteUrl);
-  await page.getByLabel('Nome do jogador').fill(playerName);
+  await page.locator('#web-player-name').fill(playerName);
+  await page.locator('#web-player-password').fill('test-password');
   await page.getByRole('button', { name: 'Entrar' }).click();
-  await expect(page.getByRole('dialog', { name: 'Confirmar nome' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Confirmar usuário' })).toBeVisible();
   await expect(page.locator('#web-player-confirmed-name')).toHaveText(playerName);
+  const passwordConfirmation = page.locator('#web-player-password-confirm');
+  if (await passwordConfirmation.isVisible()) await passwordConfirmation.fill('test-password');
   await page.getByRole('button', { name: 'Confirmar' }).click();
   await expect(page.locator('.player-stage')).toBeVisible();
 };
