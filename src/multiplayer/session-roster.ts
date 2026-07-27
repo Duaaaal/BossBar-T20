@@ -30,8 +30,13 @@ export type RegisterPlayerResult =
   }
   | {
     accepted: false;
-    reason: 'room-full';
+    reason: 'room-full' | 'name-in-use';
   };
+
+export type SessionRosterMember = {
+  clientId: string;
+  player: MultiplayerPlayer;
+};
 
 export const normalizePlayerName = (name: string) => name
   .split('')
@@ -92,6 +97,14 @@ export class SessionRoster {
       || this.playersByClientId.size < this.maxPlayers;
   }
 
+  canRegisterName(clientId: string, name: string) {
+    const normalizedName = normalizePlayerName(name).toLocaleLowerCase('pt-BR');
+    return [...this.playersByClientId.values()].every((player) =>
+      player.clientId === clientId
+      || player.name.toLocaleLowerCase('pt-BR') !== normalizedName
+    );
+  }
+
   register({
     clientId,
     name,
@@ -106,6 +119,9 @@ export class SessionRoster {
     }
 
     const normalizedName = normalizePlayerName(name);
+    if (!this.canRegisterName(clientId, normalizedName)) {
+      return { accepted: false, reason: 'name-in-use' };
+    }
     const replacedSocketId = existing?.socketId ?? null;
     if (replacedSocketId) this.clientIdBySocketId.delete(replacedSocketId);
 
@@ -191,6 +207,16 @@ export class SessionRoster {
       maxPlayers: this.maxPlayers,
       players,
     };
+  }
+
+  members(): SessionRosterMember[] {
+    return [...this.playersByClientId.values()]
+      .sort((first, second) => first.connectedAt - second.connectedAt
+        || first.id.localeCompare(second.id))
+      .map((player) => ({
+        clientId: player.clientId,
+        player: publicPlayer(player),
+      }));
   }
 
   private playerForSocket(socketId: string) {

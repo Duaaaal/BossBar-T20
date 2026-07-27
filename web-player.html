@@ -31,8 +31,19 @@
         <span id="web-player-character-defense-melee" tabindex="-1">CaC 0</span>
         <span id="web-player-character-defense-ranged" tabindex="-1">AaD 0</span>
       </div>
+      <div class="web-player-character-actions" aria-label="Ações disponíveis">
+        <button type="button" data-player-action="free" data-tooltip="Ação livre disponível" aria-label="Usar ação livre"></button>
+        <button type="button" data-player-action="movement" data-tooltip="Ação de movimento disponível" aria-label="Usar ação de movimento"></button>
+        <button type="button" data-player-action="standard" data-tooltip="Ação padrão disponível" aria-label="Usar ação padrão"></button>
+      </div>
       <section class="web-player-character-details" id="web-player-character-details" hidden>
-        <p id="web-player-character-class-level"></p>
+        <div class="web-player-character-detail-heading">
+          <p id="web-player-character-class-level"></p>
+          <label title="Ocultar os valores da ficha para os outros jogadores">
+            <input id="web-player-character-private" type="checkbox" checked />
+            <span>Privado</span>
+          </label>
+        </div>
         <div id="web-player-character-attributes"></div>
         <div id="web-player-character-movement"></div>
         <div id="web-player-character-skills"></div>
@@ -66,7 +77,12 @@
           autocomplete="current-password"
           required
         />
-        <button type="submit">Entrar</button>
+        <div class="web-player-join-actions">
+          <button type="submit">Entrar</button>
+          <button class="is-secondary" id="web-player-create-access" type="button">
+            Criar acesso
+          </button>
+        </div>
       </form>
     </section>
     <section class="web-player-dialog" id="web-player-name-confirm" role="dialog" aria-modal="true" aria-labelledby="name-confirm-title" hidden>

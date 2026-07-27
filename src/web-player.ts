@@ -14,7 +14,9 @@ import {
   type PlayerNotesDocument,
 } from './shared/player-notes';
 import { statusIconUrl } from './shared/bundled-assets';
+import { installDisabledControlTooltips } from './shared/disabled-controls';
 import type {
+  PlayerActionKind,
   PlayerAreaDamageImpact,
   PlayerEncounterState,
 } from './shared/player-combat';
@@ -26,6 +28,7 @@ import {
 import './web-player.css';
 
 window.__BOSS_WEB_PLAYER__ = true;
+installDisabledControlTooltips();
 
 const statusElement = document.getElementById('web-player-status');
 const joinElement = document.getElementById('web-player-join');
@@ -33,6 +36,7 @@ const closedElement = document.getElementById('web-player-closed');
 const joinForm = document.getElementById('web-player-join-form');
 const nameInput = document.getElementById('web-player-name');
 const passwordInput = document.getElementById('web-player-password');
+const createAccessButton = document.getElementById('web-player-create-access');
 const passwordConfirmInput = document.getElementById('web-player-password-confirm');
 const passwordConfirmLabel = document.getElementById('web-player-password-confirm-label');
 const confirmMessageElement = document.getElementById('web-player-confirm-message');
@@ -65,6 +69,10 @@ const characterName = document.getElementById('web-player-character-name');
 const characterExpandButton = document.getElementById('web-player-character-expand');
 const characterDetails = document.getElementById('web-player-character-details');
 const characterClassLevel = document.getElementById('web-player-character-class-level');
+const characterPrivateInput = document.getElementById('web-player-character-private');
+const characterActionButtons = [
+  ...document.querySelectorAll<HTMLButtonElement>('[data-player-action]'),
+];
 const characterHealthFill = document.getElementById('web-player-character-health-fill');
 const characterHealthValue = document.getElementById('web-player-character-health-value');
 const characterManaFill = document.getElementById('web-player-character-mana-fill');
@@ -101,6 +109,15 @@ let creatingAccount = false;
 let authenticating = false;
 let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
 let playerEncounterState: PlayerEncounterState | null = null;
+let selfHudId: string | null = null;
+let activeTurnParticipantId: string | null = null;
+
+const updateOwnTurnHighlight = () => {
+  characterHud?.classList.toggle(
+    'is-turn-active',
+    Boolean(selfHudId && activeTurnParticipantId === `player:${selfHudId}`),
+  );
+};
 
 const showConnectionState = ({
   state,
@@ -149,6 +166,11 @@ const showConnectionState = ({
       statusElement.dataset.visible = 'false';
       hideStatusTimer = null;
     }, 2_200);
+  } else if (state === 'error' && sessionReady) {
+    hideStatusTimer = setTimeout(() => {
+      statusElement.dataset.visible = 'false';
+      hideStatusTimer = null;
+    }, 5_000);
   } else if (state === 'error' && !sessionReady) {
     joinElement?.removeAttribute('hidden');
     nameConfirmElement?.setAttribute('hidden', '');
@@ -175,6 +197,8 @@ const {
   createCharacterSheetViewUrl,
   removeCharacterSheet,
   saveNotes,
+  setCharacterPrivate,
+  usePlayerAction,
   getPlayerToolsState,
 } = createWebPlayerApi({
   onConnectionState: showConnectionState,
@@ -205,6 +229,35 @@ const {
   },
 });
 window.bossAPI = api;
+
+api.subscribePlayerHuds((players) => {
+  const self = players.find(({ isSelf }) => isSelf);
+  selfHudId = self?.id ?? null;
+  updateOwnTurnHighlight();
+  if (characterPrivateInput instanceof HTMLInputElement && self) {
+    characterPrivateInput.checked = self.privateMode;
+  }
+  if (self) {
+    for (const button of characterActionButtons) {
+      const action = button.dataset.playerAction as PlayerActionKind;
+      const ready = self.actions[action];
+      const label = action === 'free'
+        ? 'Ação livre'
+        : action === 'movement'
+          ? 'Ação de movimento'
+          : 'Ação padrão';
+      button.classList.toggle('is-ready', ready);
+      button.disabled = !ready;
+      button.dataset.tooltip = ready
+        ? `${label} disponível`
+        : `${label} não disponível`;
+    }
+  }
+});
+api.subscribeEncounterTurn((turn) => {
+  activeTurnParticipantId = turn.activeParticipantId;
+  updateOwnTurnHighlight();
+});
 
 const mountPlayer = () => {
   if (playerMounted) return;
@@ -327,7 +380,10 @@ function showReflexResult(impact: PlayerAreaDamageImpact) {
   if (!reflexResults) return;
   const result = document.createElement('output');
   result.className = `web-player-reflex-result ${impact.check.success ? 'is-success' : 'is-failure'}`;
-  result.textContent = `(${impact.check.die}) + (${impact.check.reflex}) = (${impact.check.total})`;
+  result.textContent =
+    `Reflexos: 1d20(${impact.check.die}) ` +
+    `${impact.check.reflex >= 0 ? '+' : '−'} ${Math.abs(impact.check.reflex)} ` +
+    `= ${impact.check.total}`;
   const consequence = document.createElement('small');
   consequence.textContent = impact.damage.applied > 0
     ? ` −${impact.damage.applied} PV`
@@ -354,8 +410,13 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   const maxHealth = playerEncounterState?.maxHealth ?? summary.maxHealth;
   const currentMana = playerEncounterState?.currentMana ?? summary.currentMana;
   const maxMana = playerEncounterState?.maxMana ?? summary.maxMana;
-  const defenseMelee = playerEncounterState?.defenseMelee ?? defenses.melee;
-  const defenseRanged = playerEncounterState?.defenseRanged ?? defenses.ranged;
+  const temporaryDefenseBonus = playerEncounterState?.temporaryDefenseBonus ?? 0;
+  const defenseMelee = playerEncounterState
+    ? playerEncounterState.defenseMelee + temporaryDefenseBonus
+    : defenses.melee;
+  const defenseRanged = playerEncounterState
+    ? playerEncounterState.defenseRanged + temporaryDefenseBonus
+    : defenses.ranged;
   characterHud?.removeAttribute('hidden');
   renderCharacterStatuses(playerEncounterState);
   if (characterName) {
@@ -759,6 +820,46 @@ characterExpandButton?.addEventListener('click', () => {
   characterDetails?.toggleAttribute('hidden', !expanded);
 });
 
+characterPrivateInput?.addEventListener('change', () => {
+  if (!(characterPrivateInput instanceof HTMLInputElement)) return;
+  const desired = characterPrivateInput.checked;
+  characterPrivateInput.disabled = true;
+  void setCharacterPrivate(desired).then((result) => {
+    if (!result.ok) {
+      characterPrivateInput.checked = !desired;
+      showConnectionState({
+        state: 'error',
+        message: result.error ?? 'Não foi possível alterar a privacidade da ficha.',
+      });
+    }
+  }).finally(() => {
+    characterPrivateInput.disabled = false;
+  });
+});
+
+for (const button of characterActionButtons) {
+  button.addEventListener('click', () => {
+    const action = button.dataset.playerAction as PlayerActionKind;
+    button.disabled = true;
+    void usePlayerAction(action).then((result) => {
+      if (!result.ok) {
+        button.disabled = false;
+        showConnectionState({
+          state: 'error',
+          message: result.error ?? 'Não foi possível usar esta ação.',
+        });
+      }
+    });
+  });
+}
+
+statusElement?.addEventListener('click', () => {
+  if (statusElement.dataset.visible !== 'true' || statusElement.dataset.state !== 'error') return;
+  if (hideStatusTimer) clearTimeout(hideStatusTimer);
+  hideStatusTimer = null;
+  statusElement.dataset.visible = 'false';
+});
+
 characterHud?.addEventListener('mouseover', (event) => {
   const target = calculationTargetFromEvent(event);
   if (target) showCalculationTooltip(target);
@@ -1018,12 +1119,12 @@ if (nameInput instanceof HTMLInputElement) {
 }
 
 if (!canConnect && joinForm instanceof HTMLFormElement) {
-  const submit = joinForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = true;
+  createAccessButton?.setAttribute('disabled', '');
 }
 
-joinForm?.addEventListener('submit', (event) => {
-  event.preventDefault();
+const prepareAuthentication = (createRequested: boolean) => {
   if (
     !(nameInput instanceof HTMLInputElement) ||
     !(passwordInput instanceof HTMLInputElement) ||
@@ -1032,10 +1133,20 @@ joinForm?.addEventListener('submit', (event) => {
   const requestedName = nameInput.value.trim().slice(0, 40);
   if (!requestedName || passwordInput.value.length < 3) return;
   authenticating = true;
-  const submit = joinForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = true;
+  createAccessButton?.setAttribute('disabled', '');
   void getAccountStatus(requestedName).then((status) => {
-    creatingAccount = !status.exists;
+    if (createRequested === status.exists) {
+      showConnectionState({
+        state: 'error',
+        message: createRequested
+          ? 'Este usuário já existe. Use Entrar.'
+          : 'Usuário ainda não cadastrado. Use Criar acesso.',
+      });
+      return;
+    }
+    creatingAccount = createRequested;
     if (confirmedNameElement) confirmedNameElement.textContent = status.username;
     if (confirmMessageElement) {
       confirmMessageElement.textContent = creatingAccount
@@ -1060,8 +1171,16 @@ joinForm?.addEventListener('submit', (event) => {
   }).finally(() => {
     authenticating = false;
     if (submit) submit.disabled = false;
+    createAccessButton?.removeAttribute('disabled');
   });
+};
+
+joinForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  prepareAuthentication(false);
 });
+
+createAccessButton?.addEventListener('click', () => prepareAuthentication(true));
 
 nameBackButton?.addEventListener('click', () => {
   nameConfirmElement?.setAttribute('hidden', '');
@@ -1092,6 +1211,7 @@ nameSubmitButton?.addEventListener('click', () => {
   nameSubmitButton.setAttribute('disabled', '');
   const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = true;
+  createAccessButton?.setAttribute('disabled', '');
   authErrorElement?.setAttribute('hidden', '');
   void connect(nameInput.value, passwordInput.value, creatingAccount).then((result) => {
     if (!result.ok) {
@@ -1109,6 +1229,7 @@ nameSubmitButton?.addEventListener('click', () => {
     authenticating = false;
     nameSubmitButton.removeAttribute('disabled');
     if (submit) submit.disabled = false;
+    createAccessButton?.removeAttribute('disabled');
   });
 });
 
@@ -1138,6 +1259,7 @@ changeNameButton?.addEventListener('click', () => {
   }
   const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = false;
+  createAccessButton?.removeAttribute('disabled');
   nameSubmitButton?.removeAttribute('disabled');
   if (statusElement) statusElement.dataset.visible = 'false';
 });

@@ -41,6 +41,7 @@ export const toPublicBattleState = (
       maxHealth: boss.maxHealth,
       currentHealth: boss.currentHealth,
       shield: boss.shield,
+      initiative: boss.skillValues?.iniciativa ?? boss.skills,
       nextAction: boss.nextAction,
       actionSeverity: boss.actionSeverity,
       turnCount: boss.turnCount,

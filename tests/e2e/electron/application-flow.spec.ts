@@ -60,17 +60,49 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await master.getByLabel('Título da nota').fill('Sessão automatizada');
     await expect(master.getByRole('tab', { name: 'Sessão automatizada' })).toBeVisible();
     await master.getByRole('button', { name: 'Fechar' }).click();
-    await expect(control.getByRole('button', { name: /Dano em área/ })).toHaveCount(0);
+    await expect(control.getByRole('button', { name: 'Dano em área' })).toBeVisible();
     await expect(control.getByLabel('CD do teste de Reflexos')).toHaveCount(0);
 
     await control.locator('.control-name-field input').fill('Titã Automatizado');
-    await control.locator('#control-max-health').fill('600');
-    await control.locator('.control-apply').click();
+    await control.getByRole('button', { name: /Alterar Perícias/ }).click();
+    const attributes = control.getByRole('dialog', { name: 'Alterar Perícias' });
+    await expect(attributes.getByLabel('Escudo')).toHaveCount(0);
+    await attributes.getByLabel('Vida máxima').fill('600');
+    await attributes.getByLabel('Vida atual').fill('600');
+    await attributes.getByLabel('Iniciativa').fill('14');
+    await attributes.getByRole('button', { name: 'Aplicar' }).click();
     await control.locator('.control-action-field textarea').fill('Golpe de validação');
     await control.getByRole('button', { name: 'Ação padrão' }).click();
+    await expect(control.getByLabel('Escudo')).toBeVisible();
+    await control.getByRole('button', { name: 'Dano em jogador' }).click();
+    const damageTargets = control.getByRole('dialog', {
+      name: 'Dano em jogador',
+    });
+    await expect(damageTargets).toContainText('Titã Automatizado');
+    await damageTargets.getByRole('button', { name: 'Cancelar' }).click();
 
     await master.getByRole('button', { name: 'Iniciar Batalha' }).click();
     await expect(player.getByRole('heading', { name: 'Titã Automatizado' })).toBeVisible();
+    await expect(control.locator('.health-difference strong')).toHaveText('600/600');
+    await expect(control.getByRole('button', { name: 'Rodar Iniciativa' })).toBeVisible();
+    await control.getByRole('button', { name: 'Rodar Iniciativa' }).click();
+    await expect(control.getByRole('button', { name: 'Iniciar turno' })).toBeEnabled();
+    await expect(
+      control.locator('.control-target-area-group').getByLabel('CD do dano em área'),
+    ).toBeVisible();
+    await control.locator('.control-target-value input').fill('1d2 + 3');
+    await control.getByRole('button', { name: 'Dano em jogador' }).click();
+    const activeDamageTargets = control.getByRole('dialog', {
+      name: 'Dano em jogador',
+    });
+    await activeDamageTargets.getByLabel(/Titã Automatizado.*Chefão/).check();
+    await activeDamageTargets.getByRole('button', { name: 'Aplicar dano' }).click();
+    await expect(
+      player.locator('.encounter-roll-result').filter({ hasText: 'Dano:' }),
+    ).toContainText(
+      /Dano:1d2\([12]\) \+ 3 = [45]/,
+    );
+    await control.getByRole('button', { name: /^Full Heal/ }).click();
     await expect(control.locator('.health-difference strong')).toHaveText('600/600');
 
     await control.locator('.control-amount-field input').fill('50');
@@ -99,6 +131,13 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await control
       .getByRole('dialog', { name: 'Marca automatizada' })
       .getByRole('button', { name: 'Aplicar', exact: true })
+      .click();
+    const statusTargets = control.getByRole('dialog', { name: 'Escolher alvos' });
+    await expect(statusTargets.getByLabel(/Titã Automatizado.*Chefão/)).toBeChecked();
+    await statusTargets.getByRole('button', { name: 'Aplicar', exact: true }).click();
+    await control
+      .getByRole('alertdialog', { name: 'Confirmar ação do chefão' })
+      .getByRole('button', { name: 'Confirmar' })
       .click();
 
     await expect(player.getByRole('listitem', { name: /Marca automatizada/ })).toBeVisible();

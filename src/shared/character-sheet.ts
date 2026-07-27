@@ -108,6 +108,11 @@ export type HostedPlayerPasswordResetResult = {
   error?: string;
 };
 
+export type PlayerProfileDeleteResult = {
+  ok: boolean;
+  error?: string;
+};
+
 export type PlayerProfileSummary = {
   id: string;
   username: string;

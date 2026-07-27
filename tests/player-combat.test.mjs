@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  advanceEncounterTurns,
+  actionPointRecoveryFormulas,
+  beginEncounterTurns,
+  emptyEncounterTurnState,
+  formatEncounterDiceRolls,
   isAreaDamageRequest,
+  isPlayerCombatActionRequest,
+  personalizeEncounterTurnState,
+  prepareManualInitiative,
   resolveAreaDamage,
+  resolveAttackCheck,
+  rollInitiativeOrder,
+  rollManualInitiative,
 } from '../src/shared/player-combat.ts';
 
 const playerState = (overrides = {}) => ({
@@ -16,8 +27,59 @@ const playerState = (overrides = {}) => ({
   defenseRanged: 18,
   reflex: 7,
   statuses: [],
+  actionPointAvailable: true,
+  heroPointAvailable: false,
+  temporaryDefenseBonus: 0,
+  protectionExpiresAtRound: null,
   revision: 3,
   ...overrides,
+});
+
+test('valida ações de perícia, ataque e recursos especiais sem aceitar fórmulas perigosas', () => {
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'skill',
+    skillId: '130',
+    resource: { kind: 'action-point', ability: 'intervention' },
+  }), true);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'attack',
+    attackIndex: 0,
+    attackType: 'ranged',
+    targetBossId: 'boss-1',
+    damageFormula: '1d8 + 2d6 + 4',
+    resource: { kind: 'hero-point', ability: 'extreme-advantage' },
+  }), true);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'resource',
+    resource: 'action-point',
+    ability: 'recovery',
+  }), true);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'attack',
+    attackIndex: 0,
+    attackType: 'melee',
+    targetBossId: 'boss-1',
+    damageFormula: 'process.exit()',
+    resource: null,
+  }), false);
+});
+
+test('usa patamares oficiais para a recuperação do Ponto de Ação', () => {
+  assert.deepEqual(actionPointRecoveryFormulas(1), {
+    tier: 'Iniciante',
+    health: '2d8 + 2',
+    mana: '1d4 + 1',
+  });
+  assert.equal(actionPointRecoveryFormulas(5).tier, 'Veterano');
+  assert.equal(actionPointRecoveryFormulas(11).tier, 'Campeão');
+  assert.equal(actionPointRecoveryFormulas(17).tier, 'Lenda');
+});
+
+test('seleciona a defesa correspondente ao ataque e respeita resultados naturais', () => {
+  assert.equal(resolveAttackCheck(5, 15, 10).success, true);
+  assert.equal(resolveAttackCheck(4, 15, 10).success, false);
+  assert.equal(resolveAttackCheck(-999, 999, 20).success, true);
+  assert.equal(resolveAttackCheck(999, 0, 1).success, false);
 });
 
 const areaDamage = (overrides = {}) => ({
@@ -110,4 +172,229 @@ test('aceita somente requisiÃ§Ãµes de dano em Ã¡rea dentro dos limites', (
   assert.equal(isAreaDamageRequest({ ...areaDamage(), damage: 1.5 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), reflexDc: 1000 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), successRule: 'quarter' }), false);
+});
+
+test('ordena iniciativa e desempata pelo maior modificador', () => {
+  const rolls = [10, 12, 10];
+  const order = rollInitiativeOrder([
+    { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 5, eligibleRound: 1 },
+    { id: 'boss:b', kind: 'boss', sourceId: 'b', name: 'B', initiativeModifier: 3, eligibleRound: 1 },
+    { id: 'player:c', kind: 'player', sourceId: 'c', name: 'C', initiativeModifier: 2, eligibleRound: 1 },
+  ], () => rolls.shift() ?? 1);
+
+  assert.deepEqual(order.map(({ id }) => id), ['player:a', 'boss:b', 'player:c']);
+});
+
+test('rerrola somente participantes que continuam empatados', () => {
+  const rolls = [10, 10, 18, 4];
+  const order = rollInitiativeOrder([
+    { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 2, eligibleRound: 1 },
+    { id: 'player:b', kind: 'player', sourceId: 'b', name: 'B', initiativeModifier: 2, eligibleRound: 1 },
+  ], () => rolls.shift() ?? 1);
+
+  assert.deepEqual(order.map(({ id }) => id), ['player:a', 'player:b']);
+  assert.deepEqual(order.map(({ initiativeRoll }) => initiativeRoll), [18, 4]);
+});
+
+test('aguarda cada participante rolar a própria iniciativa', () => {
+  const participants = prepareManualInitiative([
+    { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 4, eligibleRound: 1 },
+    { id: 'boss:b', kind: 'boss', sourceId: 'b', name: 'B', initiativeModifier: 2, eligibleRound: 1 },
+  ]);
+  const waiting = {
+    ...emptyEncounterTurnState(),
+    participants,
+    initiativeReady: false,
+  };
+  const first = rollManualInitiative(waiting, 'player:a', () => 12);
+  assert.ok(first);
+  assert.equal(first.participant.initiativeTotal, 16);
+  assert.equal(first.state.initiativeReady, false);
+  const second = rollManualInitiative(first.state, 'boss:b', () => 9);
+  assert.ok(second);
+  assert.equal(second.state.initiativeReady, true);
+  assert.deepEqual(
+    second.state.participants.map(({ id }) => id),
+    ['player:a', 'boss:b'],
+  );
+});
+
+test('formata cada termo de dados com os resultados correspondentes', () => {
+  assert.equal(
+    formatEncounterDiceRolls(
+      '1d20 + 3d5 - 2d2 + 10',
+      [14, 2, 4, 5, -1, -2],
+    ),
+    '1d20(14) + 3d5(2, 4, 5) − 2d2(1, 2)',
+  );
+});
+
+test('inicia no turno um e incrementa apos uma volta completa', () => {
+  const rolled = rollInitiativeOrder([
+    { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 4, eligibleRound: 1 },
+    { id: 'boss:b', kind: 'boss', sourceId: 'b', name: 'B', initiativeModifier: 2, eligibleRound: 1 },
+  ], () => 10);
+  const first = beginEncounterTurns({
+    ...emptyEncounterTurnState(),
+    participants: rolled,
+  });
+  const second = advanceEncounterTurns(first);
+  const wrapped = advanceEncounterTurns(second);
+
+  assert.equal(first.round, 1);
+  assert.equal(first.activeParticipantId, 'player:a');
+  assert.equal(second.round, 1);
+  assert.equal(second.activeParticipantId, 'boss:b');
+  assert.equal(wrapped.round, 2);
+  assert.equal(wrapped.activeParticipantId, 'player:a');
+});
+
+test('aguarda a revelacao da iniciativa e retém testes ate o fim do turno responsável', () => {
+  const rolled = rollInitiativeOrder([
+    { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 4, eligibleRound: 1 },
+    { id: 'boss:b', kind: 'boss', sourceId: 'b', name: 'B', initiativeModifier: 2, eligibleRound: 1 },
+  ], () => 10);
+  const waiting = {
+    ...emptyEncounterTurnState(),
+    initiativeReady: false,
+    participants: rolled,
+  };
+  assert.equal(beginEncounterTurns(waiting), waiting);
+
+  const started = beginEncounterTurns({
+    ...waiting,
+    initiativeReady: true,
+    rollResults: [{
+      id: 'initiative:a',
+      participantId: 'player:a',
+      label: 'Iniciativa',
+      expression: '1d20 + 4',
+      rolls: [10],
+      modifier: 4,
+      total: 14,
+      outcome: 'neutral',
+      category: 'initiative',
+      createdAt: 1,
+      retainedByParticipantId: null,
+    }, {
+      id: 'test:a',
+      participantId: 'player:a',
+      label: 'Fortitude',
+      expression: '1d20 + 4',
+      rolls: [13],
+      modifier: 4,
+      total: 17,
+      outcome: 'success',
+      category: 'test',
+      createdAt: 2,
+      retainedByParticipantId: 'player:a',
+    }],
+  });
+  assert.deepEqual(started.rollResults.map(({ id }) => id), ['test:a']);
+  assert.deepEqual(advanceEncounterTurns(started).rollResults, []);
+});
+
+test('participante que entra durante a rodada so age na proxima', () => {
+  const state = {
+    round: 5,
+    activeParticipantId: 'player:a',
+    started: true,
+    revision: 9,
+    participants: [
+      { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 10, initiativeRoll: 20, initiativeTotal: 30, eligibleRound: 1, isSelf: false },
+      { id: 'player:new', kind: 'player', sourceId: 'new', name: 'Novo', initiativeModifier: 8, initiativeRoll: 18, initiativeTotal: 26, eligibleRound: 6, isSelf: false },
+      { id: 'boss:b', kind: 'boss', sourceId: 'b', name: 'B', initiativeModifier: 2, initiativeRoll: 8, initiativeTotal: 10, eligibleRound: 1, isSelf: false },
+    ],
+  };
+
+  const currentRound = advanceEncounterTurns(state);
+  const nextRound = advanceEncounterTurns(currentRound);
+
+  assert.equal(currentRound.activeParticipantId, 'boss:b');
+  assert.equal(currentRound.round, 5);
+  assert.equal(nextRound.activeParticipantId, 'player:a');
+  assert.equal(nextRound.round, 6);
+  assert.equal(advanceEncounterTurns(nextRound).activeParticipantId, 'player:new');
+});
+
+test('recupera a ordem quando o participante ativo deixa o encontro', () => {
+  const recovered = advanceEncounterTurns({
+    round: 3,
+    activeParticipantId: 'player:missing',
+    started: true,
+    revision: 8,
+    participants: [
+      {
+        id: 'boss:1',
+        kind: 'boss',
+        sourceId: '1',
+        name: 'Chefao',
+        initiativeModifier: 5,
+        initiativeRoll: 13,
+        initiativeTotal: 18,
+        eligibleRound: 1,
+        isSelf: false,
+      },
+      {
+        id: 'player:late',
+        kind: 'player',
+        sourceId: 'late',
+        name: 'Atrasado',
+        initiativeModifier: 2,
+        initiativeRoll: 10,
+        initiativeTotal: 12,
+        eligibleRound: 4,
+        isSelf: false,
+      },
+    ],
+  });
+
+  assert.equal(recovered.round, 3);
+  assert.equal(recovered.activeParticipantId, 'boss:1');
+  assert.equal(recovered.revision, 9);
+});
+
+test('expõe somente os dados brutos de rolagens privadas e de chefão', () => {
+  const state = {
+    ...emptyEncounterTurnState(),
+    participants: [
+      { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 4, initiativeRoll: 11, initiativeTotal: 15, eligibleRound: 1, isSelf: false },
+      { id: 'player:b', kind: 'player', sourceId: 'b', name: 'B', initiativeModifier: 3, initiativeRoll: 12, initiativeTotal: 15, eligibleRound: 1, isSelf: false },
+      { id: 'boss:1', kind: 'boss', sourceId: '1', name: 'Chefão', initiativeModifier: 9, initiativeRoll: 15, initiativeTotal: 24, eligibleRound: 1, isSelf: false },
+    ],
+    rollResults: [
+      { id: 'roll:a', participantId: 'player:a', label: 'Reflexos', expression: '1d20 + 4', rolls: [11], modifier: 4, total: 15, outcome: 'success', category: 'test', createdAt: 1, retainedByParticipantId: null },
+      { id: 'roll:b', participantId: 'player:b', label: 'Fortitude', expression: '1d20 + 3', rolls: [12], modifier: 3, total: 15, outcome: 'success', category: 'test', createdAt: 2, retainedByParticipantId: null },
+      { id: 'roll:boss', participantId: 'boss:1', label: 'Iniciativa', expression: '1d20 + 9', rolls: [15], modifier: 9, total: 24, outcome: 'neutral', category: 'initiative', createdAt: 3, retainedByParticipantId: null },
+    ],
+  };
+
+  const personalized = personalizeEncounterTurnState(
+    state,
+    'a',
+    new Set(['player:b']),
+  );
+
+  assert.equal(personalized.participants[0].isSelf, true);
+  assert.equal(personalized.rollResults[0].visibility, 'full');
+  assert.deepEqual(personalized.rollResults[0].rolls, [11]);
+  assert.equal(personalized.rollResults[1].visibility, 'dice-only');
+  assert.deepEqual(personalized.rollResults[1].rolls, [12]);
+  assert.equal(personalized.rollResults[1].total, 0);
+  assert.equal(personalized.rollResults[2].visibility, 'dice-only');
+  assert.deepEqual(personalized.rollResults[2].rolls, [15]);
+  assert.equal(personalized.rollResults[2].expression, '1d20');
+  assert.equal(personalized.rollResults[2].modifier, 0);
+  assert.equal(personalized.rollResults[2].total, 0);
+
+  const masterView = personalizeEncounterTurnState(
+    state,
+    null,
+    new Set(['player:b']),
+    true,
+  );
+  assert.equal(masterView.rollResults[1].visibility, 'full');
+  assert.equal(masterView.rollResults[1].total, 15);
+  assert.equal(masterView.rollResults[2].visibility, 'full');
+  assert.equal(masterView.rollResults[2].total, 24);
 });

@@ -558,10 +558,24 @@ export const getDamageFormulaRange = (
 export const rollDamageFormula = (
   formula: ParsedDamageFormula,
   randomInteger: (minimum: number, maximumExclusive: number) => number,
-): number => {
-  if (formula.kind === 'fixed') return formula.value;
+): number => rollDamageFormulaDetailed(formula, randomInteger).total;
+
+export type DamageFormulaRoll = {
+  total: number;
+  rolls: number[];
+  modifier: number;
+};
+
+export const rollDamageFormulaDetailed = (
+  formula: ParsedDamageFormula,
+  randomInteger: (minimum: number, maximumExclusive: number) => number,
+): DamageFormulaRoll => {
+  if (formula.kind === 'fixed') {
+    return { total: formula.value, rolls: [], modifier: formula.value };
+  }
 
   let total = formula.modifier;
+  const rolls: number[] = [];
   const terms = formula.kind === 'dice'
     ? [{ diceCount: formula.diceCount, sides: formula.sides, sign: 1 as const }]
     : formula.terms;
@@ -571,11 +585,17 @@ export const rollDamageFormula = (
       if (!Number.isInteger(result) || result < 1 || result > term.sides) {
         throw new RangeError('A fonte aleatória retornou um resultado inválido.');
       }
-      total += result * term.sign;
+      const signedResult = result * term.sign;
+      rolls.push(signedResult);
+      total += signedResult;
     }
   }
 
-  return Math.max(0, Math.min(MAX_DAMAGE, total));
+  return {
+    total: Math.max(0, Math.min(MAX_DAMAGE, total)),
+    rolls,
+    modifier: formula.modifier,
+  };
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

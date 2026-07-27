@@ -49,6 +49,7 @@ const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
     rangedDefense: boss.rangedDefense,
     shield: boss.shield,
     skills: boss.skills,
+    skillValues: boss.skillValues,
     damageReduction: boss.damageReduction,
     description: boss.nextAction,
     actionSeverity: boss.actionSeverity,
@@ -86,6 +87,7 @@ const encounterSoundCategories: Array<{
   { kind: 'heal', label: 'Cura' },
   { kind: 'shield-impact', label: 'Dano do escudo' },
   { kind: 'shield-break', label: 'Escudo quebrando' },
+  { kind: 'dice-roll', label: 'Rolagem de dados' },
 ];
 
 const connectionQualityLabels: Record<ConnectionQuality, string> = {
@@ -182,6 +184,12 @@ const MasterApp = () => {
   const [passwordResetValue, setPasswordResetValue] = useState('');
   const [passwordResetConfirm, setPasswordResetConfirm] = useState('');
   const [passwordResetError, setPasswordResetError] = useState('');
+  const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<{
+    id: string;
+    name: string;
+    source: 'connected' | 'profile';
+  } | null>(null);
+  const [profileDeleteError, setProfileDeleteError] = useState('');
   const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
   const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
   const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -688,6 +696,24 @@ const MasterApp = () => {
     }
   };
 
+  const decideActionPoint = async (
+    requestId: string,
+    approved: boolean,
+  ) => {
+    try {
+      const result = approved
+        ? await window.bossAPI.approveActionPointRequest(requestId)
+        : await window.bossAPI.rejectActionPointRequest(requestId);
+      showHostedSessionFeedback(
+        result.ok
+          ? approved ? 'Ponto de Ação aprovado.' : 'Ponto de Ação recusado.'
+          : result.error ?? 'O pedido não está mais disponível.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível responder ao pedido.');
+    }
+  };
+
   const captureMasterNotesEditor = (source: PlayerNotesDocument) => {
     const editor = masterNotesEditorRef.current;
     if (!editor) return source;
@@ -862,6 +888,23 @@ const MasterApp = () => {
       setPlayerProfiles(await window.bossAPI.getPlayerProfiles());
     }
     showHostedSessionFeedback('Senha redefinida. O jogador precisará entrar novamente.');
+  };
+
+  const confirmProfileDelete = async () => {
+    if (!profileDeleteCandidate) return;
+    setProfileDeleteError('');
+    const result = profileDeleteCandidate.source === 'profile'
+      ? await window.bossAPI.deletePlayerProfile(profileDeleteCandidate.id)
+      : await window.bossAPI.deleteHostedPlayerAccount(profileDeleteCandidate.id);
+    if (!result.ok) {
+      setProfileDeleteError(result.error ?? 'Não foi possível excluir o usuário.');
+      return;
+    }
+    setProfileDeleteCandidate(null);
+    if (playerProfilesOpen) {
+      setPlayerProfiles(await window.bossAPI.getPlayerProfiles());
+    }
+    showHostedSessionFeedback('Conta excluída.');
   };
 
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
@@ -1047,6 +1090,32 @@ const MasterApp = () => {
             </div>
           )}
 
+          {hostedSession.pendingActionPointRequests.length > 0 && (
+            <div className="hosted-join-requests is-action-points">
+              <div className="hosted-roster-heading">
+                <span>Pontos de Ação aguardando aprovação</span>
+              </div>
+              <ol className="hosted-request-list">
+                {hostedSession.pendingActionPointRequests.map((request) => (
+                  <li className="hosted-request" key={request.id}>
+                    <span title={`${request.playerName}: ${request.label}`}>
+                      {request.playerName} · {request.label}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void decideActionPoint(request.id, true)}
+                    >Aprovar</button>
+                    <button
+                      className="is-reject"
+                      type="button"
+                      onClick={() => void decideActionPoint(request.id, false)}
+                    >Recusar</button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           <div className="hosted-roster-heading">
             <span>Jogadores conectados</span>
             {hostedSessionFeedback && (
@@ -1098,6 +1167,40 @@ const MasterApp = () => {
                   >
                     Senha
                   </button>
+                  {!player.isHost && (
+                    <button
+                      className="hosted-player-tool is-hero"
+                      type="button"
+                      onClick={async () => {
+                        const result = await window.bossAPI.grantHostedHeroPoint(
+                          player.id,
+                        );
+                        showHostedSessionFeedback(
+                          result.ok
+                            ? `Ponto Heróico concedido a ${player.name}.`
+                            : result.error ?? 'Não foi possível conceder o ponto.',
+                        );
+                      }}
+                    >
+                      + Heróico
+                    </button>
+                  )}
+                  {!player.isHost && (
+                    <button
+                      className="hosted-player-tool is-delete"
+                      type="button"
+                      onClick={() => {
+                        setProfileDeleteCandidate({
+                          id: player.id,
+                          name: player.name,
+                          source: 'connected',
+                        });
+                        setProfileDeleteError('');
+                      }}
+                    >
+                      Excluir
+                    </button>
+                  )}
                 </li>
               ))}
             </ol>
@@ -1338,6 +1441,18 @@ const MasterApp = () => {
                         setPasswordResetError('');
                       }}
                     >Senha</button>
+                    <button
+                      className="is-delete"
+                      type="button"
+                      onClick={() => {
+                        setProfileDeleteCandidate({
+                          id: profile.id,
+                          name: profile.username,
+                          source: 'profile',
+                        });
+                        setProfileDeleteError('');
+                      }}
+                    >Excluir</button>
                   </li>
                 ))}
               </ol>
@@ -1367,6 +1482,39 @@ const MasterApp = () => {
             <div className="modal-actions">
               <button className="modal-cancel-button" type="button" onClick={() => setPasswordResetPlayer(null)}>Cancelar</button>
               <button className="modal-confirm-button" type="button" onClick={() => void confirmPasswordReset()}>Redefinir</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {profileDeleteCandidate && (
+        <div className="modal-backdrop">
+          <section
+            className="confirmation-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="profile-delete-title"
+            aria-describedby="profile-delete-description"
+          >
+            <p className="modal-eyebrow">Usuário: {profileDeleteCandidate.name}</p>
+            <h2 id="profile-delete-title">Excluir esta conta?</h2>
+            <p id="profile-delete-description">
+              A ficha, a senha e as notas vinculadas serão removidas permanentemente.
+            </p>
+            {profileDeleteError && (
+              <p className="master-error" role="alert">{profileDeleteError}</p>
+            )}
+            <div className="modal-actions">
+              <button
+                className="modal-cancel-button"
+                type="button"
+                onClick={() => setProfileDeleteCandidate(null)}
+              >Cancelar</button>
+              <button
+                className="modal-confirm-button is-delete"
+                type="button"
+                onClick={() => void confirmProfileDelete()}
+              >Excluir conta</button>
             </div>
           </section>
         </div>
@@ -1405,6 +1553,7 @@ const MasterApp = () => {
                 <SettingsCheckbox checked={encounterEffects.sounds.heal} label="Cura" onChange={(checked) => setEncounterSoundEnabled('heal', checked)} />
                 <SettingsCheckbox checked={encounterEffects.sounds.damage} label="Dano" onChange={(checked) => setEncounterSoundEnabled('damage', checked)} />
                 <SettingsCheckbox checked={encounterEffects.sounds.shield} label="Escudo" onChange={(checked) => setEncounterSoundEnabled('shield', checked)} />
+                <SettingsCheckbox checked={encounterEffects.sounds.dice} label="Rolagem de dados" onChange={(checked) => setEncounterSoundEnabled('dice', checked)} />
               </div>
               <label className="settings-volume-control">
                 <span>Efeitos sonoros <strong>{Math.round(encounterEffects.volume * 100)}%</strong></span>

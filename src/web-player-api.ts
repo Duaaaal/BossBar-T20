@@ -20,6 +20,7 @@ import {
   type SoundboardState,
   type SoundboardStop,
 } from './shared/battle.ts';
+import { createBossSkillValues } from './shared/boss-skills.ts';
 import {
   MAX_MULTIPLAYER_PLAYERS,
   MULTIPLAYER_PROTOCOL_VERSION,
@@ -36,9 +37,16 @@ import {
   type MultiplayerSessionSnapshot,
 } from './shared/multiplayer.ts';
 import type {
+  EncounterTurnActionResult,
+  EncounterTurnState,
+  PlayerCombatActionRequest,
+  PlayerCombatActionResult,
   PlayerAreaDamageImpact,
   PlayerEncounterState,
+  PlayerHudState,
+  PlayerResourceNotice,
 } from './shared/player-combat.ts';
+import { emptyEncounterTurnState } from './shared/player-combat.ts';
 import {
   createScenePlan,
   type ScenePlan,
@@ -112,6 +120,16 @@ type PlayerApi = Pick<
   | 'subscribeSoundEffect'
   | 'soundEffectFinished'
   | 'reportSoundEffectError'
+  | 'getPlayerHuds'
+  | 'subscribePlayerHuds'
+  | 'getEncounterTurnState'
+  | 'subscribeEncounterTurn'
+  | 'advanceEncounterTurn'
+  | 'rollEncounterInitiative'
+  | 'rollEncounterFormula'
+  | 'requestPlayerCombatAction'
+  | 'subscribePlayerResourceNotice'
+  | 'usePlayerAction'
 >;
 
 const createChannel = <Value,>(initialValue: Value) => {
@@ -210,6 +228,7 @@ export const toBattleState = (
     defense: 0,
     rangedDefense: 0,
     skills: 0,
+    skillValues: createBossSkillValues(0),
     damageReduction: 0,
   })),
   activeBossId: state.bosses[0]?.id ?? '',
@@ -293,6 +312,7 @@ const connectionErrorMessages: Record<MultiplayerConnectionErrorCode, string> = 
   INVALID_TOKEN: 'O convite desta sessão não é mais válido.',
   PROTOCOL_MISMATCH: 'A versão desta apresentação não corresponde à do mestre.',
   ROOM_FULL: `A sala atingiu o limite de ${MAX_MULTIPLAYER_PLAYERS} jogadores.`,
+  NAME_IN_USE: 'Este usuário já está conectado nesta sala.',
   ROOM_NOT_FOUND: 'Esta sala não existe ou já foi encerrada.',
 };
 
@@ -367,6 +387,11 @@ export const createWebPlayerApi = ({
   const soundboardStops = createEventChannel<SoundboardStop>();
   const soundEffects = createEventChannel<SoundEffect>();
   const encounterSoundEffects = createEventChannel<EncounterSoundEffect>();
+  const playerHuds = createChannel<PlayerHudState[]>([]);
+  const encounterTurn = createChannel<EncounterTurnState>(
+    emptyEncounterTurnState(),
+  );
+  const resourceNotices = createEventChannel<PlayerResourceNotice>();
   const { roomCode, playerToken, clientId, hostToken } =
     resolveConnectionParameters();
   const mediaPreloadPromises = new Map<string, Promise<boolean>>();
@@ -980,6 +1005,23 @@ export const createWebPlayerApi = ({
     onSessionReady?.();
   };
 
+  let endOwnTurnHandler = async (): Promise<EncounterTurnActionResult> => ({
+    ok: false,
+    error: 'O jogador ainda não está conectado.',
+  });
+  let rollInitiativeHandler = async (): Promise<EncounterTurnActionResult> => ({
+    ok: false,
+    error: 'O jogador ainda não está conectado.',
+  });
+  let usePlayerActionHandler: BossAPI['usePlayerAction'] = async () => ({
+    ok: false,
+    error: 'O jogador ainda não está conectado.',
+  });
+  let requestPlayerCombatActionHandler: BossAPI['requestPlayerCombatAction'] =
+    async () => ({
+      ok: false,
+      error: 'O jogador ainda não está conectado.',
+    });
   const api: PlayerApi = {
     undoLastChange: async () => false,
     getState: async () => battle.current(),
@@ -1010,6 +1052,28 @@ export const createWebPlayerApi = ({
     subscribeSoundEffect: soundEffects.subscribe,
     soundEffectFinished: () => undefined,
     reportSoundEffectError: () => undefined,
+    getPlayerHuds: async () => playerHuds.current(),
+    subscribePlayerHuds: (listener) => {
+      const unsubscribe = playerHuds.subscribe(listener);
+      listener(playerHuds.current());
+      return unsubscribe;
+    },
+    getEncounterTurnState: async () => encounterTurn.current(),
+    subscribeEncounterTurn: (listener) => {
+      const unsubscribe = encounterTurn.subscribe(listener);
+      listener(encounterTurn.current());
+      return unsubscribe;
+    },
+    advanceEncounterTurn: () => endOwnTurnHandler(),
+    rollEncounterInitiative: () => rollInitiativeHandler(),
+    rollEncounterFormula: async () => ({
+      ok: false,
+      error: 'Somente o mestre pode rolar fórmulas pelo painel.',
+    }),
+    requestPlayerCombatAction: (request) =>
+      requestPlayerCombatActionHandler(request),
+    subscribePlayerResourceNotice: resourceNotices.subscribe,
+    usePlayerAction: (action) => usePlayerActionHandler(action),
   };
 
   if (!roomCode || !playerToken) {
@@ -1032,6 +1096,18 @@ export const createWebPlayerApi = ({
       removeCharacterSheet,
       blankCharacterSheetUrl: '/api/player/blank-sheet',
       saveNotes,
+      setCharacterPrivate: async () => ({
+        ok: false,
+        error: 'O link da sessão está incompleto.',
+      }),
+      usePlayerAction: async () => ({
+        ok: false,
+        error: 'O link da sessão está incompleto.',
+      }),
+      endOwnTurn: async () => ({
+        ok: false,
+        error: 'O link da sessão está incompleto.',
+      }),
       getPlayerToolsState: () => ({
         username: authenticatedUsername,
         sheet: currentSheet,
@@ -1137,12 +1213,24 @@ export const createWebPlayerApi = ({
   socket.on('player:state', (state) => {
     void eventQueue.enqueue(() => onPlayerState?.(state));
   });
+  socket.on('players:hud-state', (state) => {
+    // These lightweight projections do not depend on media. Keeping them out
+    // of the media queue prevents a slow background/audio preload from
+    // delaying party visibility or privacy changes.
+    playerHuds.publish(state);
+  });
+  socket.on('encounter:turn-state', (state) => {
+    encounterTurn.publish(state);
+  });
   socket.on('player:combat-impact', (impact) => {
     void eventQueue.enqueue(() => {
       // Life, check result and temporary modifiers are delivered in the same
       // private event so this browser paints them in one ordered update.
       onPlayerCombatImpact?.(impact);
     });
+  });
+  socket.on('player:resource-notice', (notice) => {
+    resourceNotices.publish(notice);
   });
   socket.on('presentation:background', (nextBackground) => {
     void eventQueue.enqueue(async (isCurrent) => {
@@ -1210,6 +1298,83 @@ export const createWebPlayerApi = ({
     });
   });
 
+  const setCharacterPrivate = (privateMode: boolean) =>
+    new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      if (!socket.connected) {
+        resolve({ ok: false, error: 'O jogador não está conectado.' });
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        resolve({ ok: false, error: 'A sala não confirmou a alteração.' });
+      }, 5_000);
+      socket.emit('player:set-private', privateMode, (result) => {
+        window.clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+
+  const endOwnTurn = () =>
+    new Promise<EncounterTurnActionResult>((resolve) => {
+      if (!socket.connected) {
+        resolve({ ok: false, error: 'O jogador não está conectado.' });
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        resolve({ ok: false, error: 'A sala não confirmou o fim do turno.' });
+      }, 5_000);
+      socket.emit('encounter:end-own-turn', (result) => {
+        window.clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+  endOwnTurnHandler = endOwnTurn;
+  const rollInitiative = () =>
+    new Promise<EncounterTurnActionResult>((resolve) => {
+      if (!socket.connected) {
+        resolve({ ok: false, error: 'O jogador não está conectado.' });
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        resolve({ ok: false, error: 'A sala não confirmou a iniciativa.' });
+      }, 5_000);
+      socket.emit('encounter:roll-initiative', (result) => {
+        window.clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+  rollInitiativeHandler = rollInitiative;
+  const usePlayerAction: BossAPI['usePlayerAction'] = (action) =>
+    new Promise((resolve) => {
+      if (!socket.connected) {
+        resolve({ ok: false, error: 'O jogador não está conectado.' });
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        resolve({ ok: false, error: 'A sala não confirmou a ação.' });
+      }, 5_000);
+      socket.emit('player:use-action', action, (result) => {
+        window.clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+  usePlayerActionHandler = usePlayerAction;
+  const requestPlayerCombatAction = (
+    request: PlayerCombatActionRequest,
+  ) => new Promise<PlayerCombatActionResult>((resolve) => {
+    if (!socket.connected) {
+      resolve({ ok: false, error: 'O jogador não está conectado.' });
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      resolve({ ok: false, error: 'A sala não confirmou a ação de combate.' });
+    }, 8_000);
+    socket.emit('encounter:combat-action', request, (result) => {
+      window.clearTimeout(timeout);
+      resolve(result);
+    });
+  });
+  requestPlayerCombatActionHandler = requestPlayerCombatAction;
+
   const connect = async (
     requestedName: string,
     password: string,
@@ -1271,6 +1436,9 @@ export const createWebPlayerApi = ({
     removeCharacterSheet,
     blankCharacterSheetUrl: '/api/player/blank-sheet',
     saveNotes,
+    setCharacterPrivate,
+    usePlayerAction,
+    endOwnTurn,
     getPlayerToolsState: () => ({
       username: authenticatedUsername,
       sheet: currentSheet,

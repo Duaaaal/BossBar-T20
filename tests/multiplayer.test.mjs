@@ -163,6 +163,7 @@ const createValidCharacterSheetValidation = ({
   maxMana,
   defense,
   reflex,
+  initiative = reflex,
 }) => ({
   supported: true,
   template: 'ficha-t20-editavel-v2',
@@ -191,20 +192,36 @@ const createValidCharacterSheetValidation = ({
       ranged: defense,
       calculation: `Defesa ${defense}`,
     },
-    skills: [{
-      id: '270',
-      name: 'Reflexos',
-      total: reflex,
-      trained: true,
-      attribute: 'DES',
-      attributeValue: 1,
-      halfLevel: 1,
-      trainingBonus: Math.max(0, reflex - 2),
-      otherBonus: 0,
-      armorPenalty: 0,
-      sizeModifier: 0,
-      calculation: `1 + 1 + ${Math.max(0, reflex - 2)} = ${reflex}`,
-    }],
+    skills: [
+      {
+        id: '130',
+        name: 'Iniciativa',
+        total: initiative,
+        trained: true,
+        attribute: 'DES',
+        attributeValue: 1,
+        halfLevel: 1,
+        trainingBonus: Math.max(0, initiative - 2),
+        otherBonus: 0,
+        armorPenalty: 0,
+        sizeModifier: 0,
+        calculation: `1 + 1 + ${Math.max(0, initiative - 2)} = ${initiative}`,
+      },
+      {
+        id: '270',
+        name: 'Reflexos',
+        total: reflex,
+        trained: true,
+        attribute: 'DES',
+        attributeValue: 1,
+        halfLevel: 1,
+        trainingBonus: Math.max(0, reflex - 2),
+        otherBonus: 0,
+        armorPenalty: 0,
+        sizeModifier: 0,
+        calculation: `1 + 1 + ${Math.max(0, reflex - 2)} = ${reflex}`,
+      },
+    ],
     attacks: [],
     movement: '9m',
     size: 'Médio',
@@ -292,6 +309,25 @@ test('limita a sala a dez jogadores e substitui uma reconexão sem ocupar vaga',
   assert.equal(roster.presence().connectedPlayers, MAX_MULTIPLAYER_PLAYERS);
   assert.equal(roster.unregisterSocket('socket-0'), false);
   assert.equal(roster.unregisterSocket('socket-new'), true);
+});
+
+test('impede dois clientes de usarem o mesmo nome na sala', () => {
+  const roster = new SessionRoster('ABCDEFGH');
+  assert.equal(roster.register({
+    clientId: 'client-a',
+    name: '  Alice ',
+    socketId: 'socket-a',
+  }).accepted, true);
+  const duplicate = roster.register({
+    clientId: 'client-b',
+    name: 'alice',
+    socketId: 'socket-b',
+  });
+  assert.deepEqual(duplicate, {
+    accepted: false,
+    reason: 'name-in-use',
+  });
+  assert.equal(roster.presence().connectedPlayers, 1);
 });
 
 test('sinaliza problemas depois de duas sondagens de latência perdidas', () => {
@@ -457,6 +493,14 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const firstSnapshot = once(first, 'session:snapshot');
   await once(first, 'connect');
   assert.equal((await firstSnapshot)[0].protocolVersion, MULTIPLAYER_PROTOCOL_VERSION);
+
+  const duplicateName = await connectPlayer(server, {
+    clientId: 'browser-client-duplicate',
+    playerName: 'Alice',
+  });
+  t.after(() => duplicateName.close());
+  const [duplicateNameError] = await once(duplicateName, 'connect_error');
+  assert.equal(duplicateNameError.data?.code, 'NAME_IN_USE');
 
   const second = await connectPlayer(server, {
     clientId: 'browser-client-02',
@@ -630,8 +674,43 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   assert.ok(aliceImpacts[0].playerState.currentHealth < 80);
   assert.ok(brunoImpacts[0].playerState.currentHealth < 65);
 
-  const aliceHealthAfterImpact = aliceImpacts[0].playerState.currentHealth;
-  const aliceRevisionAfterImpact = aliceImpacts[0].playerState.revision;
+  const aliceHud = server.getPlayerHuds().find(
+    ({ characterName }) => characterName === 'Valora',
+  );
+  assert.ok(aliceHud);
+  const directStateEvent = once(alice, 'player:state');
+  assert.deepEqual(server.applyDirectPlayerDamage({
+    playerIds: [aliceHud.id],
+    damage: 3,
+  }), {
+    ok: true,
+    appliedPlayers: 1,
+    skippedPlayers: [],
+  });
+  const [directState] = await directStateEvent;
+  assert.equal(
+    directState.currentHealth,
+    aliceImpacts[0].playerState.currentHealth - 3,
+  );
+
+  const statusStateEvent = once(alice, 'player:state');
+  assert.deepEqual(server.applyPlayerStatus({
+    playerIds: [aliceHud.id],
+    status: {
+      statusId: 'abalado',
+      damageFormula: null,
+      turnsRemaining: 2,
+    },
+  }), {
+    ok: true,
+    appliedPlayers: 1,
+    skippedPlayers: [],
+  });
+  const [statusState] = await statusStateEvent;
+  assert.equal(statusState.statuses[0].statusId, 'abalado');
+
+  const aliceHealthAfterImpact = statusState.currentHealth;
+  const aliceRevisionAfterImpact = statusState.revision;
   const aliceDisconnected = once(alice, 'disconnect');
   alice.disconnect();
   await aliceDisconnected;
@@ -700,4 +779,199 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   assert.equal(server.getPresence().connectedPlayers, 1);
   assert.ok(requests.some((pending) => pending.length === 1));
   assert.equal(requests.at(-1).length, 0);
+});
+
+test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const server = await MultiplayerSessionServer.start({
+    playerProfileStore: profileStore,
+    initialSnapshot: publicSnapshot(),
+    port: 0,
+    networkMode: 'loopback',
+  });
+  t.after(async () => server.close('server-shutdown'));
+
+  const alice = await connectPlayer(server, {
+    clientId: 'hud-client-alice',
+    playerName: 'Alice',
+  });
+  t.after(() => alice.close());
+  await once(alice, 'connect');
+  const bruno = await connectPlayer(server, {
+    clientId: 'hud-client-bruno',
+    playerName: 'Bruno',
+  });
+  t.after(() => bruno.close());
+  await once(bruno, 'connect');
+
+  for (const [username, clientId, characterName, initiative] of [
+    ['Alice', 'hud-client-alice', 'Valora', 12],
+    ['Bruno', 'hud-client-bruno', 'Arton', 6],
+  ]) {
+    const profile = profileStore.profileByUsername(username);
+    assert.ok(profile);
+    await profileStore.saveSheet(
+      profile.id,
+      `${username}.pdf`,
+      new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      createValidCharacterSheetValidation({
+        characterName,
+        currentHealth: 60,
+        maxHealth: 60,
+        currentMana: 10,
+        maxMana: 10,
+        defense: 18,
+        reflex: 7,
+        initiative,
+      }),
+    );
+    server.refreshCharacterSheet(clientId, true);
+  }
+
+  const aliceHuds = [];
+  const brunoHuds = [];
+  alice.on('players:hud-state', (state) => aliceHuds.push(state));
+  bruno.on('players:hud-state', (state) => brunoHuds.push(state));
+  server.refreshCharacterSheet('hud-client-alice', true);
+  await waitFor(() => aliceHuds.at(-1)?.length === 2 && brunoHuds.at(-1)?.length === 2);
+  assert.equal(
+    brunoHuds.at(-1).find(({ characterName }) => characterName === 'Valora')
+      ?.redacted,
+    true,
+  );
+
+  const privacyResult = await new Promise((resolve) => {
+    alice.emit('player:set-private', true, resolve);
+  });
+  assert.deepEqual(privacyResult, { ok: true });
+  await waitFor(() => brunoHuds.at(-1)?.find(({ characterName }) =>
+    characterName === 'Valora')?.redacted === true);
+
+  const aliceView = aliceHuds.at(-1).find(({ characterName }) => characterName === 'Valora');
+  const brunoView = brunoHuds.at(-1).find(({ characterName }) => characterName === 'Valora');
+  assert.equal(aliceView.isSelf, true);
+  assert.equal(aliceView.redacted, false);
+  assert.equal(aliceView.currentHealth, 60);
+  assert.equal(brunoView.isSelf, false);
+  assert.equal(brunoView.redacted, true);
+  assert.equal(brunoView.currentHealth, null);
+  assert.equal(brunoView.summary, null);
+  const masterView = server.getPlayerHuds().find(
+    ({ characterName }) => characterName === 'Valora',
+  );
+  assert.equal(masterView.redacted, false);
+  assert.equal(masterView.currentHealth, 60);
+  assert.ok(masterView.summary);
+
+  const turnStates = [];
+  alice.on('encounter:turn-state', (state) => turnStates.push(state));
+  server.publishBattleState({
+    ...publicSnapshot().battle,
+    battleStarted: true,
+    revision: 50,
+  });
+  await waitFor(() => turnStates.at(-1)?.participants.length === 3);
+  for (let attempts = 0; attempts < 20; attempts += 1) {
+    const pending = server.getTurnState().participants.filter(
+      ({ initiativeRolled }) => initiativeRolled === false,
+    );
+    if (pending.length === 0) break;
+    for (const participant of pending) {
+      if (participant.kind === 'boss') {
+        assert.equal(server.rollInitiativeAsHost(participant.id).ok, true);
+      } else {
+        const socket = participant.name === 'Valora' ? alice : bruno;
+        const result = await new Promise((resolve) => {
+          socket.emit('encounter:roll-initiative', resolve);
+        });
+        assert.equal(result.ok, true);
+      }
+    }
+  }
+  await waitFor(() => turnStates.at(-1)?.initiativeReady === true);
+  assert.equal(turnStates.at(-1).round, 0);
+  assert.equal(
+    turnStates.at(-1).rollResults.filter(({ category }) =>
+      category === 'initiative').length,
+    3,
+  );
+  assert.ok(
+    server.getTurnState().rollResults
+      .filter(({ category }) => category === 'initiative')
+      .every(({ visibility }) => visibility === 'full'),
+  );
+  const privateInitiativeParticipant = server.getTurnState().participants.find(
+    ({ name }) => name === 'Valora',
+  );
+  assert.ok(privateInitiativeParticipant);
+  assert.ok(
+    server.getTurnState('hud-client-bruno').rollResults
+      .filter(({ participantId }) => participantId === privateInitiativeParticipant.id)
+      .every(({ visibility }) => visibility === 'dice-only'),
+  );
+
+  assert.equal(server.advanceTurnAsHost().ok, true);
+  let aliceTurnState = server.getTurnState('hud-client-alice');
+  const aliceParticipant = aliceTurnState.participants.find(({ isSelf }) => isSelf);
+  assert.ok(aliceParticipant);
+  for (let attempts = 0;
+    aliceTurnState.activeParticipantId !== aliceParticipant.id && attempts < 4;
+    attempts += 1) {
+    assert.equal(server.advanceTurnAsHost().ok, true);
+    aliceTurnState = server.getTurnState('hud-client-alice');
+  }
+  assert.equal(aliceTurnState.activeParticipantId, aliceParticipant.id);
+  const actionResult = await new Promise((resolve) => {
+    alice.emit('player:use-action', 'standard', resolve);
+  });
+  assert.deepEqual(actionResult, { ok: true });
+  await waitFor(() => aliceHuds.at(-1)
+    ?.find(({ isSelf }) => isSelf)?.actions.standard === false);
+
+  const rollCountBeforeApproval = server.getTurnState().rollResults.length;
+  const actionPointRequest = await new Promise((resolve) => {
+    alice.emit('encounter:combat-action', {
+      kind: 'skill',
+      skillId: '130',
+      resource: { kind: 'action-point', ability: 'intervention' },
+    }, resolve);
+  });
+  assert.equal(actionPointRequest.ok, true);
+  assert.equal(actionPointRequest.pendingApproval, true);
+  assert.equal(server.getTurnState().rollResults.length, rollCountBeforeApproval);
+  assert.equal(server.getPendingActionPointRequests().length, 1);
+  assert.equal(
+    server.approveActionPointRequest(actionPointRequest.requestId).ok,
+    true,
+  );
+  assert.equal(server.getPendingActionPointRequests().length, 0);
+  await waitFor(() => aliceHuds.at(-1)
+    ?.find(({ isSelf }) => isSelf)?.actionPointAvailable === false);
+  const actionPointRoll = server.getTurnState().rollResults.at(-1);
+  assert.equal(actionPointRoll.resourceEffect, 'action-point');
+  assert.equal(actionPointRoll.rolls.length, 2);
+
+  assert.equal(server.grantHeroPoint(aliceParticipant.sourceId).ok, true);
+  await waitFor(() => aliceHuds.at(-1)
+    ?.find(({ isSelf }) => isSelf)?.heroPointAvailable === true);
+  const heroicResult = await new Promise((resolve) => {
+    alice.emit('encounter:combat-action', {
+      kind: 'skill',
+      skillId: '130',
+      resource: { kind: 'hero-point', ability: 'extreme-advantage' },
+    }, resolve);
+  });
+  assert.deepEqual(heroicResult, { ok: true });
+  const heroicRoll = server.getTurnState().rollResults.at(-1);
+  assert.equal(heroicRoll.resourceEffect, 'hero-point');
+  assert.equal(heroicRoll.rollMode, 'keep-highest');
+  assert.equal(heroicRoll.rolls.length, 2);
+  await waitFor(() => aliceHuds.at(-1)
+    ?.find(({ isSelf }) => isSelf)?.heroPointAvailable === false);
+
+  const endResult = await new Promise((resolve) => {
+    alice.emit('encounter:end-own-turn', resolve);
+  });
+  assert.equal(endResult.ok, true);
+  assert.notEqual(server.getTurnState().activeParticipantId, aliceParticipant.id);
 });

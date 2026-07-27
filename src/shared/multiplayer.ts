@@ -9,9 +9,20 @@ import type {
 } from './battle';
 import type { SceneTransitionEvent } from './scene';
 import type { ActiveBossStatus } from './status';
-import type { PlayerAreaDamageImpact, PlayerEncounterState } from './player-combat';
+import type {
+  EncounterTurnActionResult,
+  EncounterTurnState,
+  PendingActionPointRequest,
+  PlayerActionKind,
+  PlayerAreaDamageImpact,
+  PlayerCombatActionRequest,
+  PlayerCombatActionResult,
+  PlayerEncounterState,
+  PlayerHudState,
+  PlayerResourceNotice,
+} from './player-combat';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 4;
+export const MULTIPLAYER_PROTOCOL_VERSION = 8;
 export const MAX_MULTIPLAYER_PLAYERS = 10;
 
 export type ConnectionQuality =
@@ -64,6 +75,7 @@ export type HostedSessionState = {
   maxPlayers: number;
   players: MultiplayerPlayer[];
   pendingJoinRequests: MultiplayerJoinRequest[];
+  pendingActionPointRequests: PendingActionPointRequest[];
   error: string | null;
 };
 
@@ -91,6 +103,7 @@ export type PublicBossPresentationState = {
   maxHealth: number;
   currentHealth: number;
   shield: number;
+  initiative: number;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
   turnCount: number;
@@ -188,6 +201,7 @@ export type MultiplayerConnectionErrorCode =
   | 'ACCOUNT_AUTH_REQUIRED'
   | 'PROTOCOL_MISMATCH'
   | 'ROOM_FULL'
+  | 'NAME_IN_USE'
   | 'ROOM_NOT_FOUND';
 
 export type MultiplayerConnectionErrorData = {
@@ -211,7 +225,10 @@ export interface MultiplayerServerToClientEvents {
   'battle:health-effect': (effect: HealthEffect) => void;
   'battle:impact': (impact: PublicCombatImpact) => void;
   'player:state': (state: PlayerEncounterState | null) => void;
+  'players:hud-state': (state: PlayerHudState[]) => void;
+  'encounter:turn-state': (state: EncounterTurnState) => void;
   'player:combat-impact': (impact: PlayerAreaDamageImpact) => void;
+  'player:resource-notice': (notice: PlayerResourceNotice) => void;
   'presentation:background': (background: BackgroundState) => void;
   'presentation:scene': (scene: PublicScenePresentationState) => void;
   'presentation:scene-transition': (transition: SceneTransitionEvent) => void;
@@ -226,9 +243,26 @@ export interface MultiplayerServerToClientEvents {
   'presentation:encounter-sound-library': (urls: string[]) => void;
 }
 
-// Player actions will be added explicitly as interactive features are introduced.
-// Keeping this map empty makes the first client read-only by construction.
-export type MultiplayerClientToServerEvents = Record<never, never>;
+export interface MultiplayerClientToServerEvents {
+  'player:set-private': (
+    privateMode: boolean,
+    acknowledge: (result: { ok: boolean; error?: string }) => void,
+  ) => void;
+  'player:use-action': (
+    action: PlayerActionKind,
+    acknowledge: (result: { ok: boolean; error?: string }) => void,
+  ) => void;
+  'encounter:end-own-turn': (
+    acknowledge: (result: EncounterTurnActionResult) => void,
+  ) => void;
+  'encounter:roll-initiative': (
+    acknowledge: (result: EncounterTurnActionResult) => void,
+  ) => void;
+  'encounter:combat-action': (
+    request: PlayerCombatActionRequest,
+    acknowledge: (result: PlayerCombatActionResult) => void,
+  ) => void;
+}
 
 export type MultiplayerInterServerEvents = Record<never, never>;
 

@@ -4,7 +4,7 @@ import {
   isStatusId,
   normalizeDamageFormula,
   parseDamageFormula,
-  rollDamageFormula,
+  rollDamageFormulaDetailed,
   type ActiveBossStatus,
   type StatusId,
 } from './status.ts';
@@ -16,6 +16,11 @@ import {
   type CustomStatusAffectedTarget,
   type CustomStatusInflictedStatusId,
 } from './custom-status-library.ts';
+import {
+  createBossSkillValues,
+  normalizeBossSkillValues,
+  type BossSkillValues,
+} from './boss-skills.ts';
 
 export type BossState = {
   id: string;
@@ -33,6 +38,7 @@ export type BossState = {
   rangedDefense: number;
   shield: number;
   skills: number;
+  skillValues: BossSkillValues;
   damageReduction: number;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
@@ -87,6 +93,8 @@ export type StatusDamageTick = {
   damage: number;
   from: number;
   to: number;
+  rolls: number[];
+  modifier: number;
 };
 
 export type RandomIntGenerator = (
@@ -106,7 +114,8 @@ export type EncounterSoundEffectKind =
   | ShieldMechanicSoundKind
   | 'damage'
   | 'critical-damage'
-  | 'heal';
+  | 'heal'
+  | 'dice-roll';
 
 export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'damage',
@@ -114,6 +123,7 @@ export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'heal',
   'shield-impact',
   'shield-break',
+  'dice-roll',
 ];
 
 export const isEncounterSoundEffectKind = (
@@ -325,7 +335,7 @@ export type EncounterGeneralSetting =
 
 export type EncounterGeneralSettings = Record<EncounterGeneralSetting, boolean>;
 
-export type EncounterSoundSetting = 'heal' | 'damage' | 'shield';
+export type EncounterSoundSetting = 'heal' | 'damage' | 'shield' | 'dice';
 
 export type EncounterSoundSettings = Record<EncounterSoundSetting, boolean>;
 
@@ -354,6 +364,7 @@ export const initialEncounterEffectsState: EncounterEffectsState = {
     heal: true,
     damage: true,
     shield: true,
+    dice: true,
   },
   visuals: {
     screenShake: true,
@@ -371,6 +382,7 @@ export const getEncounterSoundSetting = (
   kind: EncounterSoundEffectKind,
 ): EncounterSoundSetting => {
   if (kind === 'heal') return 'heal';
+  if (kind === 'dice-roll') return 'dice';
   if (kind === 'shield-impact' || kind === 'shield-break') return 'shield';
   return 'damage';
 };
@@ -449,12 +461,14 @@ export type BattleCommand =
       bossId: string;
       bossName: string;
       maxHealth: number;
+      currentHealth?: number;
       attack: number;
       rangedAttack: number;
       defense: number;
       rangedDefense?: number;
       shield: number;
       skills: number;
+      skillValues?: BossSkillValues;
       damageReduction: number;
       controlAmount?: string;
       applyDamageReduction?: boolean;
@@ -509,6 +523,7 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   rangedDefense: 10,
   shield: 0,
   skills: 10,
+  skillValues: createBossSkillValues(10),
   damageReduction: 10,
   nextAction: '',
   actionSeverity: 'normal',
@@ -546,6 +561,16 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
         ) &&
         (command.rangedDefense === undefined ||
           (typeof command.rangedDefense === 'number' && Number.isFinite(command.rangedDefense))) &&
+        (command.currentHealth === undefined ||
+          (typeof command.currentHealth === 'number' && Number.isFinite(command.currentHealth))) &&
+        (command.skillValues === undefined ||
+          (
+            typeof command.skillValues === 'object' &&
+            command.skillValues !== null &&
+            Object.values(command.skillValues).every(
+              (skill) => typeof skill === 'number' && Number.isFinite(skill),
+            )
+          )) &&
         (command.controlAmount === undefined ||
           typeof command.controlAmount === 'string') &&
         (command.applyDamageReduction === undefined ||
@@ -662,27 +687,36 @@ export const applyBattleCommand = (
       return updateBoss(state, command.bossId, (boss) => {
         const maxHealth = clampInteger(command.maxHealth, 1, 1_000_000);
         const wasAtFullHealth = boss.currentHealth === boss.maxHealth;
+        const currentHealth = command.currentHealth === undefined
+          ? wasAtFullHealth
+            ? maxHealth
+            : Math.min(boss.currentHealth, maxHealth)
+          : clampInteger(command.currentHealth, 0, maxHealth);
         return {
           ...boss,
           setupStatus: 'ready',
           identityPrepared: true,
           bossName: command.bossName.trim().slice(0, 100) || 'Chefão Sem Nome',
-          controlAmount:
-            command.controlAmount && /^[0-9.,/]{1,24}$/.test(command.controlAmount)
-              ? command.controlAmount
-              : boss.controlAmount,
+          controlAmount: command.controlAmount && (
+            /^[0-9.,/]{1,24}$/.test(command.controlAmount.trim()) ||
+            normalizeDamageFormula(command.controlAmount) !== null
+          )
+            ? command.controlAmount
+            : boss.controlAmount,
           applyDamageReduction:
             command.applyDamageReduction ?? boss.applyDamageReduction,
           maxHealth,
-          currentHealth: wasAtFullHealth
-            ? maxHealth
-            : Math.min(boss.currentHealth, maxHealth),
+          currentHealth,
           attack: clampInteger(command.attack, -999, 999),
           rangedAttack: clampInteger(command.rangedAttack, -999, 999),
           defense: clampInteger(command.defense, 0, 999),
           rangedDefense: clampInteger(command.rangedDefense ?? command.defense, 0, 999),
           shield: clampInteger(command.shield, 0, 999),
           skills: clampInteger(command.skills, -999, 999),
+          skillValues: normalizeBossSkillValues(
+            command.skillValues ?? boss.skillValues,
+            clampInteger(command.skills, -999, 999),
+          ),
           damageReduction: clampInteger(command.damageReduction, 0, 999),
         };
       });
@@ -857,7 +891,8 @@ export const advanceBossTurn = (
         : null;
 
       if (definition && parsedFormula) {
-        const damage = rollDamageFormula(parsedFormula, randomInt);
+        const rolledDamage = rollDamageFormulaDetailed(parsedFormula, randomInt);
+        const damage = rolledDamage.total;
         const from = currentHealth;
         currentHealth = Math.max(0, currentHealth - damage);
         if (damage > 0 && from > currentHealth) {
@@ -868,6 +903,8 @@ export const advanceBossTurn = (
             damage: from - currentHealth,
             from,
             to: currentHealth,
+            rolls: rolledDamage.rolls,
+            modifier: rolledDamage.modifier,
           });
         }
       }

@@ -1,4 +1,8 @@
 import type { BossState } from './battle';
+import {
+  normalizeBossSkillValues,
+  type BossSkillValues,
+} from './boss-skills.ts';
 
 export const MAX_SCENE_PHASES = 8;
 export const MAX_SCENE_BOSSES = 3;
@@ -59,6 +63,7 @@ export type SceneBossPatch = {
   rangedDefense?: number;
   damageReduction?: number;
   shield?: number;
+  skillValues?: BossSkillValues;
 };
 
 export type SceneBossDirective = {
@@ -318,7 +323,10 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
     normalized.actionSeverity = patch.actionSeverity === 'grave' ? 'grave' : 'normal';
   }
   const numericRanges: Array<[
-    Exclude<keyof SceneBossPatch, 'bossName' | 'nextAction' | 'actionSeverity'>,
+    Exclude<
+      keyof SceneBossPatch,
+      'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues'
+    >,
     number,
     number,
   ]> = [
@@ -337,6 +345,12 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
     if (typeof value === 'number' && Number.isFinite(value)) {
       normalized[key] = clampInteger(value, minimum, maximum);
     }
+  }
+  if (patch.skillValues && typeof patch.skillValues === 'object') {
+    normalized.skillValues = normalizeBossSkillValues(
+      patch.skillValues,
+      normalized.skills ?? 10,
+    );
   }
   return normalized;
 };
@@ -367,5 +381,6 @@ export const applySceneBossPatch = (
     rangedDefense: normalized.rangedDefense ?? boss.rangedDefense,
     damageReduction: normalized.damageReduction ?? boss.damageReduction,
     shield: normalized.shield ?? boss.shield,
+    skillValues: normalized.skillValues ?? boss.skillValues,
   };
 };

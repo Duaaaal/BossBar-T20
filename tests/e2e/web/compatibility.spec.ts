@@ -18,7 +18,7 @@ test('revela a cena atual sem aguardar mídias futuras e continua o preload', as
     await page.goto(session.inviteUrl);
     await page.locator('#web-player-name').fill('Jogador Compatível');
     await page.locator('#web-player-password').fill('test-password');
-    await page.getByRole('button', { name: 'Entrar' }).click();
+    await page.getByRole('button', { name: 'Criar acesso' }).click();
     await expect(page.getByRole('dialog', { name: 'Confirmar usuário' })).toBeVisible();
     await expect(page.locator('#web-player-confirmed-name')).toHaveText('Jogador Compatível');
     await page.locator('#web-player-password-confirm').fill('test-password');

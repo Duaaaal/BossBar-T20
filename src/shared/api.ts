@@ -36,6 +36,7 @@ import type {
 import type {
   HostedPlayerPasswordResetResult,
   NotesSaveResult,
+  PlayerProfileDeleteResult,
   PlayerProfileSummary,
 } from './character-sheet';
 import type {
@@ -49,7 +50,22 @@ import type {
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './multiplayer';
-import type { AreaDamageRequest, AreaDamageResult } from './player-combat';
+import type {
+  AreaDamageRequest,
+  AreaDamageResult,
+  DirectPlayerDamageRequest,
+  EncounterFormulaRollRequest,
+  EncounterFormulaRollResult,
+  EncounterTurnActionResult,
+  EncounterTurnState,
+  PlayerActionKind,
+  PlayerCombatActionRequest,
+  PlayerCombatActionResult,
+  PlayerHudState,
+  PlayerResourceNotice,
+  PlayerStatusRequest,
+  PlayerTargetActionResult,
+} from './player-combat';
 import type {
   SceneMediaSelectionResult,
   SceneMediaSlot,
@@ -74,6 +90,41 @@ export type BossAPI = {
     request: HealthSequenceRequest,
   ) => Promise<HealthSequenceResult>;
   applyAreaDamage: (request: AreaDamageRequest) => Promise<AreaDamageResult>;
+  applyDirectPlayerDamage: (
+    request: DirectPlayerDamageRequest,
+  ) => Promise<PlayerTargetActionResult>;
+  applyPlayerStatus: (
+    request: PlayerStatusRequest,
+  ) => Promise<PlayerTargetActionResult>;
+  getPlayerHuds: () => Promise<PlayerHudState[]>;
+  getEncounterTurnState: () => Promise<EncounterTurnState>;
+  advanceEncounterTurn: (
+    expectedParticipantId?: string | null,
+  ) => Promise<EncounterTurnActionResult>;
+  rollEncounterInitiative: (
+    participantId?: string | null,
+  ) => Promise<EncounterTurnActionResult>;
+  rollEncounterFormula: (
+    request: EncounterFormulaRollRequest,
+  ) => Promise<EncounterFormulaRollResult>;
+  requestPlayerCombatAction: (
+    request: PlayerCombatActionRequest,
+  ) => Promise<PlayerCombatActionResult>;
+  approveActionPointRequest: (
+    requestId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  rejectActionPointRequest: (
+    requestId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  grantHostedHeroPoint: (
+    playerId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  setCharacterPrivate: (
+    privateMode: boolean,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  usePlayerAction: (
+    action: PlayerActionKind,
+  ) => Promise<{ ok: boolean; error?: string }>;
   openPresentation: () => Promise<boolean>;
   isPresentationOpen: () => Promise<boolean>;
   setControlPanelMinimized: (minimized: boolean) => Promise<boolean>;
@@ -131,12 +182,18 @@ export type BossAPI = {
     playerId: string,
     password: string,
   ) => Promise<HostedPlayerPasswordResetResult>;
+  deleteHostedPlayerAccount: (
+    playerId: string,
+  ) => Promise<PlayerProfileDeleteResult>;
   getPlayerProfiles: () => Promise<PlayerProfileSummary[]>;
   openPlayerProfileSheet: (profileId: string) => Promise<boolean>;
   resetPlayerProfilePassword: (
     profileId: string,
     password: string,
   ) => Promise<HostedPlayerPasswordResetResult>;
+  deletePlayerProfile: (
+    profileId: string,
+  ) => Promise<PlayerProfileDeleteResult>;
   getMasterNotes: () => Promise<string>;
   saveMasterNotes: (content: string) => Promise<NotesSaveResult>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;
@@ -227,6 +284,15 @@ export type BossAPI = {
   subscribeBossLibraryChanged: (callback: () => void) => () => void;
   subscribeHostedSession: (
     callback: (state: HostedSessionState) => void,
+  ) => () => void;
+  subscribePlayerHuds: (
+    callback: (state: PlayerHudState[]) => void,
+  ) => () => void;
+  subscribePlayerResourceNotice: (
+    callback: (notice: PlayerResourceNotice) => void,
+  ) => () => void;
+  subscribeEncounterTurn: (
+    callback: (state: EncounterTurnState) => void,
   ) => () => void;
   subscribeHostedSessionStartupProgress: (
     callback: (progress: HostedSessionStartupProgress) => void,

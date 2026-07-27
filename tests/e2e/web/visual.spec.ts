@@ -11,7 +11,10 @@ test('mantém o visual da espera e do HUD', async ({ page }, testInfo) => {
   try {
     await joinHostedSession(page, session.inviteUrl, 'Jogador Visual');
     await page.addStyleTag({
-      content: '*, *::before, *::after { animation: none !important; transition: none !important; }',
+      content: [
+        '*, *::before, *::after { animation: none !important; transition: none !important; }',
+        '.encounter-roll-results { visibility: hidden !important; }',
+      ].join('\n'),
     });
     await expect(page.getByText('Aguardando todos os jogadores estarem prontos')).toBeVisible();
     await page.locator('#web-player-status').evaluate((status) => {

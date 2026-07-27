@@ -81,6 +81,7 @@ import type {
 import type {
   HostedPlayerPasswordResetResult,
   NotesSaveResult,
+  PlayerProfileDeleteResult,
 } from './shared/character-sheet';
 import {
   isCustomStatusPresetId,
@@ -103,13 +104,35 @@ import type {
   MultiplayerPresence,
 } from './shared/multiplayer';
 import {
+  advanceEncounterTurns,
+  beginEncounterTurns,
+  emptyEncounterTurnState,
   isAreaDamageRequest,
+  isDirectPlayerDamageRequest,
+  normalizeEncounterFormulaRequest,
+  prepareManualInitiative,
+  rollInitiativeOrder,
+  rollManualInitiative,
   type AreaDamageResult,
+  type DirectPlayerDamageRequest,
+  type EncounterFormulaRollResult,
+  type EncounterRollResult,
+  type EncounterTurnActionResult,
+  type EncounterTurnState,
+  type PlayerCombatActionResult,
+  type PlayerHudState,
+  type PlayerStatusRequest,
+  type PlayerTargetActionResult,
 } from './shared/player-combat';
 import {
   normalizeActiveStatuses,
+  parseDamageFormula,
+  rollDamageFormulaDetailed,
   type ActiveBossStatus,
 } from './shared/status';
+import {
+  normalizeBossSkillValues,
+} from './shared/boss-skills';
 import {
   deriveStatusAttributes,
   reconcileStatusIncompatibilities,
@@ -220,6 +243,8 @@ let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
 let hostedSessionServer: MultiplayerSessionServer | null = null;
 let hostedSessionPresence: MultiplayerPresence | null = null;
+let playerHudState: PlayerHudState[] = [];
+let encounterTurnState: EncounterTurnState = emptyEncounterTurnState();
 let hostedPublicBaseUrl: string | null = null;
 let hostedPublicInviteUrl: string | null = null;
 let hostedQuickTunnel: QuickTunnelHandle | null = null;
@@ -344,6 +369,15 @@ const defaultEncounterSoundDefinitions: Array<{
     kind: 'shield-break',
     directory: 'Mecanica_Escudo',
     sounds: [{ fileName: 'escudo_quebrando.mp3', label: 'Escudo quebrando' }],
+  },
+  {
+    kind: 'dice-roll',
+    directory: 'Mecanica_Rolagem_Dados',
+    sounds: [
+      { fileName: 'dice_1.mp3', label: 'Rolagem de dados 1' },
+      { fileName: 'dice_2.mp3', label: 'Rolagem de dados 2' },
+      { fileName: 'dice_3.mp3', label: 'Rolagem de dados 3' },
+    ],
   },
 ];
 const defaultEncounterSoundEnabled = new Map<string, boolean>();
@@ -746,6 +780,20 @@ const findPersonalSfxFile = async (relativePath: string) => {
   return null;
 };
 
+const findEncounterSfxFile = async (relativePath: string) => {
+  const bundledCandidate = path.join(
+    bundledAssetsDirectory(),
+    'SFX',
+    relativePath,
+  );
+  try {
+    if ((await stat(bundledCandidate)).isFile()) return bundledCandidate;
+  } catch {
+    // O instalador pode não conter esta categoria em versões antigas.
+  }
+  return findPersonalSfxFile(relativePath);
+};
+
 const loadEncounterMechanicSounds = async () => {
   let storedDefaultEnabled: Record<string, unknown> = {};
   let storedCustomSounds: unknown[] = [];
@@ -775,7 +823,7 @@ const loadEncounterMechanicSounds = async () => {
           ? storedDefaultEnabled[id]
           : true;
         defaultEncounterSoundEnabled.set(id, enabled);
-        const filePath = await findPersonalSfxFile(path.join(directory, fileName));
+        const filePath = await findEncounterSfxFile(path.join(directory, fileName));
         return filePath
           ? { id, kind, name: label, isDefault: true, enabled, filePath }
           : null;
@@ -953,6 +1001,7 @@ const getHostedSessionState = (): HostedSessionState => {
       maxPlayers: 10,
       players: [],
       pendingJoinRequests: [],
+      pendingActionPointRequests: [],
       error: null,
     };
   }
@@ -971,6 +1020,7 @@ const getHostedSessionState = (): HostedSessionState => {
     maxPlayers: presence.maxPlayers,
     players: presence.players.map((player) => ({ ...player })),
     pendingJoinRequests: server.getPendingJoinRequests(),
+    pendingActionPointRequests: server.getPendingActionPointRequests(),
     error: hostedSessionError,
   };
 };
@@ -981,6 +1031,28 @@ const broadcastHostedSessionState = () => {
       'multiplayer:session-changed',
       getHostedSessionState(),
     );
+  }
+};
+
+const broadcastPlayerHuds = () => {
+  for (const window of [playerWindow, controlWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(
+        'multiplayer:player-huds-changed',
+        playerHudState,
+      );
+    }
+  }
+};
+
+const broadcastEncounterTurnState = () => {
+  for (const window of [playerWindow, controlWindow, masterWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(
+        'multiplayer:turn-changed',
+        encounterTurnState,
+      );
+    }
   }
 };
 
@@ -1043,6 +1115,67 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
         broadcastHostedSessionState();
       },
       onJoinRequestsChanged: () => broadcastHostedSessionState(),
+      onActionPointRequestsChanged: () => broadcastHostedSessionState(),
+      onPlayerHudsChanged: (huds) => {
+        playerHudState = huds;
+        broadcastPlayerHuds();
+      },
+      onTurnStateChanged: (turnState) => {
+        encounterTurnState = turnState;
+        broadcastEncounterTurnState();
+      },
+      onTurnStarted: (participant) => {
+        if (participant.kind === 'boss') {
+          beginBossStatusTurn(participant.sourceId);
+        }
+      },
+      onDiceRolled: () => publishDiceRollSound(),
+      getBossDefense: (bossId, attackType) => {
+        const boss = battleState.bosses.find(
+          (candidate) => candidate.id === bossId,
+        );
+        if (!boss || boss.currentHealth <= 0) return null;
+        const effective = deriveStatusAttributes(
+          {
+            attack: boss.attack,
+            rangedAttack: boss.rangedAttack,
+            skills: boss.skills,
+            meleeDefense: boss.defense,
+            rangedDefense: boss.rangedDefense,
+            damageReduction: boss.damageReduction,
+            shield: boss.shield,
+          },
+          boss.activeStatuses,
+          encounterEffectsAudioState.general.automaticStatusEffects,
+        );
+        return attackType === 'melee'
+          ? effective.values.meleeDefense
+          : effective.values.rangedDefense;
+      },
+      applyBossDamage: (bossId, damage) => {
+        const before = battleState.bosses.find(
+          (candidate) => candidate.id === bossId,
+        );
+        if (!before) {
+          return {
+            ok: false,
+            appliedDamage: 0,
+            error: 'Chefão não encontrado.',
+          };
+        }
+        rememberAppChange();
+        applyHealthMutation('damage', bossId, Math.max(1, Math.ceil(damage)));
+        const after = battleState.bosses.find(
+          (candidate) => candidate.id === bossId,
+        );
+        return {
+          ok: true,
+          appliedDamage: Math.max(
+            0,
+            before.currentHealth - (after?.currentHealth ?? before.currentHealth),
+          ),
+        };
+      },
     });
     startingServer = server;
     reportHostedSessionStartupProgress(72, 'Criando o túnel HTTPS temporário...');
@@ -1104,6 +1237,10 @@ const stopHostedSession = async (
   hostedPublicInviteUrl = null;
   hostedQuickTunnel = null;
   hostedSessionError = null;
+  playerHudState = [];
+  encounterTurnState = emptyEncounterTurnState();
+  broadcastPlayerHuds();
+  broadcastEncounterTurnState();
   broadcastHostedSessionState();
   hostedSessionStopPromise = (async () => {
     try {
@@ -1196,6 +1333,9 @@ const loadEncounterEffectsSettings = async () => {
         shield: typeof sounds.shield === 'boolean'
           ? sounds.shield
           : initialEncounterEffectsState.sounds.shield,
+        dice: typeof sounds.dice === 'boolean'
+          ? sounds.dice
+          : initialEncounterEffectsState.sounds.dice,
       },
       visuals: {
         screenShake: typeof visuals.screenShake === 'boolean'
@@ -1426,6 +1566,7 @@ const normalizeStoredLibraryBoss = (
       : value.defense,
     shield: value.shield ?? 0,
     skills: value.skills,
+    skillValues: normalizeBossSkillValues(value.skillValues, value.skills),
     damageReduction: value.damageReduction,
     description: value.description,
     actionSeverity: value.actionSeverity,
@@ -1867,6 +2008,10 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       rangedDefense: clampInteger(rawBoss.rangedDefense as number, 0, 999),
       shield: clampInteger(rawBoss.shield as number, 0, 999),
       skills: clampInteger(rawBoss.skills as number, -999, 999),
+      skillValues: normalizeBossSkillValues(
+        rawBoss.skillValues,
+        clampInteger(rawBoss.skills as number, -999, 999),
+      ),
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
       description: rawBoss.description.trim().slice(0, 100),
       actionSeverity: rawBoss.actionSeverity,
@@ -1908,6 +2053,7 @@ const captureLibraryEntry = (
     rangedDefense: boss.rangedDefense,
     shield: boss.shield,
     skills: boss.skills,
+    skillValues: boss.skillValues,
     damageReduction: boss.damageReduction,
     description: boss.description,
     actionSeverity: boss.actionSeverity,
@@ -1936,6 +2082,7 @@ const captureLibraryEntry = (
         rangedDefense: boss.rangedDefense,
         shield: boss.shield,
         skills: boss.skills,
+        skillValues: boss.skillValues,
         damageReduction: boss.damageReduction,
         description: boss.nextAction,
         actionSeverity: boss.actionSeverity,
@@ -2292,8 +2439,7 @@ const sendEncounterEffect = (
   if (url) server.publishEncounterEffect({ ...effect, url });
 };
 
-const prepareEncounterMechanicSound = (effect: HealthEffect) => {
-  const soundKind = getEncounterSoundEffectKind(effect);
+const prepareEncounterSound = (soundKind: EncounterSoundEffectKind | null) => {
   if (
     !soundKind ||
     ((!playerWindow || playerWindow.isDestroyed()) && !hostedSessionServer) ||
@@ -2326,6 +2472,15 @@ const prepareEncounterMechanicSound = (effect: HealthEffect) => {
     url: `boss-media://encounter-sfx/${encounterEffectSequence}`,
   };
   return { encounterEffect, optionId: selectedSound.id };
+};
+
+const prepareEncounterMechanicSound = (effect: HealthEffect) =>
+  prepareEncounterSound(getEncounterSoundEffectKind(effect));
+
+const publishDiceRollSound = () => {
+  const prepared = prepareEncounterSound('dice-roll');
+  if (!prepared) return;
+  sendEncounterEffect(prepared.encounterEffect);
 };
 
 const stopSoundboardPlayback = (index?: number) => {
@@ -3271,6 +3426,162 @@ const createLauncherWindow = () => {
   return window;
 };
 
+const localInitiativeResult = (
+  participant: EncounterTurnState['participants'][number],
+): EncounterRollResult => ({
+  id: `initiative:${participant.id}:${randomUUID()}`,
+  participantId: participant.id,
+  label: 'Iniciativa',
+  expression: `1d20 ${participant.initiativeModifier >= 0 ? '+' : '-'} ${Math.abs(participant.initiativeModifier)}`,
+  rolls: [participant.initiativeRoll],
+  modifier: participant.initiativeModifier,
+  total: participant.initiativeTotal,
+  outcome: 'neutral',
+  category: 'initiative',
+  createdAt: Date.now(),
+  retainedByParticipantId: null,
+});
+
+const syncLocalEncounterTurns = () => {
+  if (hostedSessionServer) return;
+  if (!battleState.battleStarted) {
+    if (
+      encounterTurnState.participants.length === 0 &&
+      !encounterTurnState.started &&
+      encounterTurnState.round === 0 &&
+      encounterTurnState.activeParticipantId === null
+    ) {
+      return;
+    }
+    encounterTurnState = emptyEncounterTurnState();
+    broadcastEncounterTurnState();
+    return;
+  }
+  const actors = battleState.bosses
+    .filter((boss) => boss.setupStatus === 'ready' && boss.currentHealth > 0)
+    .map((boss) => ({
+      id: `boss:${boss.id}`,
+      kind: 'boss' as const,
+      sourceId: boss.id,
+      name: boss.bossName,
+      initiativeModifier: boss.skillValues?.iniciativa ?? boss.skills,
+      eligibleRound: encounterTurnState.started
+        ? encounterTurnState.round + 1
+        : 1,
+    }));
+  const existingById = new Map(
+    encounterTurnState.participants.map((participant) => [
+      participant.id,
+      participant,
+    ]),
+  );
+  let rolledInitiative = false;
+  const participants = !encounterTurnState.started
+    ? prepareManualInitiative(actors, encounterTurnState.participants)
+    : actors.map((actor) => {
+      const existing = existingById.get(actor.id);
+      return existing
+        ? {
+          ...existing,
+          name: actor.name,
+          initiativeModifier: actor.initiativeModifier,
+          initiativeTotal: existing.initiativeRoll + actor.initiativeModifier,
+        }
+        : (() => {
+          rolledInitiative = true;
+          return rollInitiativeOrder([actor], () => randomInt(1, 21))[0];
+        })();
+    }).sort((left, right) =>
+      right.initiativeTotal - left.initiativeTotal ||
+      right.initiativeModifier - left.initiativeModifier ||
+      left.id.localeCompare(right.id)
+    );
+  const nextActiveParticipantId = participants.some(
+    ({ id }) => id === encounterTurnState.activeParticipantId,
+  )
+    ? encounterTurnState.activeParticipantId
+    : encounterTurnState.started
+      ? participants.find(
+        ({ eligibleRound }) => eligibleRound <= encounterTurnState.round,
+      )?.id ?? participants[0]?.id ?? null
+      : null;
+  const participantsUnchanged =
+    participants.length === encounterTurnState.participants.length &&
+    participants.every((participant, index) => {
+      const current = encounterTurnState.participants[index];
+      return current &&
+        participant.id === current.id &&
+        participant.kind === current.kind &&
+        participant.sourceId === current.sourceId &&
+        participant.name === current.name &&
+        participant.initiativeModifier === current.initiativeModifier &&
+        participant.initiativeRoll === current.initiativeRoll &&
+        participant.initiativeTotal === current.initiativeTotal &&
+        participant.eligibleRound === current.eligibleRound;
+    });
+  if (
+    participantsUnchanged &&
+    nextActiveParticipantId === encounterTurnState.activeParticipantId
+  ) {
+    return;
+  }
+  encounterTurnState = {
+    ...encounterTurnState,
+    participants,
+    activeParticipantId: nextActiveParticipantId,
+    initiativeReady: encounterTurnState.started
+      ? encounterTurnState.initiativeReady
+      : participants.length > 0 &&
+        participants.every(({ initiativeRolled }) => initiativeRolled !== false),
+    rollResults: encounterTurnState.rollResults,
+    revision: encounterTurnState.revision + 1,
+  };
+  broadcastEncounterTurnState();
+  if (rolledInitiative && participants.length > 0) {
+    publishDiceRollSound();
+  }
+};
+
+const rollLocalEncounterInitiative = (
+  participantId: string,
+  allowedKinds: ReadonlySet<'boss' | 'npc'>,
+): EncounterTurnActionResult => {
+  const participant = encounterTurnState.participants.find(
+    ({ id }) => id === participantId,
+  );
+  if (!participant || !allowedKinds.has(participant.kind as 'boss' | 'npc')) {
+    return { ok: false, error: 'Este participante não pode ser rolado por aqui.' };
+  }
+  const rolled = rollManualInitiative(
+    encounterTurnState,
+    participantId,
+    () => randomInt(1, 21),
+  );
+  if (!rolled) {
+    return { ok: false, error: 'Esta iniciativa já foi rolada ou não está disponível.' };
+  }
+  encounterTurnState = {
+    ...rolled.state,
+    rollResults: [
+      ...(encounterTurnState.rollResults ?? []).filter(
+        (candidate) =>
+          candidate.category !== 'initiative' ||
+          candidate.participantId !== participantId,
+      ),
+      localInitiativeResult(rolled.participant),
+    ],
+  };
+  publishDiceRollSound();
+  broadcastEncounterTurnState();
+  return {
+    ok: true,
+    state: encounterTurnState,
+    ...(rolled.tiedParticipantIds.length > 0
+      ? { error: 'Houve empate. Os participantes empatados devem rolar novamente.' }
+      : {}),
+  };
+};
+
 const broadcastBattleState = (
   publishHosted = true,
   includePlayer = true,
@@ -3293,6 +3604,7 @@ const broadcastBattleState = (
   if (publishHosted) {
     hostedSessionServer?.publishBattleState(toPublicBattleState(battleState));
   }
+  if (!hostedSessionServer) syncLocalEncounterTurns();
 };
 
 const isPresentationOpen = () =>
@@ -4218,6 +4530,152 @@ ipcMain.handle('battle:get-state', (event) => {
   assertAuthorizedIpcSender(isBattleStateReader(event.sender.id));
   return battleState;
 });
+ipcMain.handle('multiplayer:get-player-huds', (event) => {
+  assertAuthorizedIpcSender(
+    isPlayerSender(event.sender.id) || isControlSender(event.sender.id),
+  );
+  return playerHudState;
+});
+ipcMain.handle('multiplayer:get-turn-state', (event) => {
+  assertAuthorizedIpcSender(
+    isPlayerSender(event.sender.id) ||
+      isControlSender(event.sender.id) ||
+      isMasterSender(event.sender.id),
+  );
+  return encounterTurnState;
+});
+ipcMain.handle(
+  'multiplayer:advance-turn',
+  (
+    event,
+    expectedParticipantId: unknown,
+  ): EncounterTurnActionResult => {
+    if (!isControlSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const expected = typeof expectedParticipantId === 'string'
+      ? expectedParticipantId
+      : null;
+    if (hostedSessionServer) {
+      return hostedSessionServer.advanceTurnAsHost(expected);
+    }
+    if (!battleState.battleStarted) {
+      return { ok: false, error: 'Inicie a batalha primeiro.' };
+    }
+    if (
+      expected &&
+      encounterTurnState.activeParticipantId &&
+      expected !== encounterTurnState.activeParticipantId
+    ) {
+      return { ok: false, error: 'O turno ativo mudou. Tente novamente.' };
+    }
+    if (
+      !encounterTurnState.started &&
+      encounterTurnState.initiativeReady === false
+    ) {
+      return {
+        ok: false,
+        error: 'Aguarde todos os testes de Iniciativa terminarem.',
+      };
+    }
+    const previousActive = encounterTurnState.activeParticipantId;
+    const nextTurnState = encounterTurnState.started
+      ? advanceEncounterTurns(encounterTurnState)
+      : beginEncounterTurns(encounterTurnState);
+    if (nextTurnState === encounterTurnState) {
+      return { ok: false, error: 'Nenhum participante pode iniciar o turno.' };
+    }
+    encounterTurnState = nextTurnState;
+    broadcastEncounterTurnState();
+    const active = encounterTurnState.participants.find(
+      ({ id }) => id === encounterTurnState.activeParticipantId,
+    );
+    if (
+      active &&
+      active.id !== previousActive &&
+      active.kind === 'boss'
+    ) {
+      beginBossStatusTurn(active.sourceId);
+    }
+    return { ok: true, state: encounterTurnState };
+  },
+);
+ipcMain.handle(
+  'multiplayer:roll-initiative',
+  (
+    event,
+    participantId: unknown,
+  ): EncounterTurnActionResult => {
+    if (typeof participantId !== 'string' || participantId.length > 160) {
+      return { ok: false, error: 'Participante inválido.' };
+    }
+    if (isControlSender(event.sender.id)) {
+      return hostedSessionServer
+        ? hostedSessionServer.rollInitiativeAsHost(participantId)
+        : rollLocalEncounterInitiative(
+          participantId,
+          new Set(['boss', 'npc']),
+        );
+    }
+    if (isPlayerSender(event.sender.id)) {
+      return hostedSessionServer
+        ? hostedSessionServer.rollInitiativeAsHost(participantId)
+        : rollLocalEncounterInitiative(participantId, new Set(['npc']));
+    }
+    return { ok: false, error: 'Ação não autorizada.' };
+  },
+);
+ipcMain.handle(
+  'multiplayer:roll-formula',
+  (
+    event,
+    requested: unknown,
+  ): EncounterFormulaRollResult => {
+    if (!isControlSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const request = normalizeEncounterFormulaRequest(requested);
+    if (!request) return { ok: false, error: 'Informe uma fórmula de dados válida.' };
+    const participant = encounterTurnState.participants.find(
+      ({ id, kind }) =>
+        id === request.participantId && (kind === 'boss' || kind === 'npc'),
+    );
+    if (!participant) {
+      return { ok: false, error: 'O participante não está no encontro.' };
+    }
+    const parsed = parseDamageFormula(request.formula);
+    if (!parsed) return { ok: false, error: 'A fórmula de dados é inválida.' };
+    const rolled = rollDamageFormulaDetailed(
+      parsed,
+      (minimum, maximumExclusive) => randomInt(minimum, maximumExclusive),
+    );
+    const result: EncounterRollResult = {
+      id: `formula:${participant.id}:${randomUUID()}`,
+      participantId: participant.id,
+      label: request.label,
+      expression: request.formula,
+      rolls: rolled.rolls,
+      modifier: rolled.modifier,
+      total: rolled.total,
+      outcome: 'neutral',
+      category: request.category,
+      createdAt: Date.now(),
+      retainedByParticipantId: encounterTurnState.activeParticipantId,
+    };
+    if (hostedSessionServer) {
+      hostedSessionServer.publishRollResult(result);
+    } else {
+      encounterTurnState = {
+        ...encounterTurnState,
+        rollResults: [...(encounterTurnState.rollResults ?? []), result],
+        revision: encounterTurnState.revision + 1,
+      };
+      broadcastEncounterTurnState();
+    }
+    publishDiceRollSound();
+    return { ok: true, total: rolled.total };
+  },
+);
 ipcMain.handle('app:get-version', (event) => {
   assertAuthorizedIpcSender(isMasterSender(event.sender.id));
   return app.getVersion();
@@ -4977,6 +5435,45 @@ ipcMain.handle('multiplayer:approve-player', (event, requestId: unknown) => {
   return hostedSessionServer?.approveJoinRequest(requestId) ?? false;
 });
 
+ipcMain.handle(
+  'multiplayer:approve-action-point',
+  (event, requestId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof requestId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.approveActionPointRequest(requestId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:reject-action-point',
+  (event, requestId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof requestId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.rejectActionPointRequest(requestId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:grant-hero-point',
+  (event, playerId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof playerId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.grantHeroPoint(playerId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
 ipcMain.handle('multiplayer:reject-player', (event, requestId: unknown) => {
   if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(requestId)) {
     return false;
@@ -5080,6 +5577,32 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle(
+  'multiplayer:delete-player-account',
+  async (
+    event,
+    playerId: unknown,
+  ): Promise<PlayerProfileDeleteResult> => {
+    if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(playerId)) {
+      return { ok: false, error: 'Ação inválida.' };
+    }
+    if (!hostedSessionServer) {
+      return { ok: false, error: 'Nenhuma sala está hospedada.' };
+    }
+    try {
+      await hostedSessionServer.deletePlayerProfile(playerId);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Não foi possível excluir o usuário.',
+      };
+    }
+  },
+);
+
 ipcMain.handle('multiplayer:get-player-profiles', async (event) => {
   assertAuthorizedIpcSender(isMasterSender(event.sender.id));
   return (await getPlayerProfileStore()).listProfiles();
@@ -5117,6 +5640,33 @@ ipcMain.handle(
       return {
         ok: false,
         error: error instanceof Error ? error.message : 'Não foi possível redefinir a senha.',
+      };
+    }
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:delete-profile',
+  async (
+    event,
+    profileId: unknown,
+  ): Promise<PlayerProfileDeleteResult> => {
+    if (!isMasterSender(event.sender.id) || !isValidJoinRequestId(profileId)) {
+      return { ok: false, error: 'Ação inválida.' };
+    }
+    try {
+      if (hostedSessionServer) {
+        await hostedSessionServer.deleteProfile(profileId);
+      } else {
+        await (await getPlayerProfileStore()).deleteProfile(profileId);
+      }
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Não foi possível excluir o usuário.',
       };
     }
   },
@@ -5314,6 +5864,10 @@ const restoreLibraryEntry = (
       rangedDefense: clampInteger(storedBoss.rangedDefense, 0, 999),
       shield: clampInteger(storedBoss.shield ?? 0, 0, 999),
       skills: clampInteger(storedBoss.skills, -999, 999),
+      skillValues: normalizeBossSkillValues(
+        storedBoss.skillValues,
+        clampInteger(storedBoss.skills, -999, 999),
+      ),
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
       nextAction: storedBoss.description.trim().slice(0, 100),
       actionSeverity: storedBoss.actionSeverity,
@@ -5435,6 +5989,10 @@ const restoreLibraryEntry = (
         rangedDefense: clampInteger(template.rangedDefense, 0, 999),
         shield: clampInteger(template.shield, 0, 999),
         skills: clampInteger(template.skills, -999, 999),
+        skillValues: normalizeBossSkillValues(
+          template.skillValues,
+          clampInteger(template.skills, -999, 999),
+        ),
         damageReduction: clampInteger(template.damageReduction, 0, 999),
         nextAction: template.description,
         actionSeverity: template.actionSeverity,
@@ -6012,6 +6570,7 @@ const encounterSoundSettings = new Set<EncounterSoundSetting>([
   'heal',
   'damage',
   'shield',
+  'dice',
 ]);
 const encounterGeneralSettings = new Set<EncounterGeneralSetting>([
   'automaticStatusEffects',
@@ -6711,6 +7270,184 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle(
+  'player-combat:direct-damage',
+  (
+    event,
+    request: DirectPlayerDamageRequest,
+  ): PlayerTargetActionResult => {
+    if (!isEncounterControllerSender(event.sender.id)) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Ação não autorizada.',
+      };
+    }
+    if (!isDirectPlayerDamageRequest(request) || !hostedSessionServer) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: hostedSessionServer
+          ? 'Dano direcionado inválido.'
+          : 'Não há uma sessão multiplayer hospedada.',
+      };
+    }
+    return hostedSessionServer.applyDirectPlayerDamage(request);
+  },
+);
+
+ipcMain.handle(
+  'player-combat:apply-status',
+  (
+    event,
+    request: PlayerStatusRequest,
+  ): PlayerTargetActionResult => {
+    if (!isEncounterControllerSender(event.sender.id)) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Ação não autorizada.',
+      };
+    }
+    const status = normalizeActiveStatuses([request?.status])[0];
+    if (
+      !hostedSessionServer ||
+      !request ||
+      !Array.isArray(request.playerIds) ||
+      request.playerIds.length < 1 ||
+      request.playerIds.length > 10 ||
+      !status
+    ) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: hostedSessionServer
+          ? 'Condição direcionada inválida.'
+          : 'Não há uma sessão multiplayer hospedada.',
+      };
+    }
+    return hostedSessionServer.applyPlayerStatus({
+      playerIds: request.playerIds,
+      status,
+    });
+  },
+);
+
+const beginBossStatusTurn = (bossId: string) => {
+  if (!battleState.battleStarted) return;
+  const previousBoss = battleState.bosses.find((boss) => boss.id === bossId);
+  if (
+    !previousBoss ||
+    previousBoss.setupStatus !== 'ready' ||
+    previousBoss.currentHealth <= 0
+  ) return;
+
+  rememberAppChange();
+  const advancedTurn = advanceBossTurn(battleState, bossId, randomInt);
+  battleState = clampSceneOverflowDamage(advancedTurn.state, previousBoss);
+  broadcastBattleState(false, false);
+  const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
+
+  if ((playerWindow && !playerWindow.isDestroyed()) || hostedSessionServer) {
+    let publishedVisibleImpact = false;
+    for (const tick of advancedTurn.ticks) {
+      const rolledDice = tick.rolls.length > 0;
+      if (rolledDice) {
+        const rollResult: EncounterRollResult = {
+          id: `status:${bossId}:${tick.statusId}:${randomUUID()}`,
+          participantId: `boss:${bossId}`,
+          label: tick.statusName,
+          expression: tick.formula,
+          rolls: tick.rolls,
+          modifier: tick.modifier,
+          total: tick.damage,
+          outcome: 'neutral',
+          category: 'status',
+          createdAt: Date.now(),
+          retainedByParticipantId: encounterTurnState.activeParticipantId,
+        };
+        if (hostedSessionServer) {
+          hostedSessionServer.publishRollResult(rollResult);
+        } else {
+          encounterTurnState = {
+            ...encounterTurnState,
+            rollResults: [...(encounterTurnState.rollResults ?? []), rollResult],
+            revision: encounterTurnState.revision + 1,
+          };
+          broadcastEncounterTurnState();
+        }
+      }
+      const visibleFloor = nextBoss?.currentHealth ?? 0;
+      const visibleFrom = Math.max(visibleFloor, tick.from);
+      const visibleTo = Math.max(visibleFloor, tick.to);
+      if (visibleFrom <= visibleTo) {
+        if (rolledDice) publishDiceRollSound();
+        continue;
+      }
+      healthEffectSequence += 1;
+      const effect: HealthEffect = {
+        id: healthEffectSequence,
+        bossId,
+        type: 'damage',
+        intensity: 'normal',
+        from: visibleFrom,
+        to: visibleTo,
+        maximum: previousBoss.maxHealth,
+        shieldFrom: previousBoss.shield,
+        shieldTo: previousBoss.shield,
+        source: {
+          kind: 'status',
+          statusId: tick.statusId,
+          name: tick.statusName,
+          formula: tick.formula,
+        },
+      };
+      const preparedDiceSound = rolledDice
+        ? prepareEncounterSound('dice-roll')
+        : null;
+      publishedVisibleImpact = true;
+      if (playerWindow && !playerWindow.isDestroyed()) {
+        enqueueLocalCombatImpact(
+          battleState,
+          effect,
+          preparedDiceSound?.encounterEffect ?? null,
+        );
+      }
+      const server = hostedSessionServer;
+      const hostedDiceUrl = server && preparedDiceSound
+        ? rewriteHostedMediaUrl(
+          encounterSoundSourceUrl(preparedDiceSound.optionId),
+          (id) => server.mediaUrl(id),
+        )
+        : '';
+      hostedSessionServer?.publishCombatImpact({
+        battle: toPublicBattleState(battleState),
+        healthEffect: effect,
+        soundEffect: preparedDiceSound && hostedDiceUrl
+          ? { ...preparedDiceSound.encounterEffect, url: hostedDiceUrl }
+          : null,
+      });
+    }
+    if (!publishedVisibleImpact) {
+      if (playerWindow && !playerWindow.isDestroyed()) {
+        playerWindow.webContents.send('battle:state-changed', battleState);
+      }
+      hostedSessionServer?.publishBattleState(toPublicBattleState(battleState));
+    }
+  }
+  if (nextBoss) {
+    queueCrossedScenePhases(
+      bossId,
+      previousBoss.currentHealth,
+      nextBoss.currentHealth,
+    );
+  }
+};
+
 ipcMain.on('battle:dispatch', (event, command: unknown) => {
   if (!isEncounterControllerSender(event.sender.id)) {
     return;
@@ -6721,81 +7458,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'start-turn') {
-    if (!battleState.battleStarted) return;
-    const previousBoss = battleState.bosses.find(
-      (boss) => boss.id === command.bossId,
-    );
-    if (
-      !previousBoss ||
-      previousBoss.setupStatus !== 'ready' ||
-      previousBoss.currentHealth <= 0
-    ) return;
-
-    rememberAppChange();
-    const advancedTurn = advanceBossTurn(
-      battleState,
-      command.bossId,
-      randomInt,
-    );
-    battleState = clampSceneOverflowDamage(advancedTurn.state, previousBoss);
-    // Controllers receive the authoritative state immediately. Player surfaces
-    // receive each status tick together with its visual effect so life and
-    // animation cannot be rendered in different network frames.
-    broadcastBattleState(false, false);
-    const nextBoss = battleState.bosses.find((boss) => boss.id === command.bossId);
-
-    if (
-      (playerWindow && !playerWindow.isDestroyed()) ||
-      hostedSessionServer
-    ) {
-      let publishedVisibleImpact = false;
-      for (const tick of advancedTurn.ticks) {
-        const visibleFloor = nextBoss?.currentHealth ?? 0;
-        const visibleFrom = Math.max(visibleFloor, tick.from);
-        const visibleTo = Math.max(visibleFloor, tick.to);
-        if (visibleFrom <= visibleTo) continue;
-        healthEffectSequence += 1;
-        const effect: HealthEffect = {
-          id: healthEffectSequence,
-          bossId: command.bossId,
-          type: 'damage',
-          intensity: 'normal',
-          from: visibleFrom,
-          to: visibleTo,
-          maximum: previousBoss.maxHealth,
-          shieldFrom: previousBoss.shield,
-          shieldTo: previousBoss.shield,
-          source: {
-            kind: 'status',
-            statusId: tick.statusId,
-            name: tick.statusName,
-            formula: tick.formula,
-          },
-        };
-        publishedVisibleImpact = true;
-        if (playerWindow && !playerWindow.isDestroyed()) {
-          enqueueLocalCombatImpact(battleState, effect, null);
-        }
-        hostedSessionServer?.publishCombatImpact({
-          battle: toPublicBattleState(battleState),
-          healthEffect: effect,
-          soundEffect: null,
-        });
-      }
-      if (!publishedVisibleImpact) {
-        if (playerWindow && !playerWindow.isDestroyed()) {
-          playerWindow.webContents.send('battle:state-changed', battleState);
-        }
-        hostedSessionServer?.publishBattleState(toPublicBattleState(battleState));
-      }
-    }
-    if (nextBoss) {
-      queueCrossedScenePhases(
-        command.bossId,
-        previousBoss.currentHealth,
-        nextBoss.currentHealth,
-      );
-    }
+    beginBossStatusTurn(command.bossId);
     return;
   }
 

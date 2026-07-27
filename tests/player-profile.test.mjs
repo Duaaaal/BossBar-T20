@@ -98,4 +98,11 @@ test('persiste perfis com senha derivada, notas e ficha por usuário', async (t)
   await store.resetPassword(registered.id, 'nova-senha');
   await assert.rejects(() => store.authenticate('Alice', 'senha-flexivel'));
   assert.equal((await store.authenticate('Alice', 'nova-senha')).id, registered.id);
+
+  await store.deleteProfile(registered.id);
+  assert.equal(store.accountStatus('Alice').exists, false);
+  assert.deepEqual(store.listProfiles(), []);
+  await assert.rejects(() => store.authenticate('Alice', 'nova-senha'));
+  const reopened = await PlayerProfileStore.open(directory);
+  assert.deepEqual(reopened.listProfiles(), []);
 });

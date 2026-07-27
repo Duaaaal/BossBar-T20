@@ -218,7 +218,7 @@ button { font: inherit; cursor: pointer; }
 }
 .hosted-player {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr) auto auto minmax(53px, auto) auto auto;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto minmax(53px, auto) auto auto auto auto;
   min-height: 27px;
   align-items: center;
   gap: 6px;
@@ -229,6 +229,8 @@ button { font: inherit; cursor: pointer; }
 }
 .hosted-player-tool { min-height: 23px; border: 1px solid #536d6d; border-radius: 5px; padding: 3px 5px; background: transparent; color: #9ec2be; font-size: .46rem; font-weight: 900; }
 .hosted-player-tool.is-password { border-color: #6c5b78; color: #c3afd2; }
+.hosted-player-tool.is-hero { border-color: #b88931; color: #f1cf78; }
+.hosted-player-tool.is-delete { border-color: #8c4652; color: #e69aa5; }
 .hosted-player-tool:disabled { opacity: .3; cursor: default; }
 .hosted-quality-dot {
   width: 7px;
@@ -359,11 +361,13 @@ button { font: inherit; cursor: pointer; }
 .password-reset-field input:focus { border-color: #91617b; }
 .player-profiles-modal { position: relative; width: min(560px, calc(100vw - 32px)); }
 .player-profile-list { display: grid; max-height: min(420px, 60vh); gap: 6px; margin: 13px 0 0; overflow: auto; padding: 0 3px 0 0; list-style: none; }
-.player-profile-list li { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(90px, 1.25fr) auto auto; align-items: center; gap: 7px; border: 1px solid #3d3741; border-radius: 7px; padding: 7px; background: #121015; }
+.player-profile-list li { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(90px, 1.25fr) auto auto auto; align-items: center; gap: 7px; border: 1px solid #3d3741; border-radius: 7px; padding: 7px; background: #121015; }
 .player-profile-name { min-width: 0; overflow: hidden; color: #ded4df; font-size: .69rem; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
 .player-profile-list small { min-width: 0; overflow: hidden; color: #817985; font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
 .player-profile-list button { min-height: 28px; border: 1px solid #536d6d; border-radius: 6px; padding: 4px 8px; background: transparent; color: #9ec2be; font-size: .56rem; font-weight: 900; }
 .player-profile-list button.is-password { border-color: #6c5b78; color: #c3afd2; }
+.player-profile-list button.is-delete,
+.modal-confirm-button.is-delete { border-color: #a84f5c; background: #842b3a; color: #ffd3d8; }
 .player-profile-list button:disabled { opacity: .3; cursor: default; }
 
 @media (max-width: 680px) {

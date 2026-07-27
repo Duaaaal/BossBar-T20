@@ -7,6 +7,11 @@ import {
   type BossState,
 } from './shared/battle';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
+import {
+  BOSS_SKILL_DEFINITIONS,
+  normalizeBossSkillValues,
+  type BossSkillId,
+} from './shared/boss-skills';
 import { isUndoEditableTarget } from './shared/undo-shortcut';
 import {
   createSceneRanges,
@@ -52,7 +57,21 @@ const identityPatchFromBoss = (boss: BossState): SceneBossPatch => ({
   rangedDefense: boss.rangedDefense,
   damageReduction: boss.damageReduction,
   shield: boss.shield,
+  skillValues: boss.skillValues,
 });
+
+type SceneAttributesDraft = {
+  maxHealth: string;
+  currentHealth: string;
+  attack: string;
+  rangedAttack: string;
+  skills: string;
+  defense: string;
+  rangedDefense: string;
+  damageReduction: string;
+  shield: string;
+  skillValues: Record<BossSkillId, string>;
+};
 
 const draftFromPlan = (
   plan: ScenePlan,
@@ -496,6 +515,8 @@ const SceneEditorApp = () => {
   const [bossToDelete, setBossToDelete] = useState<string | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
+  const [attributesDraft, setAttributesDraft] =
+    useState<SceneAttributesDraft | null>(null);
   const dirtyRef = useRef(false);
   const battleStateRef = useRef<BattleState | null>(null);
   const draftHistoryRef = useRef<Array<{
@@ -1084,6 +1105,65 @@ const SceneEditorApp = () => {
     selectedBossId,
     selectedIndex,
   );
+  const openAttributesEditor = () => {
+    setAttributesDraft({
+      maxHealth: String(resolvedCurrentBoss.maxHealth),
+      currentHealth: String(resolvedCurrentBoss.currentHealth),
+      attack: String(resolvedCurrentBoss.attack),
+      rangedAttack: String(resolvedCurrentBoss.rangedAttack),
+      skills: String(resolvedCurrentBoss.skills),
+      defense: String(resolvedCurrentBoss.defense),
+      rangedDefense: String(resolvedCurrentBoss.rangedDefense),
+      damageReduction: String(resolvedCurrentBoss.damageReduction),
+      shield: String(resolvedCurrentBoss.shield),
+      skillValues: Object.fromEntries(
+        BOSS_SKILL_DEFINITIONS.map(([id]) => [
+          id,
+          String(resolvedCurrentBoss.skillValues?.[id] ?? resolvedCurrentBoss.skills),
+        ]),
+      ) as Record<BossSkillId, string>,
+    });
+  };
+  const applyAttributesEditor = () => {
+    if (!attributesDraft) return;
+    const numeric = {
+      maxHealth: Number(attributesDraft.maxHealth),
+      currentHealth: Number(attributesDraft.currentHealth),
+      attack: Number(attributesDraft.attack),
+      rangedAttack: Number(attributesDraft.rangedAttack),
+      skills: Number(attributesDraft.skills),
+      defense: Number(attributesDraft.defense),
+      rangedDefense: Number(attributesDraft.rangedDefense),
+      damageReduction: Number(attributesDraft.damageReduction),
+      shield: Number(attributesDraft.shield),
+    };
+    const exactSkills = Object.fromEntries(
+      BOSS_SKILL_DEFINITIONS.map(([id]) => [
+        id,
+        Number(attributesDraft.skillValues[id]),
+      ]),
+    );
+    if (
+      Object.values(numeric).some((value) => !Number.isFinite(value)) ||
+      Object.values(exactSkills).some((value) => !Number.isFinite(value)) ||
+      numeric.maxHealth < 1 ||
+      numeric.currentHealth < 0 ||
+      numeric.currentHealth > numeric.maxHealth
+    ) {
+      setMessage('Revise os atributos e mantenha a vida atual entre 0 e a vida máxima.');
+      return;
+    }
+    updateDirective(selectedBossId, (directive) => ({
+      ...directive,
+      patch: {
+        ...directive.patch,
+        ...numeric,
+        skillValues: normalizeBossSkillValues(exactSkills, numeric.skills),
+      },
+    }), `phase:${currentPhase.id}:boss:${selectedBossId}:attributes`);
+    setAttributesDraft(null);
+    setMessage('');
+  };
 
   return (
     <main className="scene-shell">
@@ -1276,10 +1356,18 @@ const SceneEditorApp = () => {
               </header>
               <div className="boss-values">
                 <label className="boss-name-override"><span>Nome</span><input maxLength={100} placeholder="Nome do chefão" value={resolvedCurrentBoss.bossName ?? ''} onChange={(event) => setPatchValue(selectedBossId, 'bossName', event.target.value)} /></label>
-                {([
-                  ['maxHealth', 'Vida máx.'], ['currentHealth', 'Vida atual'], ['attack', 'Ataque'], ['rangedAttack', 'Tiro'], ['skills', 'Perícias'],
-                  ['defense', 'Def. CaC'], ['rangedDefense', 'Def. AaD'], ['damageReduction', 'RD'], ['shield', 'Escudo'],
-                ] as const).map(([key, label]) => <label key={key}><span>{label}</span><input type="number" placeholder="—" value={resolvedCurrentBoss[key] ?? ''} onChange={(event) => setPatchValue(selectedBossId, key, event.target.value)} /></label>)}
+                <button
+                  className="scene-open-attributes"
+                  type="button"
+                  onClick={openAttributesEditor}
+                >
+                  <strong>Alterar Perícias</strong>
+                  <small>
+                    PV {resolvedCurrentBoss.currentHealth}/{resolvedCurrentBoss.maxHealth}
+                    {' · '}Atq. {resolvedCurrentBoss.attack}/{resolvedCurrentBoss.rangedAttack}
+                    {' · '}Def. {resolvedCurrentBoss.defense}/{resolvedCurrentBoss.rangedDefense}
+                  </small>
+                </button>
               </div>
               <div className="boss-action-values">
                 <label>
@@ -1313,6 +1401,90 @@ const SceneEditorApp = () => {
       <footer className="scene-footer">
         <button type="button" disabled={busy || Boolean(rangeError) || !dirty} data-disabled-reason={busy ? 'Aguarde o salvamento atual' : rangeError ? 'Corrija as margens das fases' : 'Nenhuma alteração para salvar'} onClick={() => void persistDraft()}>{busy ? 'Salvando...' : 'Salvar cena'}</button>
       </footer>
+
+      {attributesDraft && (
+        <div className="scene-modal-backdrop">
+          <section
+            className="scene-attributes-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scene-attributes-title"
+          >
+            <header>
+              <div>
+                <h2 id="scene-attributes-title">Alterar Perícias</h2>
+                <span>{bossNameInPhase(draft, selectedBossId, selectedIndex)}</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar"
+                onClick={() => setAttributesDraft(null)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="scene-attribute-modal-grid">
+              {([
+                ['maxHealth', 'Vida máxima', 1, 1_000_000],
+                ['currentHealth', 'Vida atual', 0, 1_000_000],
+                ['attack', 'Ataque', -999, 999],
+                ['rangedAttack', 'Tiro', -999, 999],
+                ['skills', 'Perícia base', -999, 999],
+                ['defense', 'Defesa CaC', 0, 999],
+                ['rangedDefense', 'Defesa AaD', 0, 999],
+                ['damageReduction', 'RD', 0, 999],
+                ['shield', 'Escudo', 0, 999],
+              ] as const).map(([key, label, min, max]) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    value={attributesDraft[key]}
+                    onChange={(event) => setAttributesDraft((current) => current
+                      ? { ...current, [key]: event.target.value }
+                      : current)}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="scene-exact-skills">
+              <h3>Valores exatos de perícia</h3>
+              <div>
+                {BOSS_SKILL_DEFINITIONS.map(([id, label]) => (
+                  <label key={id}>
+                    <span>{label}</span>
+                    <input
+                      type="number"
+                      min={-999}
+                      max={999}
+                      value={attributesDraft.skillValues[id]}
+                      onChange={(event) => setAttributesDraft((current) => current
+                        ? {
+                            ...current,
+                            skillValues: {
+                              ...current.skillValues,
+                              [id]: event.target.value,
+                            },
+                          }
+                        : current)}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <footer>
+              <button type="button" onClick={() => setAttributesDraft(null)}>
+                Cancelar
+              </button>
+              <button type="button" onClick={applyAttributesEditor}>
+                Aplicar
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {playlistModal && (
         <ScenePlaylistModal

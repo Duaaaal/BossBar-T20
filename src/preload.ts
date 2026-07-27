@@ -42,6 +42,7 @@ import type {
 import type {
   HostedPlayerPasswordResetResult,
   NotesSaveResult,
+  PlayerProfileDeleteResult,
   PlayerProfileSummary,
 } from './shared/character-sheet';
 import type {
@@ -55,7 +56,21 @@ import type {
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './shared/multiplayer';
-import type { AreaDamageRequest, AreaDamageResult } from './shared/player-combat';
+import type {
+  AreaDamageRequest,
+  AreaDamageResult,
+  DirectPlayerDamageRequest,
+  EncounterFormulaRollRequest,
+  EncounterFormulaRollResult,
+  EncounterTurnActionResult,
+  EncounterTurnState,
+  PlayerCombatActionRequest,
+  PlayerCombatActionResult,
+  PlayerHudState,
+  PlayerResourceNotice,
+  PlayerStatusRequest,
+  PlayerTargetActionResult,
+} from './shared/player-combat';
 import type {
   SceneAudioSlot,
   SceneMediaSelectionResult,
@@ -81,6 +96,12 @@ const soundboardSubscribers = new Set<(state: SoundboardState) => void>();
 let latestEncounterEffectsState: EncounterEffectsState | null = null;
 const encounterEffectsSubscribers = new Set<
   (state: EncounterEffectsState) => void
+>();
+let latestPlayerHuds: PlayerHudState[] = [];
+const playerHudSubscribers = new Set<(state: PlayerHudState[]) => void>();
+let latestEncounterTurnState: EncounterTurnState | null = null;
+const encounterTurnSubscribers = new Set<
+  (state: EncounterTurnState) => void
 >();
 let latestScenePlan: ScenePlan | null = null;
 const scenePlanSubscribers = new Set<(state: ScenePlan) => void>();
@@ -151,6 +172,22 @@ ipcRenderer.on(
   },
 );
 
+ipcRenderer.on(
+  'multiplayer:player-huds-changed',
+  (_event, state: PlayerHudState[]) => {
+    latestPlayerHuds = state;
+    for (const subscriber of playerHudSubscribers) subscriber(state);
+  },
+);
+
+ipcRenderer.on(
+  'multiplayer:turn-changed',
+  (_event, state: EncounterTurnState) => {
+    latestEncounterTurnState = state;
+    for (const subscriber of encounterTurnSubscribers) subscriber(state);
+  },
+);
+
 const bossAPI = {
   getState: async (): Promise<BattleState> => {
     const state = (await ipcRenderer.invoke('battle:get-state')) as BattleState;
@@ -169,6 +206,66 @@ const bossAPI = {
   applyAreaDamage: (
     request: AreaDamageRequest,
   ): Promise<AreaDamageResult> => ipcRenderer.invoke('player-combat:area-damage', request),
+  applyDirectPlayerDamage: (
+    request: DirectPlayerDamageRequest,
+  ): Promise<PlayerTargetActionResult> =>
+    ipcRenderer.invoke('player-combat:direct-damage', request),
+  applyPlayerStatus: (
+    request: PlayerStatusRequest,
+  ): Promise<PlayerTargetActionResult> =>
+    ipcRenderer.invoke('player-combat:apply-status', request),
+  getPlayerHuds: async (): Promise<PlayerHudState[]> => {
+    latestPlayerHuds = await ipcRenderer.invoke('multiplayer:get-player-huds');
+    return latestPlayerHuds;
+  },
+  getEncounterTurnState: async (): Promise<EncounterTurnState> => {
+    const state = await ipcRenderer.invoke(
+      'multiplayer:get-turn-state',
+    ) as EncounterTurnState;
+    latestEncounterTurnState = state;
+    return state;
+  },
+  advanceEncounterTurn: (
+    expectedParticipantId?: string | null,
+  ): Promise<EncounterTurnActionResult> =>
+    ipcRenderer.invoke('multiplayer:advance-turn', expectedParticipantId),
+  rollEncounterInitiative: (
+    participantId?: string | null,
+  ): Promise<EncounterTurnActionResult> =>
+    ipcRenderer.invoke('multiplayer:roll-initiative', participantId),
+  rollEncounterFormula: (
+    request: EncounterFormulaRollRequest,
+  ): Promise<EncounterFormulaRollResult> =>
+    ipcRenderer.invoke('multiplayer:roll-formula', request),
+  requestPlayerCombatAction: async (
+    _request: PlayerCombatActionRequest,
+  ): Promise<PlayerCombatActionResult> => {
+    void _request;
+    return {
+      ok: false,
+      error: 'As ações de personagem são realizadas pelo navegador do jogador.',
+    };
+  },
+  approveActionPointRequest: (
+    requestId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:approve-action-point', requestId),
+  rejectActionPointRequest: (
+    requestId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:reject-action-point', requestId),
+  grantHostedHeroPoint: (
+    playerId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:grant-hero-point', playerId),
+  setCharacterPrivate: async () => ({
+    ok: false,
+    error: 'A privacidade é controlada pelo próprio jogador no navegador.',
+  }),
+  usePlayerAction: async () => ({
+    ok: false,
+    error: 'As ações são controladas pelo próprio jogador no navegador.',
+  }),
   openPresentation: (): Promise<boolean> =>
     ipcRenderer.invoke('presentation:open'),
   isPresentationOpen: (): Promise<boolean> =>
@@ -259,6 +356,10 @@ const bossAPI = {
     password: string,
   ): Promise<HostedPlayerPasswordResetResult> =>
     ipcRenderer.invoke('multiplayer:reset-player-password', playerId, password),
+  deleteHostedPlayerAccount: (
+    playerId: string,
+  ): Promise<PlayerProfileDeleteResult> =>
+    ipcRenderer.invoke('multiplayer:delete-player-account', playerId),
   getPlayerProfiles: (): Promise<PlayerProfileSummary[]> =>
     ipcRenderer.invoke('multiplayer:get-player-profiles'),
   openPlayerProfileSheet: (profileId: string): Promise<boolean> =>
@@ -268,6 +369,10 @@ const bossAPI = {
     password: string,
   ): Promise<HostedPlayerPasswordResetResult> =>
     ipcRenderer.invoke('multiplayer:reset-profile-password', profileId, password),
+  deletePlayerProfile: (
+    profileId: string,
+  ): Promise<PlayerProfileDeleteResult> =>
+    ipcRenderer.invoke('multiplayer:delete-profile', profileId),
   getMasterNotes: (): Promise<string> => ipcRenderer.invoke('notes:get-master'),
   saveMasterNotes: (content: string): Promise<NotesSaveResult> =>
     ipcRenderer.invoke('notes:save-master', content),
@@ -472,6 +577,22 @@ const bossAPI = {
     ) => callback(state);
     ipcRenderer.on('multiplayer:session-changed', listener);
     return () => ipcRenderer.removeListener('multiplayer:session-changed', listener);
+  },
+  subscribePlayerHuds: (callback: (state: PlayerHudState[]) => void) => {
+    playerHudSubscribers.add(callback);
+    callback(latestPlayerHuds);
+    return () => playerHudSubscribers.delete(callback);
+  },
+  subscribePlayerResourceNotice: (
+    _callback: (notice: PlayerResourceNotice) => void,
+  ) => {
+    void _callback;
+    return () => undefined;
+  },
+  subscribeEncounterTurn: (callback: (state: EncounterTurnState) => void) => {
+    encounterTurnSubscribers.add(callback);
+    if (latestEncounterTurnState) callback(latestEncounterTurnState);
+    return () => encounterTurnSubscribers.delete(callback);
   },
   subscribeHostedSessionStartupProgress: (
     callback: (progress: HostedSessionStartupProgress) => void,

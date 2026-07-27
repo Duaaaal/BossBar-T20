@@ -4,7 +4,7 @@ import {
   scrypt as scryptCallback,
   timingSafeEqual,
 } from 'node:crypto';
-import { readFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   CharacterSheetValidation,
@@ -193,6 +193,19 @@ export class PlayerProfileStore {
     profile.updatedAt = Date.now();
     await this.save();
     return publicProfile(profile);
+  }
+
+  async deleteProfile(profileId: string) {
+    const profile = [...this.profiles.values()].find(
+      (candidate) => candidate.id === profileId,
+    );
+    if (!profile) throw new Error('O jogador não foi encontrado.');
+    this.profiles.delete(profile.normalizedUsername);
+    await this.save();
+    await rm(path.join(this.rootDirectory, profile.id), {
+      force: true,
+      recursive: true,
+    });
   }
 
   async saveNotes(profileId: string, content: string) {

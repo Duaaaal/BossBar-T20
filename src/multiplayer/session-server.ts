@@ -49,12 +49,44 @@ import {
 import { resolveByteRange } from '../shared/media.ts';
 import type { SceneTransitionEvent } from '../shared/scene.ts';
 import {
+  advanceEncounterTurns,
+  beginEncounterTurns,
+  emptyEncounterTurnState,
   isAreaDamageRequest,
+  isDirectPlayerDamageRequest,
+  personalizeEncounterTurnState,
+  prepareManualInitiative,
   resolveAreaDamage,
+  resolveAttackCheck,
+  rollInitiativeOrder,
+  rollManualInitiative,
+  actionPointRecoveryFormulas,
+  isPlayerCombatActionRequest,
   type AreaDamageRequest,
   type AreaDamageResult,
+  type DirectPlayerDamageRequest,
+  type EncounterTurnActionResult,
+  type EncounterTurnParticipant,
+  type EncounterTurnState,
+  type EncounterRollResult,
+  type InitiativeActor,
+  type PlayerActionKind,
   type PlayerEncounterState,
+  type PlayerHudActionState,
+  type PlayerHudState,
+  type PendingActionPointRequest,
+  type PlayerCombatActionRequest,
+  type PlayerCombatActionResult,
+  type PlayerResourceNotice,
+  type PlayerStatusRequest,
+  type PlayerTargetActionResult,
 } from '../shared/player-combat.ts';
+import {
+  normalizeActiveStatuses,
+  parseDamageFormula,
+  rollDamageFormulaDetailed,
+} from '../shared/status.ts';
+import { applyStatusRules } from '../shared/status-rules.ts';
 import { inspectCharacterSheetPdf } from './character-sheet-pdf.ts';
 import { PlayerProfileStore } from './player-profile-store.ts';
 import { SessionRoster, normalizePlayerName } from './session-roster.ts';
@@ -104,6 +136,21 @@ export type MultiplayerSessionServerOptions = {
   logger?: boolean;
   onPresenceChanged?: (presence: MultiplayerPresence) => void;
   onJoinRequestsChanged?: (requests: MultiplayerJoinRequest[]) => void;
+  onActionPointRequestsChanged?: (
+    requests: PendingActionPointRequest[],
+  ) => void;
+  onPlayerHudsChanged?: (huds: PlayerHudState[]) => void;
+  onTurnStateChanged?: (state: EncounterTurnState) => void;
+  onTurnStarted?: (participant: EncounterTurnParticipant) => void;
+  onDiceRolled?: () => void;
+  getBossDefense?: (
+    bossId: string,
+    attackType: 'melee' | 'ranged',
+  ) => number | null;
+  applyBossDamage?: (
+    bossId: string,
+    damage: number,
+  ) => { ok: boolean; appliedDamage: number; error?: string };
   playerProfileStore: PlayerProfileStore;
 };
 
@@ -149,6 +196,14 @@ type PendingJoinRequest = {
   request: MultiplayerJoinRequest;
   socketId: string;
   clientId: string;
+};
+
+type PendingActionPointRequestInternal = {
+  request: PendingActionPointRequest;
+  socketId: string;
+  clientId: string;
+  profileId: string;
+  combatAction: PlayerCombatActionRequest;
 };
 
 type SnapshotReference = {
@@ -377,6 +432,11 @@ export class MultiplayerSessionServer {
 
   private readonly pendingJoinRequests = new Map<string, PendingJoinRequest>();
 
+  private readonly pendingActionPointRequests = new Map<
+    string,
+    PendingActionPointRequestInternal
+  >();
+
   private readonly approvedClientIds = new Set<string>();
 
   private readonly probeInterval: ReturnType<typeof setInterval>;
@@ -390,6 +450,12 @@ export class MultiplayerSessionServer {
   private readonly accountSessions: Map<string, AccountSession>;
 
   private readonly playerCombatStates = new Map<string, PlayerEncounterState>();
+
+  private readonly playerPrivacy = new Map<string, boolean>();
+
+  private readonly playerActions = new Map<string, PlayerHudActionState>();
+
+  private encounterTurnState = emptyEncounterTurnState();
 
   private playerImpactSequence = 0;
 
@@ -993,6 +1059,13 @@ export class MultiplayerSessionServer {
         ));
         return;
       }
+      if (!roster.canRegisterName(result.auth.clientId, accountSession.username)) {
+        next(socketError(
+          'NAME_IN_USE',
+          'Este usuário já está conectado nesta sala.',
+        ));
+        return;
+      }
       socket.data = {
         playerId: '',
         playerName: accountSession.username,
@@ -1076,8 +1149,131 @@ export class MultiplayerSessionServer {
     return this.roster.presence();
   }
 
+  getPlayerHuds(viewerClientId: string | null = null) {
+    return this.createPlayerHuds(viewerClientId, viewerClientId === null);
+  }
+
+  getTurnState(viewerClientId: string | null = null) {
+    const viewerSourceId = this.roster.members().find(
+      ({ clientId }) => clientId === viewerClientId,
+    )?.player.id ?? null;
+    const hiddenParticipantIds = new Set(
+      this.createPlayerHuds(viewerClientId)
+        .filter(({ redacted }) => redacted)
+        .map(({ id }) => `player:${id}`),
+    );
+    return personalizeEncounterTurnState(
+      this.encounterTurnState,
+      viewerSourceId,
+      hiddenParticipantIds,
+      viewerClientId === null,
+    );
+  }
+
+  advanceTurnAsHost(
+    expectedParticipantId?: string | null,
+  ): EncounterTurnActionResult {
+    if (!this.currentSnapshot.battle.battleStarted) {
+      return { ok: false, error: 'Inicie a batalha primeiro.' };
+    }
+    if (
+      expectedParticipantId &&
+      this.encounterTurnState.activeParticipantId &&
+      expectedParticipantId !== this.encounterTurnState.activeParticipantId
+    ) {
+      return { ok: false, error: 'O turno ativo mudou. Tente novamente.' };
+    }
+    if (
+      !this.encounterTurnState.started &&
+      this.encounterTurnState.initiativeReady === false
+    ) {
+      return {
+        ok: false,
+        error: 'Aguarde todos os testes de Iniciativa terminarem.',
+      };
+    }
+    const previousActiveId = this.encounterTurnState.activeParticipantId;
+    const nextState = this.encounterTurnState.started
+      ? advanceEncounterTurns(this.encounterTurnState)
+      : beginEncounterTurns(this.encounterTurnState);
+    if (nextState === this.encounterTurnState) {
+      return { ok: false, error: 'Nenhum participante pode iniciar o turno.' };
+    }
+    this.encounterTurnState = nextState;
+    this.publishTurnState(previousActiveId);
+    return { ok: true, state: this.getTurnState() };
+  }
+
+  rollInitiativeAsHost(
+    participantId: string,
+  ): EncounterTurnActionResult {
+    const participant = this.encounterTurnState.participants.find(
+      ({ id }) => id === participantId,
+    );
+    if (!participant || !['boss', 'npc'].includes(participant.kind)) {
+      return { ok: false, error: 'Selecione um chefão ou NPC pendente.' };
+    }
+    return this.rollInitiativeParticipant(participantId);
+  }
+
+  private rollInitiativeAsPlayer(
+    playerId: string,
+  ): EncounterTurnActionResult {
+    const participant = this.encounterTurnState.participants.find(
+      ({ kind, sourceId }) => kind === 'player' && sourceId === playerId,
+    );
+    if (!participant) {
+      return { ok: false, error: 'Seu personagem não participa desta iniciativa.' };
+    }
+    return this.rollInitiativeParticipant(participant.id);
+  }
+
+  private rollInitiativeParticipant(
+    participantId: string,
+  ): EncounterTurnActionResult {
+    if (!this.currentSnapshot.battle.battleStarted) {
+      return { ok: false, error: 'Inicie a batalha primeiro.' };
+    }
+    const rolled = rollManualInitiative(
+      this.encounterTurnState,
+      participantId,
+      () => randomInt(1, 21),
+    );
+    if (!rolled) {
+      return { ok: false, error: 'Esta iniciativa já foi rolada ou não está disponível.' };
+    }
+    const result = this.createInitiativeRollResult(rolled.participant, null);
+    const rerollIds = new Set(rolled.tiedParticipantIds);
+    this.encounterTurnState = {
+      ...rolled.state,
+      rollResults: [
+        ...(this.encounterTurnState.rollResults ?? []).filter(
+          (candidate) =>
+            candidate.category !== 'initiative' ||
+            candidate.participantId !== participantId,
+        ),
+        result,
+      ],
+    };
+    this.options.onDiceRolled?.();
+    this.publishTurnState();
+    return {
+      ok: true,
+      state: this.getTurnState(),
+      ...(rerollIds.size > 0
+        ? { error: 'Houve empate. Os participantes empatados devem rolar novamente.' }
+        : {}),
+    };
+  }
+
   getPendingJoinRequests() {
     return [...this.pendingJoinRequests.values()]
+      .map(({ request }) => ({ ...request }))
+      .sort((first, second) => first.requestedAt - second.requestedAt);
+  }
+
+  getPendingActionPointRequests() {
+    return [...this.pendingActionPointRequests.values()]
       .map(({ request }) => ({ ...request }))
       .sort((first, second) => first.requestedAt - second.requestedAt);
   }
@@ -1091,6 +1287,8 @@ export class MultiplayerSessionServer {
     if (!hasCharacterSheet) {
       this.playerCombatStates.delete(clientId);
       for (const socket of sockets) socket.emit('player:state', null);
+      this.syncTurnParticipants();
+      this.publishPlayerHuds();
       return;
     }
     const socket = sockets[0];
@@ -1099,15 +1297,22 @@ export class MultiplayerSessionServer {
     if (!state) return;
     this.playerCombatStates.set(clientId, state);
     for (const candidate of sockets) candidate.emit('player:state', state);
+    this.syncTurnParticipants();
+    this.publishPlayerHuds();
   }
 
   applyAreaDamage(request: AreaDamageRequest): AreaDamageResult {
     if (!isAreaDamageRequest(request)) throw new Error('Informe dano, CD e resultado de sucesso válidos.');
     const skippedPlayers: string[] = [];
     let appliedPlayers = 0;
+    const rollResults: EncounterRollResult[] = [];
     const handledClients = new Set<string>();
     for (const socket of this.io.sockets.sockets.values()) {
       if (!socket.data.playerId || handledClients.has(socket.data.clientId)) continue;
+      if (
+        request.playerIds &&
+        !request.playerIds.includes(socket.data.playerId)
+      ) continue;
       handledClients.add(socket.data.clientId);
       const state = this.playerCombatStates.get(socket.data.clientId) ??
         this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
@@ -1123,9 +1328,647 @@ export class MultiplayerSessionServer {
       );
       this.playerCombatStates.set(socket.data.clientId, impact.playerState);
       socket.emit('player:combat-impact', impact);
+      rollResults.push({
+        id: `reflex:${socket.data.playerId}:${impact.id}`,
+        participantId: `player:${socket.data.playerId}`,
+        label: `Reflexos CD ${impact.check.dc}`,
+        expression: `1d20 ${impact.check.reflex >= 0 ? '+' : '-'} ${Math.abs(impact.check.reflex)}`,
+        rolls: [impact.check.die],
+        modifier: impact.check.reflex,
+        total: impact.check.total,
+        outcome: impact.check.success ? 'success' : 'failure',
+        category: 'test',
+        createdAt: Date.now(),
+        retainedByParticipantId:
+          this.encounterTurnState.activeParticipantId,
+      });
       appliedPlayers += 1;
     }
+    if (appliedPlayers > 0) {
+      this.syncTurnParticipants();
+      this.encounterTurnState = {
+        ...this.encounterTurnState,
+        rollResults: [
+          ...(this.encounterTurnState.rollResults ?? []),
+          ...rollResults,
+        ],
+        revision: this.encounterTurnState.revision + 1,
+      };
+      rollResults.forEach(() => this.options.onDiceRolled?.());
+      this.publishTurnState();
+      this.publishPlayerHuds();
+    }
     return { ok: true, appliedPlayers, skippedPlayers };
+  }
+
+  applyDirectPlayerDamage(
+    request: DirectPlayerDamageRequest,
+  ): PlayerTargetActionResult {
+    if (!isDirectPlayerDamageRequest(request)) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Informe os jogadores e um dano válido.',
+      };
+    }
+    const selected = new Set(request.playerIds);
+    const handledClients = new Set<string>();
+    const skippedPlayers: string[] = [];
+    const missedPlayers: string[] = [];
+    const rollResults: EncounterRollResult[] = [];
+    let appliedPlayers = 0;
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (
+        !socket.data.playerId ||
+        !selected.has(socket.data.playerId) ||
+        handledClients.has(socket.data.clientId)
+      ) continue;
+      handledClients.add(socket.data.clientId);
+      const state = this.playerCombatStates.get(socket.data.clientId) ??
+        this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
+      if (!state) {
+        skippedPlayers.push(socket.data.playerName);
+        continue;
+      }
+      if (
+        request.attackType &&
+        request.attackBonus !== undefined &&
+        request.attackerParticipantId
+      ) {
+        const check = resolveAttackCheck(
+          request.attackBonus,
+          request.attackType === 'melee'
+            ? state.defenseMelee + state.temporaryDefenseBonus
+            : state.defenseRanged + state.temporaryDefenseBonus,
+          randomInt(1, 21),
+        );
+        rollResults.push({
+          id: `attack:${request.attackerParticipantId}:${randomUUID()}`,
+          participantId: request.attackerParticipantId,
+          label: request.attackType === 'melee' ? 'Ataque CaC' : 'Ataque AaD',
+          expression: `1d20 ${check.attackBonus >= 0 ? '+' : '-'} ${Math.abs(check.attackBonus)}`,
+          rolls: [check.die],
+          modifier: check.attackBonus,
+          total: check.total,
+          outcome: check.success ? 'success' : 'failure',
+          category: 'attack',
+          createdAt: Date.now(),
+          retainedByParticipantId: this.encounterTurnState.activeParticipantId,
+        });
+        if (!check.success) {
+          missedPlayers.push(socket.data.playerName);
+          continue;
+        }
+      }
+      const nextState: PlayerEncounterState = {
+        ...state,
+        currentHealth: Math.max(0, state.currentHealth - request.damage),
+        revision: state.revision + 1,
+      };
+      this.playerCombatStates.set(socket.data.clientId, nextState);
+      for (const candidate of this.io.sockets.sockets.values()) {
+        if (candidate.data.clientId === socket.data.clientId) {
+          candidate.emit('player:state', nextState);
+        }
+      }
+      appliedPlayers += 1;
+    }
+    if (rollResults.length > 0) {
+      this.encounterTurnState = {
+        ...this.encounterTurnState,
+        rollResults: [
+          ...(this.encounterTurnState.rollResults ?? []),
+          ...rollResults,
+        ],
+        revision: this.encounterTurnState.revision + 1,
+      };
+      rollResults.forEach(() => this.options.onDiceRolled?.());
+      this.publishTurnState();
+    }
+    if (appliedPlayers > 0) this.publishPlayerHuds();
+    return {
+      ok: true,
+      appliedPlayers,
+      skippedPlayers,
+      ...(missedPlayers.length > 0 ? { missedPlayers } : {}),
+    };
+  }
+
+  applyPlayerStatus(request: PlayerStatusRequest): PlayerTargetActionResult {
+    const status = normalizeActiveStatuses([request?.status])[0];
+    if (
+      !request ||
+      !Array.isArray(request.playerIds) ||
+      request.playerIds.length < 1 ||
+      request.playerIds.length > 10 ||
+      !request.playerIds.every(
+        (id) => typeof id === 'string' && id.length > 0 && id.length <= 128,
+      ) ||
+      !status
+    ) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Informe os jogadores e uma condição válida.',
+      };
+    }
+    const selected = new Set(request.playerIds);
+    const handledClients = new Set<string>();
+    const skippedPlayers: string[] = [];
+    let appliedPlayers = 0;
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (
+        !socket.data.playerId ||
+        !selected.has(socket.data.playerId) ||
+        handledClients.has(socket.data.clientId)
+      ) continue;
+      handledClients.add(socket.data.clientId);
+      const state = this.playerCombatStates.get(socket.data.clientId) ??
+        this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
+      if (!state) {
+        skippedPlayers.push(socket.data.playerName);
+        continue;
+      }
+      const nextState: PlayerEncounterState = {
+        ...state,
+        statuses: applyStatusRules(state.statuses, status),
+        revision: state.revision + 1,
+      };
+      this.playerCombatStates.set(socket.data.clientId, nextState);
+      for (const candidate of this.io.sockets.sockets.values()) {
+        if (candidate.data.clientId === socket.data.clientId) {
+          candidate.emit('player:state', nextState);
+        }
+      }
+      appliedPlayers += 1;
+    }
+    if (appliedPlayers > 0) this.publishPlayerHuds();
+    return { ok: true, appliedPlayers, skippedPlayers };
+  }
+
+  requestPlayerCombatAction(
+    socket: MultiplayerPlayerSocket,
+    request: PlayerCombatActionRequest,
+  ): PlayerCombatActionResult {
+    if (!isPlayerCombatActionRequest(request)) {
+      return { ok: false, error: 'A ação de combate é inválida.' };
+    }
+    const active = this.encounterTurnState.participants.find(
+      ({ id }) => id === this.encounterTurnState.activeParticipantId,
+    );
+    if (
+      !active ||
+      active.kind !== 'player' ||
+      active.sourceId !== socket.data.playerId
+    ) {
+      return {
+        ok: false,
+        error: 'Você só pode realizar este teste durante o próprio turno.',
+      };
+    }
+    const state = this.playerCombatStates.get(socket.data.clientId);
+    if (!state) {
+      return { ok: false, error: 'Vincule uma ficha válida antes de agir.' };
+    }
+
+    const usesActionPoint =
+      (request.kind === 'resource' && request.resource === 'action-point') ||
+      (request.kind !== 'resource' && request.resource?.kind === 'action-point');
+    if (usesActionPoint) {
+      if (!state.actionPointAvailable) {
+        return { ok: false, error: 'O Ponto de Ação já foi usado.' };
+      }
+      const existing = [...this.pendingActionPointRequests.values()].find(
+        ({ clientId }) => clientId === socket.data.clientId,
+      );
+      if (existing) {
+        return {
+          ok: false,
+          pendingApproval: true,
+          requestId: existing.request.id,
+          error: 'Aguarde o mestre avaliar seu Ponto de Ação.',
+        };
+      }
+      const id = randomUUID();
+      const label = request.kind === 'resource'
+        ? request.ability === 'protection' ? 'Proteção' : 'Recuperação'
+        : request.resource?.ability === 'intervention'
+          ? `Intervenção em ${this.combatActionLabel(socket, request)}`
+          : `Rolar novamente: ${this.combatActionLabel(socket, request)}`;
+      const pending: PendingActionPointRequestInternal = {
+        request: {
+          id,
+          playerId: socket.data.playerId,
+          playerName: state.characterName || socket.data.playerName,
+          label,
+          requestedAt: Date.now(),
+        },
+        socketId: socket.id,
+        clientId: socket.data.clientId,
+        profileId: socket.data.profileId,
+        combatAction: request,
+      };
+      this.pendingActionPointRequests.set(id, pending);
+      this.notifyActionPointRequestsChanged();
+      this.emitResourceNotice(socket.data.clientId, {
+        id: randomUUID(),
+        tone: 'info',
+        message: 'Ponto de Ação enviado para aprovação do mestre.',
+      });
+      return { ok: true, pendingApproval: true, requestId: id };
+    }
+
+    const usesHeroPoint = request.kind === 'resource'
+      ? request.resource === 'hero-point'
+      : request.resource?.kind === 'hero-point';
+    if (usesHeroPoint && !state.heroPointAvailable) {
+      return { ok: false, error: 'Nenhum Ponto Heróico está disponível.' };
+    }
+    return this.executePlayerCombatAction(socket, request);
+  }
+
+  approveActionPointRequest(requestId: string): PlayerCombatActionResult {
+    const pending = this.pendingActionPointRequests.get(requestId);
+    if (!pending) {
+      return { ok: false, error: 'Este pedido não está mais disponível.' };
+    }
+    const socket = this.io.sockets.sockets.get(pending.socketId);
+    if (!socket?.connected) {
+      this.pendingActionPointRequests.delete(requestId);
+      this.notifyActionPointRequestsChanged();
+      return { ok: false, error: 'O jogador não está mais conectado.' };
+    }
+    this.pendingActionPointRequests.delete(requestId);
+    this.notifyActionPointRequestsChanged();
+    const result = this.executePlayerCombatAction(
+      socket,
+      pending.combatAction,
+      true,
+    );
+    this.emitResourceNotice(pending.clientId, {
+      id: randomUUID(),
+      tone: result.ok ? 'approved' : 'rejected',
+      message: result.ok
+        ? 'O mestre aprovou seu Ponto de Ação.'
+        : result.error ?? 'O Ponto de Ação não pôde ser concluído.',
+    });
+    return result;
+  }
+
+  rejectActionPointRequest(requestId: string): PlayerCombatActionResult {
+    const pending = this.pendingActionPointRequests.get(requestId);
+    if (!pending) {
+      return { ok: false, error: 'Este pedido não está mais disponível.' };
+    }
+    this.pendingActionPointRequests.delete(requestId);
+    this.notifyActionPointRequestsChanged();
+    this.emitResourceNotice(pending.clientId, {
+      id: randomUUID(),
+      tone: 'rejected',
+      message: 'O mestre não aprovou este Ponto de Ação.',
+    });
+    return { ok: true };
+  }
+
+  grantHeroPoint(playerId: string): PlayerCombatActionResult {
+    const socket = [...this.io.sockets.sockets.values()].find(
+      (candidate) => candidate.data.playerId === playerId,
+    );
+    if (!socket) return { ok: false, error: 'O jogador não está conectado.' };
+    const state = this.playerCombatStates.get(socket.data.clientId);
+    if (!state) return { ok: false, error: 'O jogador ainda não possui ficha válida.' };
+    this.playerCombatStates.set(socket.data.clientId, {
+      ...state,
+      heroPointAvailable: true,
+      revision: state.revision + 1,
+    });
+    this.publishPlayerState(socket.data.clientId);
+    this.publishPlayerHuds();
+    this.emitResourceNotice(socket.data.clientId, {
+      id: randomUUID(),
+      tone: 'heroic',
+      message: 'O mestre concedeu a você um Ponto Heróico!',
+    });
+    return { ok: true };
+  }
+
+  private combatActionLabel(
+    socket: MultiplayerPlayerSocket,
+    request: PlayerCombatActionRequest,
+  ) {
+    const summary = this.options.playerProfileStore.profileById(
+      socket.data.profileId,
+    )?.sheet.validation?.summary;
+    if (request.kind === 'skill') {
+      return summary?.skills.find(({ id }) => id === request.skillId)?.name ??
+        'teste de perícia';
+    }
+    if (request.kind === 'attack') {
+      return summary?.attacks[request.attackIndex]?.name || 'ataque';
+    }
+    return request.ability;
+  }
+
+  private executePlayerCombatAction(
+    socket: MultiplayerPlayerSocket,
+    request: PlayerCombatActionRequest,
+    actionPointApproved = false,
+  ): PlayerCombatActionResult {
+    const state = this.playerCombatStates.get(socket.data.clientId);
+    const summary = this.options.playerProfileStore.profileById(
+      socket.data.profileId,
+    )?.sheet.validation?.summary;
+    if (!state || !summary) {
+      return { ok: false, error: 'A ficha do jogador não está disponível.' };
+    }
+
+    const actionPointUse =
+      actionPointApproved ||
+      (request.kind === 'resource' && request.resource === 'action-point');
+    const heroPointUse =
+      (request.kind === 'resource' && request.resource === 'hero-point') ||
+      (request.kind !== 'resource' && request.resource?.kind === 'hero-point');
+    if (actionPointUse && !state.actionPointAvailable) {
+      return { ok: false, error: 'O Ponto de Ação já foi usado.' };
+    }
+    if (heroPointUse && !state.heroPointAvailable) {
+      return { ok: false, error: 'Nenhum Ponto Heróico está disponível.' };
+    }
+
+    if (request.kind === 'resource') {
+      if (request.resource === 'hero-point') {
+        this.updatePlayerCombatState(socket.data.clientId, {
+          ...state,
+          heroPointAvailable: false,
+          revision: state.revision + 1,
+        });
+        this.emitResourceNotice(socket.data.clientId, {
+          id: randomUUID(),
+          tone: 'heroic',
+          message: 'Ponto Heróico consumido para ativar o poder ou habilidade.',
+        });
+        return { ok: true };
+      }
+      if (!actionPointApproved) {
+        return { ok: false, error: 'Este Ponto de Ação precisa da aprovação do mestre.' };
+      }
+      if (request.ability === 'protection') {
+        const die = randomInt(1, 7);
+        const nextState: PlayerEncounterState = {
+          ...state,
+          actionPointAvailable: false,
+          temporaryDefenseBonus: die,
+          protectionExpiresAtRound: Math.max(1, this.encounterTurnState.round + 1),
+          revision: state.revision + 1,
+        };
+        this.updatePlayerCombatState(socket.data.clientId, nextState);
+        this.appendRollResult({
+          id: `action-protection:${socket.data.playerId}:${randomUUID()}`,
+          participantId: `player:${socket.data.playerId}`,
+          label: 'Proteção',
+          expression: '1d6',
+          rolls: [die],
+          modifier: 0,
+          total: die,
+          outcome: 'success',
+          category: 'test',
+          createdAt: Date.now(),
+          retainedByParticipantId: this.encounterTurnState.activeParticipantId,
+          resourceEffect: 'action-point',
+        });
+        return { ok: true };
+      }
+      const formulas = actionPointRecoveryFormulas(summary.level);
+      const healthFormula = parseDamageFormula(formulas.health);
+      const manaFormula = parseDamageFormula(formulas.mana);
+      if (!healthFormula || !manaFormula) {
+        return { ok: false, error: 'Não foi possível preparar a Recuperação.' };
+      }
+      const health = rollDamageFormulaDetailed(healthFormula, randomInt);
+      const mana = rollDamageFormulaDetailed(manaFormula, randomInt);
+      const nextState: PlayerEncounterState = {
+        ...state,
+        currentHealth: Math.min(state.maxHealth, state.currentHealth + health.total),
+        currentMana: Math.min(state.maxMana, state.currentMana + mana.total),
+        actionPointAvailable: false,
+        revision: state.revision + 1,
+      };
+      this.updatePlayerCombatState(socket.data.clientId, nextState);
+      const retainedBy = this.encounterTurnState.activeParticipantId;
+      this.appendRollResults([
+        {
+          id: `action-recovery-health:${socket.data.playerId}:${randomUUID()}`,
+          participantId: `player:${socket.data.playerId}`,
+          label: `Recuperação de PV (${formulas.tier})`,
+          expression: formulas.health,
+          rolls: health.rolls,
+          modifier: health.modifier,
+          total: health.total,
+          outcome: 'success',
+          category: 'test',
+          createdAt: Date.now(),
+          retainedByParticipantId: retainedBy,
+          resourceEffect: 'action-point',
+        },
+        {
+          id: `action-recovery-mana:${socket.data.playerId}:${randomUUID()}`,
+          participantId: `player:${socket.data.playerId}`,
+          label: `Recuperação de PM (${formulas.tier})`,
+          expression: formulas.mana,
+          rolls: mana.rolls,
+          modifier: mana.modifier,
+          total: mana.total,
+          outcome: 'success',
+          category: 'test',
+          createdAt: Date.now(),
+          retainedByParticipantId: retainedBy,
+          resourceEffect: 'action-point',
+        },
+      ]);
+      return { ok: true };
+    }
+
+    const resourceEffect = actionPointUse
+      ? 'action-point' as const
+      : heroPointUse ? 'hero-point' as const : undefined;
+    const rollTestDice = () => {
+      const baseDice = heroPointUse
+        ? [randomInt(1, 21), randomInt(1, 21)]
+        : [randomInt(1, 21)];
+      const interventionDie = actionPointUse &&
+        request.resource?.kind === 'action-point' &&
+        request.resource.ability === 'intervention'
+        ? randomInt(1, 7)
+        : 0;
+      return {
+        baseDice,
+        chosenDie: heroPointUse ? Math.max(...baseDice) : baseDice[0],
+        interventionDie,
+      };
+    };
+
+    if (request.kind === 'skill') {
+      const skill = summary.skills.find(({ id }) => id === request.skillId);
+      if (!skill || skill.total === null) {
+        return { ok: false, error: 'Esta perícia não está disponível na ficha.' };
+      }
+      const { baseDice, chosenDie, interventionDie } = rollTestDice();
+      const total = chosenDie + skill.total + interventionDie;
+      this.consumePlayerResource(socket.data.clientId, state, resourceEffect);
+      this.appendRollResult({
+        id: `skill:${socket.data.playerId}:${randomUUID()}`,
+        participantId: `player:${socket.data.playerId}`,
+        label: skill.name,
+        expression: `${heroPointUse ? '2d20' : '1d20'}${interventionDie ? ' + 1d6' : ''} ${skill.total >= 0 ? '+' : '-'} ${Math.abs(skill.total)}`,
+        rolls: [...baseDice, ...(interventionDie ? [interventionDie] : [])],
+        modifier: skill.total,
+        total,
+        outcome: 'neutral',
+        category: 'test',
+        createdAt: Date.now(),
+        retainedByParticipantId: this.encounterTurnState.activeParticipantId,
+        resourceEffect,
+        rollMode: heroPointUse ? 'keep-highest' : 'sum',
+      });
+      return { ok: true };
+    }
+
+    const attack = summary.attacks[request.attackIndex];
+    const attackBonus = this.parseSignedInteger(attack?.attackBonus);
+    const damageFormula = parseDamageFormula(request.damageFormula);
+    const defense = this.options.getBossDefense?.(
+      request.targetBossId,
+      request.attackType,
+    );
+    if (!attack || attackBonus === null || !damageFormula || defense === null || defense === undefined) {
+      return { ok: false, error: 'O ataque, dano ou alvo não está disponível.' };
+    }
+    const { baseDice, chosenDie, interventionDie } = rollTestDice();
+    const total = chosenDie + attackBonus + interventionDie;
+    const success =
+      chosenDie === 20 ||
+      (heroPointUse && baseDice.includes(20)) ||
+      ((chosenDie !== 1 || heroPointUse) && total >= defense);
+    this.consumePlayerResource(socket.data.clientId, state, resourceEffect);
+    const retainedBy = this.encounterTurnState.activeParticipantId;
+    const attackResult: EncounterRollResult = {
+      id: `attack:${socket.data.playerId}:${randomUUID()}`,
+      participantId: `player:${socket.data.playerId}`,
+      label: attack.name || (request.attackType === 'melee' ? 'Ataque CaC' : 'Ataque AaD'),
+      expression: `${heroPointUse ? '2d20' : '1d20'}${interventionDie ? ' + 1d6' : ''} ${attackBonus >= 0 ? '+' : '-'} ${Math.abs(attackBonus)}`,
+      rolls: [...baseDice, ...(interventionDie ? [interventionDie] : [])],
+      modifier: attackBonus,
+      total,
+      outcome: success ? 'success' : 'failure',
+      category: 'attack',
+      createdAt: Date.now(),
+      retainedByParticipantId: retainedBy,
+      resourceEffect,
+      rollMode: heroPointUse ? 'keep-highest' : 'sum',
+    };
+    if (!success) {
+      this.appendRollResult(attackResult);
+      return { ok: true };
+    }
+
+    // Damage dice are intentionally generated only after every validation,
+    // approval and attack check has completed.
+    const damage = rollDamageFormulaDetailed(damageFormula, randomInt);
+    const applied = this.options.applyBossDamage?.(
+      request.targetBossId,
+      damage.total,
+    );
+    if (!applied?.ok) {
+      return { ok: false, error: applied?.error ?? 'Não foi possível aplicar o dano.' };
+    }
+    this.appendRollResults([
+      attackResult,
+      {
+        id: `damage:${socket.data.playerId}:${randomUUID()}`,
+        participantId: `player:${socket.data.playerId}`,
+        label: `Dano: ${attack.name || 'Ataque'}`,
+        expression: request.damageFormula,
+        rolls: damage.rolls,
+        modifier: damage.modifier,
+        total: applied.appliedDamage,
+        outcome: 'success',
+        category: 'damage',
+        createdAt: Date.now(),
+        retainedByParticipantId: retainedBy,
+        resourceEffect,
+      },
+    ]);
+    return { ok: true };
+  }
+
+  private consumePlayerResource(
+    clientId: string,
+    state: PlayerEncounterState,
+    resourceEffect: EncounterRollResult['resourceEffect'],
+  ) {
+    if (!resourceEffect) return;
+    this.updatePlayerCombatState(clientId, {
+      ...state,
+      actionPointAvailable:
+        resourceEffect === 'action-point' ? false : state.actionPointAvailable,
+      heroPointAvailable:
+        resourceEffect === 'hero-point' ? false : state.heroPointAvailable,
+      revision: state.revision + 1,
+    });
+  }
+
+  private parseSignedInteger(value: string | undefined) {
+    if (!value) return null;
+    const match = value.replace(/\s+/g, '').match(/[+-]?\d+/);
+    if (!match) return null;
+    const parsed = Number(match[0]);
+    return Number.isInteger(parsed) ? Math.max(-999, Math.min(999, parsed)) : null;
+  }
+
+  private appendRollResult(result: EncounterRollResult) {
+    this.appendRollResults([result]);
+  }
+
+  private appendRollResults(results: EncounterRollResult[]) {
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      rollResults: [
+        ...(this.encounterTurnState.rollResults ?? []),
+        ...results,
+      ],
+      revision: this.encounterTurnState.revision + 1,
+    };
+    results.forEach(() => this.options.onDiceRolled?.());
+    this.publishTurnState();
+  }
+
+  private updatePlayerCombatState(
+    clientId: string,
+    state: PlayerEncounterState,
+  ) {
+    this.playerCombatStates.set(clientId, state);
+    this.publishPlayerState(clientId);
+    this.publishPlayerHuds();
+  }
+
+  private publishPlayerState(clientId: string) {
+    const state = this.playerCombatStates.get(clientId) ?? null;
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.clientId === clientId) socket.emit('player:state', state);
+    }
+  }
+
+  private emitResourceNotice(
+    clientId: string,
+    notice: PlayerResourceNotice,
+  ) {
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.clientId === clientId) {
+        socket.emit('player:resource-notice', notice);
+      }
+    }
   }
 
   async playerSheet(playerId: string) {
@@ -1145,6 +1988,23 @@ export class MultiplayerSessionServer {
 
   async resetProfilePassword(profileId: string, password: string) {
     await this.options.playerProfileStore.resetPassword(profileId, password);
+    for (const [token, session] of this.accountSessions) {
+      if (session.profileId === profileId) this.accountSessions.delete(token);
+    }
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.profileId === profileId) socket.disconnect(true);
+    }
+  }
+
+  async deletePlayerProfile(playerId: string) {
+    const socket = [...this.io.sockets.sockets.values()]
+      .find((candidate) => candidate.data.playerId === playerId);
+    if (!socket) throw new Error('O jogador não está conectado.');
+    await this.deleteProfile(socket.data.profileId);
+  }
+
+  async deleteProfile(profileId: string) {
+    await this.options.playerProfileStore.deleteProfile(profileId);
     for (const [token, session] of this.accountSessions) {
       if (session.profileId === profileId) this.accountSessions.delete(token);
     }
@@ -1214,13 +2074,21 @@ export class MultiplayerSessionServer {
       throw new Error('Não é possível publicar um snapshot incompatível.');
     }
     this.setCurrentSnapshot(snapshot);
+    this.syncTurnParticipants();
     this.io.emit('session:snapshot', snapshot);
     if (!snapshot.battle.battleStarted) this.approveAllPendingJoinRequests();
   }
 
   publishBattleState(state: PublicBattlePresentationState) {
     this.setCurrentSnapshot({ ...this.currentSnapshot, battle: state });
+    if (!state.battleStarted) {
+      this.encounterTurnState = emptyEncounterTurnState();
+    }
+    this.syncTurnParticipants();
     this.io.emit('battle:state', state);
+    if (!state.battleStarted) {
+      this.publishTurnState();
+    }
     if (!state.battleStarted) this.approveAllPendingJoinRequests();
   }
 
@@ -1230,7 +2098,22 @@ export class MultiplayerSessionServer {
 
   publishCombatImpact(impact: PublicCombatImpact) {
     this.setCurrentSnapshot({ ...this.currentSnapshot, battle: impact.battle });
+    this.syncTurnParticipants();
     this.io.emit('battle:impact', impact);
+  }
+
+  publishRollResult(result: EncounterRollResult) {
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      rollResults: [
+        ...(this.encounterTurnState.rollResults ?? []).filter(
+          (candidate) => candidate.id !== result.id,
+        ),
+        result,
+      ],
+      revision: this.encounterTurnState.revision + 1,
+    };
+    this.publishTurnState();
   }
 
   publishBackground(background: BackgroundState) {
@@ -1308,9 +2191,13 @@ export class MultiplayerSessionServer {
     });
     this.io.disconnectSockets(true);
     this.pendingJoinRequests.clear();
+    this.pendingActionPointRequests.clear();
     this.approvedClientIds.clear();
     this.accountSessions.clear();
     this.playerCombatStates.clear();
+    this.playerPrivacy.clear();
+    this.playerActions.clear();
+    this.encounterTurnState = emptyEncounterTurnState();
     if (this.fastify.server.listening) await this.fastify.close();
     await new Promise<void>((resolveClose) => {
       this.io.close(() => resolveClose());
@@ -1342,6 +2229,10 @@ export class MultiplayerSessionServer {
       defenseRanged: Math.max(0, summary.defenses?.ranged ?? summary.defense ?? 0),
       reflex,
       statuses: [],
+      actionPointAvailable: true,
+      heroPointAvailable: false,
+      temporaryDefenseBonus: 0,
+      protectionExpiresAtRound: null,
       revision: 0,
     } satisfies PlayerEncounterState;
   }
@@ -1363,7 +2254,18 @@ export class MultiplayerSessionServer {
         this.pendingJoinRequests.delete(pendingRequest[0]);
         this.notifyJoinRequestsChanged();
       }
-      if (this.roster.unregisterSocket(socket.id)) this.notifyPresenceChanged();
+      let removedActionPointRequest = false;
+      for (const [requestId, pending] of this.pendingActionPointRequests) {
+        if (pending.socketId !== socket.id) continue;
+        this.pendingActionPointRequests.delete(requestId);
+        removedActionPointRequest = true;
+      }
+      if (removedActionPointRequest) this.notifyActionPointRequestsChanged();
+      if (this.roster.unregisterSocket(socket.id)) {
+        this.notifyPresenceChanged();
+        this.syncTurnParticipants();
+        this.publishPlayerHuds();
+      }
     });
 
     if (
@@ -1389,7 +2291,15 @@ export class MultiplayerSessionServer {
       ),
     });
     if (!result.accepted) {
-      socket.disconnect(true);
+      const message = result.reason === 'name-in-use'
+        ? 'Este usuário já está conectado nesta sala.'
+        : `Esta sessão já atingiu o limite de ${this.roster.maxPlayers} jogadores.`;
+      const fallbackDisconnect = setTimeout(() => socket.disconnect(true), 1_000);
+      fallbackDisconnect.unref();
+      socket.emit('session:join-rejected', message, () => {
+        clearTimeout(fallbackDisconnect);
+        socket.disconnect(true);
+      });
       return;
     }
     socket.data.playerId = result.player.id;
@@ -1410,6 +2320,84 @@ export class MultiplayerSessionServer {
       this.playerCombatStates.set(socket.data.clientId, playerState);
       socket.emit('player:state', playerState);
     }
+    socket.on('player:set-private', (privateMode, acknowledge) => {
+      if (typeof privateMode !== 'boolean') {
+        acknowledge({ ok: false, error: 'Preferência de privacidade inválida.' });
+        return;
+      }
+      this.playerPrivacy.set(socket.data.profileId, privateMode);
+      this.publishPlayerHuds();
+      acknowledge({ ok: true });
+    });
+    socket.on('player:use-action', (action, acknowledge) => {
+      if (!['free', 'movement', 'standard'].includes(action)) {
+        acknowledge({ ok: false, error: 'Tipo de ação inválido.' });
+        return;
+      }
+      const active = this.encounterTurnState.participants.find(
+        ({ id }) => id === this.encounterTurnState.activeParticipantId,
+      );
+      if (
+        !active ||
+        active.kind !== 'player' ||
+        active.sourceId !== socket.data.playerId
+      ) {
+        acknowledge({
+          ok: false,
+          error: 'Você só pode usar ações durante o próprio turno.',
+        });
+        return;
+      }
+      const current = this.playerActions.get(socket.data.profileId) ?? {
+        free: true,
+        movement: true,
+        standard: true,
+      };
+      const key = action as PlayerActionKind;
+      if (!current[key]) {
+        acknowledge({ ok: false, error: 'Esta ação já foi usada.' });
+        return;
+      }
+      this.playerActions.set(socket.data.profileId, {
+        ...current,
+        [key]: false,
+      });
+      this.publishPlayerHuds();
+      acknowledge({ ok: true });
+    });
+    socket.on('encounter:end-own-turn', (acknowledge) => {
+      const active = this.encounterTurnState.participants.find(
+        ({ id }) => id === this.encounterTurnState.activeParticipantId,
+      );
+      if (
+        !active ||
+        active.kind !== 'player' ||
+        active.sourceId !== socket.data.playerId
+      ) {
+        acknowledge({
+          ok: false,
+          error: 'Somente o participante ativo pode encerrar o próprio turno.',
+        });
+        return;
+      }
+      const result = this.advanceTurnAsHost(active.id);
+      acknowledge({
+        ...result,
+        state: result.state ? this.getTurnState(socket.data.clientId) : undefined,
+      });
+    });
+    socket.on('encounter:roll-initiative', (acknowledge) => {
+      const result = this.rollInitiativeAsPlayer(socket.data.playerId);
+      acknowledge({
+        ...result,
+        state: result.state ? this.getTurnState(socket.data.clientId) : undefined,
+      });
+    });
+    socket.on('encounter:combat-action', (request, acknowledge) => {
+      acknowledge(this.requestPlayerCombatAction(socket, request));
+    });
+    this.syncTurnParticipants();
+    this.publishPlayerHuds();
     this.notifyPresenceChanged();
   }
 
@@ -1489,6 +2477,300 @@ export class MultiplayerSessionServer {
 
   private notifyJoinRequestsChanged() {
     this.options.onJoinRequestsChanged?.(this.getPendingJoinRequests());
+  }
+
+  private notifyActionPointRequestsChanged() {
+    this.options.onActionPointRequestsChanged?.(
+      this.getPendingActionPointRequests(),
+    );
+  }
+
+  private createPlayerHuds(
+    viewerClientId: string | null,
+    revealAll = false,
+  ): PlayerHudState[] {
+    return this.roster.members().map(({ clientId, player }) => {
+      const profile = [...this.io.sockets.sockets.values()]
+        .find((socket) => socket.data.clientId === clientId);
+      const summary = profile
+        ? this.options.playerProfileStore.profileById(
+          profile.data.profileId,
+        )?.sheet.validation?.summary ?? null
+        : null;
+      const encounter = this.playerCombatStates.get(clientId) ?? null;
+      const isSelf = clientId === viewerClientId;
+      const privateMode = profile
+        ? this.playerPrivacy.get(profile.data.profileId) ?? true
+        : true;
+      const actions = profile
+        ? this.playerActions.get(profile.data.profileId) ?? {
+          free: true,
+          movement: true,
+          standard: true,
+        }
+        : {
+          free: true,
+          movement: true,
+          standard: true,
+        };
+      const redacted = !revealAll && privateMode && !isSelf;
+      return {
+        id: player.id,
+        characterName:
+          encounter?.characterName || summary?.characterName || player.name,
+        isSelf,
+        privateMode,
+        redacted,
+        currentHealth: redacted ? null : encounter?.currentHealth ?? summary?.currentHealth ?? null,
+        maxHealth: redacted ? null : encounter?.maxHealth ?? summary?.maxHealth ?? null,
+        currentMana: redacted ? null : encounter?.currentMana ?? summary?.currentMana ?? null,
+        maxMana: redacted ? null : encounter?.maxMana ?? summary?.maxMana ?? null,
+        defenseMelee: redacted
+          ? null
+          : (encounter?.defenseMelee ?? summary?.defenses.melee ?? summary?.defense ?? null) === null
+            ? null
+            : (encounter?.defenseMelee ?? summary?.defenses.melee ?? summary?.defense ?? 0) +
+              (encounter?.temporaryDefenseBonus ?? 0),
+        defenseRanged: redacted
+          ? null
+          : (encounter?.defenseRanged ?? summary?.defenses.ranged ?? summary?.defense ?? null) === null
+            ? null
+            : (encounter?.defenseRanged ?? summary?.defenses.ranged ?? summary?.defense ?? 0) +
+              (encounter?.temporaryDefenseBonus ?? 0),
+        statuses: encounter?.statuses ?? [],
+        actionPointAvailable: redacted
+          ? null
+          : encounter?.actionPointAvailable ?? true,
+        heroPointAvailable: redacted
+          ? null
+          : encounter?.heroPointAvailable ?? false,
+        temporaryDefenseBonus: redacted
+          ? null
+          : encounter?.temporaryDefenseBonus ?? 0,
+        summary: redacted ? null : summary,
+        actions,
+        revision: encounter?.revision ?? 0,
+      };
+    });
+  }
+
+  private publishPlayerHuds() {
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (!socket.data.playerId) continue;
+      socket.emit('players:hud-state', this.createPlayerHuds(socket.data.clientId));
+    }
+    this.options.onPlayerHudsChanged?.(this.createPlayerHuds(null, true));
+  }
+
+  private syncTurnParticipants() {
+    if (!this.currentSnapshot.battle.battleStarted) {
+      this.encounterTurnState = emptyEncounterTurnState();
+      return;
+    }
+    const previousActiveId = this.encounterTurnState.activeParticipantId;
+    const members = this.roster.members();
+    const actors: InitiativeActor[] = [
+      ...this.currentSnapshot.battle.bosses
+        .filter(({ currentHealth }) => currentHealth > 0)
+        .map((boss) => ({
+          id: `boss:${boss.id}`,
+          kind: 'boss' as const,
+          sourceId: boss.id,
+          name: boss.bossName,
+          initiativeModifier: boss.initiative,
+          eligibleRound: this.encounterTurnState.started
+            ? this.encounterTurnState.round + 1
+            : 1,
+        })),
+      ...members.flatMap(({ clientId, player }) => {
+        const encounter = this.playerCombatStates.get(clientId);
+        if (encounter && encounter.currentHealth <= 0) return [];
+        const socket = [...this.io.sockets.sockets.values()]
+          .find((candidate) => candidate.data.clientId === clientId);
+        const summary = socket
+          ? this.options.playerProfileStore.profileById(
+            socket.data.profileId,
+          )?.sheet.validation?.summary
+          : null;
+        const initiative = summary?.skills.find(
+          ({ id, name }) => id === '130' || name === 'Iniciativa',
+        )?.total ?? 0;
+        return [{
+          id: `player:${player.id}`,
+          kind: 'player' as const,
+          sourceId: player.id,
+          name:
+            this.playerCombatStates.get(clientId)?.characterName ||
+            summary?.characterName ||
+            player.name,
+          initiativeModifier: initiative,
+          eligibleRound: this.encounterTurnState.started
+            ? this.encounterTurnState.round + 1
+            : 1,
+        }];
+      }),
+    ];
+    const actorIds = new Set(actors.map(({ id }) => id));
+    const previousParticipants = new Map(
+      this.encounterTurnState.participants.map((participant) => [
+        participant.id,
+        participant,
+      ]),
+    );
+    const newlyRolledIds: string[] = [];
+    let participants: EncounterTurnParticipant[];
+    if (!this.encounterTurnState.started) {
+      participants = prepareManualInitiative(
+        actors,
+        this.encounterTurnState.participants,
+      );
+    } else {
+      participants = actors.map((actor) => {
+        const existing = previousParticipants.get(actor.id);
+        if (existing) {
+          return {
+            ...existing,
+            name: actor.name,
+            initiativeModifier: actor.initiativeModifier,
+            initiativeTotal: existing.initiativeRoll + actor.initiativeModifier,
+          };
+        }
+        const participant = rollInitiativeOrder(
+          [actor],
+          () => randomInt(1, 21),
+        )[0];
+        newlyRolledIds.push(participant.id);
+        return participant;
+      }).sort((left, right) =>
+        right.initiativeTotal - left.initiativeTotal ||
+        right.initiativeModifier - left.initiativeModifier ||
+        left.id.localeCompare(right.id)
+      );
+    }
+    const activeStillExists = this.encounterTurnState.activeParticipantId
+      ? actorIds.has(this.encounterTurnState.activeParticipantId)
+      : true;
+    const nextActiveParticipantId = activeStillExists
+      ? this.encounterTurnState.activeParticipantId
+      : participants.find(
+        ({ eligibleRound }) => eligibleRound <= this.encounterTurnState.round,
+      )?.id ?? null;
+    const participantsUnchanged =
+      participants.length === this.encounterTurnState.participants.length &&
+      participants.every((participant, index) => {
+        const previous = this.encounterTurnState.participants[index];
+        return previous &&
+          participant.id === previous.id &&
+          participant.name === previous.name &&
+          participant.initiativeModifier === previous.initiativeModifier &&
+          participant.initiativeRoll === previous.initiativeRoll &&
+          participant.initiativeTotal === previous.initiativeTotal &&
+          participant.eligibleRound === previous.eligibleRound;
+      });
+    if (
+      participantsUnchanged &&
+      nextActiveParticipantId === this.encounterTurnState.activeParticipantId
+    ) return;
+    const addedRollResults = this.encounterTurnState.started
+      ? participants
+        .filter(({ id }) => newlyRolledIds.includes(id))
+        .map((participant) => this.createInitiativeRollResult(
+          participant,
+          this.encounterTurnState.activeParticipantId,
+        ))
+      : [];
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      participants,
+      activeParticipantId: nextActiveParticipantId,
+      initiativeReady: this.encounterTurnState.started
+        ? this.encounterTurnState.initiativeReady
+        : participants.length > 0 &&
+          participants.every(({ initiativeRolled }) => initiativeRolled !== false),
+      rollResults: [
+        ...(this.encounterTurnState.rollResults ?? []),
+        ...addedRollResults,
+      ],
+      revision: this.encounterTurnState.revision + 1,
+    };
+    this.publishTurnState(previousActiveId);
+    if (addedRollResults.length > 0) {
+      addedRollResults.forEach(() => this.options.onDiceRolled?.());
+    }
+  }
+
+  private createInitiativeRollResult(
+    participant: EncounterTurnParticipant,
+    retainedByParticipantId: string | null,
+  ): EncounterRollResult {
+    return {
+      id: `initiative:${participant.id}:${participant.initiativeRoll}:${Date.now()}`,
+      participantId: participant.id,
+      label: 'Iniciativa',
+      expression: `1d20 ${participant.initiativeModifier >= 0 ? '+' : '-'} ${Math.abs(participant.initiativeModifier)}`,
+      rolls: [participant.initiativeRoll],
+      modifier: participant.initiativeModifier,
+      total: participant.initiativeTotal,
+      outcome: 'neutral',
+      category: 'initiative',
+      createdAt: Date.now(),
+      retainedByParticipantId,
+    };
+  }
+
+  private publishTurnState(previousActiveId?: string | null) {
+    const activeId = this.encounterTurnState.activeParticipantId;
+    if (
+      previousActiveId !== undefined &&
+      activeId &&
+      activeId !== previousActiveId
+    ) {
+      const activePlayer = this.encounterTurnState.participants.find(
+        ({ id, kind }) => id === activeId && kind === 'player',
+      );
+      if (activePlayer) {
+        const socket = [...this.io.sockets.sockets.values()].find(
+          (candidate) => candidate.data.playerId === activePlayer.sourceId,
+        );
+        if (socket) {
+          const combatState = this.playerCombatStates.get(socket.data.clientId);
+          if (
+            combatState &&
+            combatState.temporaryDefenseBonus > 0 &&
+            combatState.protectionExpiresAtRound !== null &&
+            this.encounterTurnState.round >= combatState.protectionExpiresAtRound
+          ) {
+            this.playerCombatStates.set(socket.data.clientId, {
+              ...combatState,
+              temporaryDefenseBonus: 0,
+              protectionExpiresAtRound: null,
+              revision: combatState.revision + 1,
+            });
+            this.publishPlayerState(socket.data.clientId);
+          }
+          this.playerActions.set(socket.data.profileId, {
+            free: true,
+            movement: true,
+            standard: true,
+          });
+          this.publishPlayerHuds();
+        }
+      }
+    }
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (!socket.data.playerId) continue;
+      socket.emit(
+        'encounter:turn-state',
+        this.getTurnState(socket.data.clientId),
+      );
+    }
+    this.options.onTurnStateChanged?.(this.getTurnState());
+    if (activeId && activeId !== previousActiveId) {
+      const participant = this.encounterTurnState.participants.find(
+        ({ id }) => id === activeId,
+      );
+      if (participant) this.options.onTurnStarted?.({ ...participant });
+    }
   }
 
   private setCurrentSnapshot(snapshot: MultiplayerSessionSnapshot) {

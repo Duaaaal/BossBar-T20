@@ -116,6 +116,34 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.shield, 999);
 });
 
+test('configura vida atual e perícias exatas sem perder compatibilidade com o valor base', () => {
+  const skillValues = Object.fromEntries(
+    Object.keys(freshBattle().bosses[0].skillValues).map((id) => [id, 18]),
+  );
+  skillValues.iniciativa = 27;
+  const state = applyBattleCommand(freshBattle(), {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Estrategista',
+    maxHealth: 800,
+    currentHealth: 620,
+    attack: 22,
+    rangedAttack: 19,
+    defense: 25,
+    shield: 2,
+    skills: 18,
+    skillValues,
+    damageReduction: 8,
+  });
+  const boss = state.bosses[0];
+
+  assert.equal(boss.currentHealth, 620);
+  assert.equal(boss.maxHealth, 800);
+  assert.equal(boss.skills, 18);
+  assert.equal(boss.skillValues.iniciativa, 27);
+  assert.equal(boss.skillValues.reflexos, 18);
+});
+
 test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () => {
   assert.deepEqual(
     calculateHealthSequence({
@@ -212,6 +240,24 @@ test('acompanha separadamente a preparação da identidade e da próxima ação'
   assert.equal(state.bosses[0].actionPrepared, true);
   assert.equal(state.bosses[0].controlAmount, '100/4');
   assert.equal(state.bosses[0].applyDamageReduction, false);
+
+  state = applyBattleCommand(state, {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Arauto Carmesim',
+    controlAmount: '1d20 + 3d5 - 5d2 + 10',
+    maxHealth: 800,
+    attack: 20,
+    rangedAttack: 18,
+    defense: 22,
+    shield: 1,
+    skills: 16,
+    damageReduction: 12,
+  });
+  assert.equal(
+    state.bosses[0].controlAmount,
+    '1d20 + 3d5 - 5d2 + 10',
+  );
 
   state = applyBattleCommand(state, {
     type: 'mark-identity-unprepared',
@@ -380,6 +426,7 @@ test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () =>
     heal: true,
     damage: true,
     shield: true,
+    dice: true,
   });
   assert.equal(initialEncounterEffectsState.visuals.healthNumbers, false);
   assert.equal(Object.entries(initialEncounterEffectsState.visuals)
@@ -390,19 +437,21 @@ test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () =>
   assert.equal(getEncounterSoundSetting('critical-damage'), 'damage');
   assert.equal(getEncounterSoundSetting('shield-impact'), 'shield');
   assert.equal(getEncounterSoundSetting('shield-break'), 'shield');
+  assert.equal(getEncounterSoundSetting('dice-roll'), 'dice');
   assert.equal(
     isEncounterSoundEnabled(initialEncounterEffectsState, 'shield-break'),
     true,
   );
 });
 
-test('reconhece apenas as cinco categorias configuráveis de efeitos sonoros', () => {
+test('reconhece apenas as seis categorias configuráveis de efeitos sonoros', () => {
   for (const kind of [
     'damage',
     'critical-damage',
     'heal',
     'shield-impact',
     'shield-break',
+    'dice-roll',
   ]) assert.equal(isEncounterSoundEffectKind(kind), true);
   assert.equal(isEncounterSoundEffectKind('music'), false);
   assert.equal(isEncounterSoundEffectKind(null), false);
@@ -511,6 +560,8 @@ test('dano de status ignora escudo e RD e expira após o último efeito', () => 
     damage: 12,
     from: 500,
     to: 488,
+    rolls: [4, 5],
+    modifier: 3,
   }]);
 });
 

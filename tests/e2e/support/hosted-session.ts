@@ -81,6 +81,7 @@ export const createPublicBattle = ({
     maxHealth: 100,
     currentHealth,
     shield: 0,
+    initiative: 10,
     nextAction: 'Investida de validação',
     actionSeverity: 'normal',
     turnCount: 0,
@@ -107,13 +108,19 @@ export type HostedTestSession = {
   close: () => Promise<void>;
 };
 
-export const createEditableCharacterSheet = async () => {
+export const createEditableCharacterSheet = async ({
+  characterName = 'Valora',
+  playerName = 'Jogador Ferramentas',
+}: {
+  characterName?: string;
+  playerName?: string;
+} = {}) => {
   const document = await PDFDocument.create();
   const page = document.addPage([600, 800]);
   const form = document.getForm();
   const values: Record<string, string> = {
-    'NOME DO PERSONAGEM': 'Valora',
-    JOGADOR: 'Jogador Ferramentas',
+    'NOME DO PERSONAGEM': characterName,
+    JOGADOR: playerName,
     'RAÇA': 'Humana',
     ORIGEM: 'Guarda',
     CLASSE: 'Guerreiro',
@@ -263,8 +270,16 @@ export const joinHostedSession = async (
   await page.goto(inviteUrl);
   await page.locator('#web-player-name').fill(playerName);
   await page.locator('#web-player-password').fill('test-password');
-  await page.getByRole('button', { name: 'Entrar' }).click();
-  await expect(page.getByRole('dialog', { name: 'Confirmar usuário' })).toBeVisible();
+  await page.getByRole('button', { name: 'Criar acesso' }).click();
+  const confirmationDialog = page.getByRole('dialog', { name: 'Confirmar usuário' });
+  const creating = await confirmationDialog
+    .waitFor({ state: 'visible', timeout: 1_500 })
+    .then(() => true)
+    .catch(() => false);
+  if (!creating) {
+    await page.getByRole('button', { name: 'Entrar' }).click();
+  }
+  await expect(confirmationDialog).toBeVisible();
   await expect(page.locator('#web-player-confirmed-name')).toHaveText(playerName);
   const passwordConfirmation = page.locator('#web-player-password-confirm');
   if (await passwordConfirmation.isVisible()) await passwordConfirmation.fill('test-password');

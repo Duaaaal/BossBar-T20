@@ -1,4 +1,5 @@
 import type { BossState } from './battle';
+import type { BossSkillValues } from './boss-skills';
 import type { ActiveBossStatus } from './status';
 
 export type BossLibraryBossDraft = {
@@ -13,6 +14,7 @@ export type BossLibraryBossDraft = {
   rangedDefense: number;
   shield: number;
   skills: number;
+  skillValues?: BossSkillValues;
   damageReduction: number;
   description: string;
   actionSeverity: 'normal' | 'grave';
@@ -35,6 +37,7 @@ export type BossLibraryBossSummary = {
   rangedDefense: number;
   shield: number;
   skills: number;
+  skillValues?: BossSkillValues;
   damageReduction: number;
 };
 
