@@ -289,6 +289,7 @@
 .web-player-tools[hidden] { display: none; }
 
 .web-player-character-hud { position: fixed; z-index: 2147483643; top: 14px; right: 14px; width: var(--web-self-hud-width); max-width: calc(100vw - 28px); overflow: visible; border: 1px solid rgb(149 112 63 / 54%); border-radius: 9px; padding: 8px 10px 9px; background: linear-gradient(145deg, rgb(8 7 8 / 88%), rgb(20 12 13 / 78%)); box-shadow: 0 6px 24px rgb(0 0 0 / 28%); color: #eadcc3; backdrop-filter: blur(5px); }
+.web-player-character-hud:has(.web-player-character-details:not([hidden])) { z-index: 2147483647; }
 .web-player-character-hud[hidden] { display: none; }
 .web-player-character-hud header { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 25px; }
 .web-player-character-hud header strong { overflow: hidden; font: 800 clamp(12px, 1.1vw, 15px)/1.1 Cinzel, Georgia, serif; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
@@ -301,37 +302,6 @@
 .web-player-character-actions button:nth-child(3) { background: #ff633c; color: #ff633c; }
 .web-player-character-actions button.is-ready { opacity: .54; cursor: pointer; filter: saturate(.7); }
 .web-player-character-hud.is-turn-active .web-player-character-actions button.is-ready { box-shadow: 0 0 8px currentcolor; opacity: 1; filter: none; }
-.web-player-character-actions button::after {
-  position: absolute;
-  z-index: 2147483647;
-  top: calc(100% + 8px);
-  left: 50%;
-  width: max-content;
-  max-width: min(220px, calc(100vw - 24px));
-  border: 1px solid rgb(184 137 74 / 62%);
-  border-radius: 6px;
-  padding: 5px 7px;
-  background: rgb(10 8 8 / 88%);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 5px 16px rgb(0 0 0 / 48%);
-  color: #ead8bc;
-  content: attr(data-tooltip);
-  font: 700 10px/1.2 Inter, "Segoe UI", sans-serif;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, -3px);
-  transition: opacity 140ms ease, transform 140ms ease;
-  white-space: nowrap;
-}
-.web-player-character-actions button:hover::after,
-.web-player-character-actions button:focus-visible::after {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-.web-player-character-hud:has(.web-player-character-actions button:hover),
-.web-player-character-hud:has(.web-player-character-actions button:focus-visible) {
-  z-index: 2147483646;
-}
 @keyframes web-player-turn-glow {
   from { box-shadow: 0 0 0 1px rgb(255 76 34 / 52%), 0 0 13px rgb(255 158 49 / 54%); }
   to { box-shadow: 0 0 0 1px rgb(255 107 44 / 82%), 0 0 26px rgb(255 158 49 / 86%), 0 0 42px rgb(164 35 24 / 62%); }

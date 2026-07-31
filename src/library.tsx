@@ -167,8 +167,8 @@ const LibraryApp = () => {
           <div className="library-row library-table-head" role="row">
             <span>Encontro</span>
             <span>Vida</span>
-            <span>Ataque</span>
-            <span>Tiro</span>
+            <span>Luta</span>
+            <span>Pontaria</span>
             <span title="Corpo a corpo / à distância">Def. C/D</span>
             <span>Perícias</span>
             <span>RD</span>

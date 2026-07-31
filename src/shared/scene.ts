@@ -1,6 +1,9 @@
 import type { BossState } from './battle';
 import {
   normalizeBossSkillValues,
+  normalizeBossSkillOverrides,
+  resolveBossSkillValues,
+  type BossSkillOverrides,
   type BossSkillValues,
 } from './boss-skills.ts';
 
@@ -64,6 +67,7 @@ export type SceneBossPatch = {
   damageReduction?: number;
   shield?: number;
   skillValues?: BossSkillValues;
+  skillOverrides?: BossSkillOverrides;
 };
 
 export type SceneBossDirective = {
@@ -325,7 +329,7 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
   const numericRanges: Array<[
     Exclude<
       keyof SceneBossPatch,
-      'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues'
+      'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues' | 'skillOverrides'
     >,
     number,
     number,
@@ -347,9 +351,19 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
     }
   }
   if (patch.skillValues && typeof patch.skillValues === 'object') {
-    normalized.skillValues = normalizeBossSkillValues(
+    const values = normalizeBossSkillValues(
       patch.skillValues,
       normalized.skills ?? 10,
+    );
+    normalized.skillOverrides = normalizeBossSkillOverrides(
+      patch.skillOverrides,
+      normalized.skills ?? 10,
+      values,
+    );
+    normalized.skillValues = resolveBossSkillValues(
+      normalized.skills ?? 10,
+      values,
+      normalized.skillOverrides,
     );
   }
   return normalized;
@@ -382,5 +396,6 @@ export const applySceneBossPatch = (
     damageReduction: normalized.damageReduction ?? boss.damageReduction,
     shield: normalized.shield ?? boss.shield,
     skillValues: normalized.skillValues ?? boss.skillValues,
+    skillOverrides: normalized.skillOverrides ?? boss.skillOverrides,
   };
 };

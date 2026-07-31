@@ -218,7 +218,7 @@ button { font: inherit; cursor: pointer; }
 }
 .hosted-player {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr) auto auto minmax(53px, auto) auto auto auto auto;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto minmax(53px, auto) auto auto auto;
   min-height: 27px;
   align-items: center;
   gap: 6px;
@@ -308,6 +308,150 @@ button { font: inherit; cursor: pointer; }
   color: #dc818c;
 }
 
+.hosted-players-panel {
+  border-color: rgba(123, 83, 137, .52);
+  background:
+    radial-gradient(circle at 100% 0, rgba(118, 65, 132, .14), transparent 48%),
+    rgba(24, 20, 27, .94);
+}
+.hosted-players-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hosted-players-heading .compact-panel-title { margin: 0; }
+.hosted-players-heading > small {
+  overflow: hidden;
+  color: #bfa3c8;
+  font-size: .55rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hosted-character-list,
+.hosted-character-requests {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hosted-character {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(93, 69, 100, .68);
+  border-radius: 7px;
+  padding: 5px 6px;
+  background: rgba(17, 13, 19, .76);
+}
+.hosted-character-summary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(72px, 1fr) auto auto repeat(4, 25px) auto;
+  align-items: center;
+  gap: 5px;
+}
+.hosted-character-summary > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #e0d4e2;
+  font-size: .64rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hosted-character-summary > span {
+  color: #908394;
+  font-size: .52rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.hosted-character-summary > span b {
+  color: #dbc9df;
+  font-variant-numeric: tabular-nums;
+}
+.hosted-character-summary > button,
+.hosted-character-requests button {
+  min-height: 25px;
+  border: 1px solid #6c5575;
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: transparent;
+  color: #d3badb;
+  font-size: .5rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.hosted-character-summary > button:hover:not(:disabled),
+.hosted-character-requests button:hover:not(:disabled) {
+  filter: brightness(1.2);
+  transform: translateY(-1px);
+}
+.hosted-character-summary > button:disabled {
+  border-color: #39323c;
+  color: #6c636e;
+  cursor: default;
+  opacity: .55;
+}
+.hosted-character-summary .hosted-grant-action {
+  border-color: #a04d5f;
+  color: #eba2af;
+}
+.hosted-character-summary .hosted-revoke-action {
+  border-color: #743743;
+  color: #c9828e;
+}
+.hosted-character-summary .hosted-grant-hero {
+  border-color: #b88931;
+  color: #f1cf78;
+}
+.hosted-character-summary .hosted-revoke-hero {
+  border-color: #806329;
+  color: #c5a45e;
+}
+.hosted-character-summary .hosted-unarmed-toggle {
+  border-color: #56515d;
+  color: #8d8791;
+}
+.hosted-character-summary .hosted-unarmed-toggle.is-active {
+  border-color: #8a6b45;
+  color: #dfbc7f;
+  box-shadow: inset 0 0 8px rgba(203, 147, 70, .12);
+}
+.hosted-character-requests {
+  margin-top: 5px;
+  border-top: 1px solid rgba(93, 69, 100, .46);
+  padding-top: 5px;
+}
+.hosted-character-requests li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+}
+.hosted-character-requests span {
+  min-width: 0;
+  overflow: hidden;
+  color: #d7c1dd;
+  font-size: .55rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hosted-character-requests button {
+  border-color: #4e8f78;
+  background: rgba(34, 113, 82, .2);
+  color: #a8e2c9;
+}
+.hosted-character-requests button.is-reject {
+  border-color: #a84f5c;
+  background: rgba(139, 39, 54, .2);
+  color: #efadb5;
+}
+
 .master-error, .library-status-message { margin: 8px 0 0; color: #df7e8a; font-size: .66rem; }
 .scene-customization-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; border-top: 1px solid rgba(77, 64, 80, .5); padding-top: 11px; }
 .scene-customization-actions button { min-height: 36px; border: 1px solid #614c69; border-radius: 8px; background: transparent; color: #ccbcd2; font-size: .68rem; font-weight: 850; transition: border-color .15s ease, color .15s ease, filter .15s ease, transform .15s ease; }
@@ -359,12 +503,12 @@ button { font: inherit; cursor: pointer; }
 .password-reset-field { display: grid; gap: 5px; margin: 10px 0; color: #aaa0ac; font-size: .65rem; font-weight: 800; }
 .password-reset-field input { width: 100%; height: 37px; border: 1px solid #493d4b; border-radius: 7px; padding: 0 9px; background: #110e12; color: #eee6ef; outline: none; }
 .password-reset-field input:focus { border-color: #91617b; }
-.player-profiles-modal { position: relative; width: min(560px, calc(100vw - 32px)); }
-.player-profile-list { display: grid; max-height: min(420px, 60vh); gap: 6px; margin: 13px 0 0; overflow: auto; padding: 0 3px 0 0; list-style: none; }
-.player-profile-list li { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(90px, 1.25fr) auto auto auto; align-items: center; gap: 7px; border: 1px solid #3d3741; border-radius: 7px; padding: 7px; background: #121015; }
+.player-profiles-modal { position: relative; width: min(560px, calc(100vw - 32px)); overflow: hidden; }
+.player-profile-list { display: grid; max-height: min(420px, 60vh); gap: 4px; margin: 11px 0 0; overflow-x: hidden; overflow-y: auto; padding: 0 2px 0 0; list-style: none; }
+.player-profile-list li { display: grid; min-width: 0; grid-template-columns: minmax(68px, 1fr) minmax(64px, 1.08fr) repeat(3, max-content); align-items: center; gap: 4px; border: 1px solid #3d3741; border-radius: 7px; padding: 5px; background: #121015; }
 .player-profile-name { min-width: 0; overflow: hidden; color: #ded4df; font-size: .69rem; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
 .player-profile-list small { min-width: 0; overflow: hidden; color: #817985; font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
-.player-profile-list button { min-height: 28px; border: 1px solid #536d6d; border-radius: 6px; padding: 4px 8px; background: transparent; color: #9ec2be; font-size: .56rem; font-weight: 900; }
+.player-profile-list button { min-width: 0; min-height: 26px; border: 1px solid #536d6d; border-radius: 6px; padding: 3px 5px; background: transparent; color: #9ec2be; font-size: .52rem; font-weight: 900; }
 .player-profile-list button.is-password { border-color: #6c5b78; color: #c3afd2; }
 .player-profile-list button.is-delete,
 .modal-confirm-button.is-delete { border-color: #a84f5c; background: #842b3a; color: #ffd3d8; }

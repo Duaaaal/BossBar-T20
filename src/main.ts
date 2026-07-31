@@ -33,6 +33,7 @@ import {
   applyBattleCommand,
   advanceBossTurn,
   calculateHealthSequence,
+  clampDamageToHealthFloor,
   chooseEncounterSoundIndex,
   createInitialBoss,
   getEncounterSoundEffectKind,
@@ -109,6 +110,7 @@ import {
   emptyEncounterTurnState,
   isAreaDamageRequest,
   isDirectPlayerDamageRequest,
+  linkEncounterRollCorrelation,
   normalizeEncounterFormulaRequest,
   prepareManualInitiative,
   rollInitiativeOrder,
@@ -131,7 +133,9 @@ import {
   type ActiveBossStatus,
 } from './shared/status';
 import {
+  normalizeBossSkillOverrides,
   normalizeBossSkillValues,
+  resolveBossSkillValues,
 } from './shared/boss-skills';
 import {
   deriveStatusAttributes,
@@ -245,6 +249,7 @@ let hostedSessionServer: MultiplayerSessionServer | null = null;
 let hostedSessionPresence: MultiplayerPresence | null = null;
 let playerHudState: PlayerHudState[] = [];
 let encounterTurnState: EncounterTurnState = emptyEncounterTurnState();
+let localEncounterRollSequence = 0;
 let hostedPublicBaseUrl: string | null = null;
 let hostedPublicInviteUrl: string | null = null;
 let hostedQuickTunnel: QuickTunnelHandle | null = null;
@@ -1035,7 +1040,7 @@ const broadcastHostedSessionState = () => {
 };
 
 const broadcastPlayerHuds = () => {
-  for (const window of [playerWindow, controlWindow]) {
+  for (const window of [masterWindow, playerWindow, controlWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send(
         'multiplayer:player-huds-changed',
@@ -1152,7 +1157,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
           ? effective.values.meleeDefense
           : effective.values.rangedDefense;
       },
-      applyBossDamage: (bossId, damage) => {
+      applyBossDamage: (bossId, damage, context) => {
         const before = battleState.bosses.find(
           (candidate) => candidate.id === bossId,
         );
@@ -1163,8 +1168,19 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
             error: 'Chefão não encontrado.',
           };
         }
+        if (context?.nonlethal === true && before.currentHealth <= 1) {
+          return { ok: true, appliedDamage: 0 };
+        }
         rememberAppChange();
-        applyHealthMutation('damage', bossId, Math.max(1, Math.ceil(damage)));
+        applyHealthMutation(
+          'damage',
+          bossId,
+          Math.max(1, Math.ceil(damage)),
+          {
+            critical: context?.critical === true,
+            minimumHealth: context?.nonlethal === true ? 1 : 0,
+          },
+        );
         const after = battleState.bosses.find(
           (candidate) => candidate.id === bossId,
         );
@@ -1239,6 +1255,7 @@ const stopHostedSession = async (
   hostedSessionError = null;
   playerHudState = [];
   encounterTurnState = emptyEncounterTurnState();
+  localEncounterRollSequence = 0;
   broadcastPlayerHuds();
   broadcastEncounterTurnState();
   broadcastHostedSessionState();
@@ -1531,6 +1548,7 @@ const isStoredLibraryBoss = (value: unknown): value is LegacyStoredLibraryBoss =
   (value.rangedDefense === undefined || isFiniteStoredNumber(value.rangedDefense)) &&
   (value.shield === undefined || isFiniteStoredNumber(value.shield)) &&
   isFiniteStoredNumber(value.skills) &&
+  (value.skillOverrides === undefined || Array.isArray(value.skillOverrides)) &&
   isFiniteStoredNumber(value.damageReduction) &&
   typeof value.description === 'string' &&
   (value.actionSeverity === 'normal' || value.actionSeverity === 'grave');
@@ -1552,6 +1570,13 @@ const normalizeStoredLibraryBoss = (
     return null;
   }
 
+  const skillValues = normalizeBossSkillValues(value.skillValues, value.skills);
+  const skillOverrides = normalizeBossSkillOverrides(
+    value.skillOverrides,
+    value.skills,
+    skillValues,
+  );
+
   return {
     bossId: value.bossId?.trim() || fallbackBossId,
     bossName: value.bossName,
@@ -1566,7 +1591,8 @@ const normalizeStoredLibraryBoss = (
       : value.defense,
     shield: value.shield ?? 0,
     skills: value.skills,
-    skillValues: normalizeBossSkillValues(value.skillValues, value.skills),
+    skillValues: resolveBossSkillValues(value.skills, skillValues, skillOverrides),
+    skillOverrides,
     damageReduction: value.damageReduction,
     description: value.description,
     actionSeverity: value.actionSeverity,
@@ -1996,6 +2022,13 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
     const amount = /^[0-9.,/]{1,24}$/.test(rawBoss.amount.trim())
       ? rawBoss.amount.trim()
     : '50';
+    const skillBase = clampInteger(rawBoss.skills as number, -999, 999);
+    const rawSkillValues = normalizeBossSkillValues(rawBoss.skillValues, skillBase);
+    const skillOverrides = normalizeBossSkillOverrides(
+      rawBoss.skillOverrides,
+      skillBase,
+      rawSkillValues,
+    );
     return [{
       bossId: rawBoss.bossId,
       bossName: rawBoss.bossName.trim().slice(0, 100) || 'O Chefão Sem Nome',
@@ -2007,11 +2040,9 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       defense: clampInteger(rawBoss.defense as number, 0, 999),
       rangedDefense: clampInteger(rawBoss.rangedDefense as number, 0, 999),
       shield: clampInteger(rawBoss.shield as number, 0, 999),
-      skills: clampInteger(rawBoss.skills as number, -999, 999),
-      skillValues: normalizeBossSkillValues(
-        rawBoss.skillValues,
-        clampInteger(rawBoss.skills as number, -999, 999),
-      ),
+      skills: skillBase,
+      skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
+      skillOverrides,
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
       description: rawBoss.description.trim().slice(0, 100),
       actionSeverity: rawBoss.actionSeverity,
@@ -2054,6 +2085,7 @@ const captureLibraryEntry = (
     shield: boss.shield,
     skills: boss.skills,
     skillValues: boss.skillValues,
+    skillOverrides: boss.skillOverrides,
     damageReduction: boss.damageReduction,
     description: boss.description,
     actionSeverity: boss.actionSeverity,
@@ -2083,6 +2115,7 @@ const captureLibraryEntry = (
         shield: boss.shield,
         skills: boss.skills,
         skillValues: boss.skillValues,
+        skillOverrides: boss.skillOverrides,
         damageReduction: boss.damageReduction,
         description: boss.nextAction,
         actionSeverity: boss.actionSeverity,
@@ -3440,6 +3473,7 @@ const localInitiativeResult = (
   category: 'initiative',
   createdAt: Date.now(),
   retainedByParticipantId: null,
+  sequence: ++localEncounterRollSequence,
 });
 
 const syncLocalEncounterTurns = () => {
@@ -3454,6 +3488,7 @@ const syncLocalEncounterTurns = () => {
       return;
     }
     encounterTurnState = emptyEncounterTurnState();
+    localEncounterRollSequence = 0;
     broadcastEncounterTurnState();
     return;
   }
@@ -4532,7 +4567,9 @@ ipcMain.handle('battle:get-state', (event) => {
 });
 ipcMain.handle('multiplayer:get-player-huds', (event) => {
   assertAuthorizedIpcSender(
-    isPlayerSender(event.sender.id) || isControlSender(event.sender.id),
+    isMasterSender(event.sender.id) ||
+      isPlayerSender(event.sender.id) ||
+      isControlSender(event.sender.id),
   );
   return playerHudState;
 });
@@ -4585,6 +4622,7 @@ ipcMain.handle(
     if (nextTurnState === encounterTurnState) {
       return { ok: false, error: 'Nenhum participante pode iniciar o turno.' };
     }
+    localEncounterRollSequence = 0;
     encounterTurnState = nextTurnState;
     broadcastEncounterTurnState();
     const active = encounterTurnState.participants.find(
@@ -4661,13 +4699,27 @@ ipcMain.handle(
       category: request.category,
       createdAt: Date.now(),
       retainedByParticipantId: encounterTurnState.activeParticipantId,
+      ...(request.correlationId === undefined
+        ? {}
+        : { correlationId: request.correlationId }),
     };
     if (hostedSessionServer) {
       hostedSessionServer.publishRollResult(result);
     } else {
+      const previousResults = linkEncounterRollCorrelation(
+        encounterTurnState.rollResults ?? [],
+        request.correlationId,
+      );
+      const orderedResult = {
+        ...result,
+        sequence: ++localEncounterRollSequence,
+      };
       encounterTurnState = {
         ...encounterTurnState,
-        rollResults: [...(encounterTurnState.rollResults ?? []), result],
+        rollResults: [
+          ...previousResults,
+          orderedResult,
+        ],
         revision: encounterTurnState.revision + 1,
       };
       broadcastEncounterTurnState();
@@ -5437,14 +5489,16 @@ ipcMain.handle('multiplayer:approve-player', (event, requestId: unknown) => {
 
 ipcMain.handle(
   'multiplayer:approve-action-point',
-  (event, requestId: unknown): PlayerCombatActionResult => {
+  async (event, requestId: unknown): Promise<PlayerCombatActionResult> => {
     if (!isMasterSender(event.sender.id) || typeof requestId !== 'string') {
       return { ok: false, error: 'Ação não autorizada.' };
     }
-    return hostedSessionServer?.approveActionPointRequest(requestId) ?? {
+    return hostedSessionServer
+      ? await hostedSessionServer.approveActionPointRequest(requestId)
+      : {
       ok: false,
       error: 'Não há uma sala hospedada.',
-    };
+        };
   },
 );
 
@@ -5462,12 +5516,72 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
+  'multiplayer:grant-action-point',
+  (event, playerId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof playerId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.grantActionPoint(playerId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
   'multiplayer:grant-hero-point',
   (event, playerId: unknown): PlayerCombatActionResult => {
     if (!isMasterSender(event.sender.id) || typeof playerId !== 'string') {
       return { ok: false, error: 'Ação não autorizada.' };
     }
     return hostedSessionServer?.grantHeroPoint(playerId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:revoke-action-point',
+  (event, playerId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof playerId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.revokeActionPoint(playerId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:revoke-hero-point',
+  (event, playerId: unknown): PlayerCombatActionResult => {
+    if (!isMasterSender(event.sender.id) || typeof playerId !== 'string') {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.revokeHeroPoint(playerId) ?? {
+      ok: false,
+      error: 'Não há uma sala hospedada.',
+    };
+  },
+);
+
+ipcMain.handle(
+  'multiplayer:set-unarmed-strike-enabled',
+  (
+    event,
+    playerId: unknown,
+    enabled: unknown,
+  ): PlayerCombatActionResult => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      typeof playerId !== 'string' ||
+      typeof enabled !== 'boolean'
+    ) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return hostedSessionServer?.setUnarmedStrikeEnabled(playerId, enabled) ?? {
       ok: false,
       error: 'Não há uma sala hospedada.',
     };
@@ -5848,6 +5962,13 @@ const restoreLibraryEntry = (
 
   const loadedBosses = entry.bosses.map((storedBoss) => {
     const maxHealth = clampInteger(storedBoss.maxHealth, 1, 1_000_000);
+    const skillBase = clampInteger(storedBoss.skills, -999, 999);
+    const rawSkillValues = normalizeBossSkillValues(storedBoss.skillValues, skillBase);
+    const skillOverrides = normalizeBossSkillOverrides(
+      storedBoss.skillOverrides,
+      skillBase,
+      rawSkillValues,
+    );
     return {
       id: storedBoss.bossId,
       setupStatus: 'ready' as const,
@@ -5863,11 +5984,9 @@ const restoreLibraryEntry = (
       defense: clampInteger(storedBoss.defense, 0, 999),
       rangedDefense: clampInteger(storedBoss.rangedDefense, 0, 999),
       shield: clampInteger(storedBoss.shield ?? 0, 0, 999),
-      skills: clampInteger(storedBoss.skills, -999, 999),
-      skillValues: normalizeBossSkillValues(
-        storedBoss.skillValues,
-        clampInteger(storedBoss.skills, -999, 999),
-      ),
+      skills: skillBase,
+      skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
+      skillOverrides,
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
       nextAction: storedBoss.description.trim().slice(0, 100),
       actionSeverity: storedBoss.actionSeverity,
@@ -5988,11 +6107,27 @@ const restoreLibraryEntry = (
         defense: clampInteger(template.defense, 0, 999),
         rangedDefense: clampInteger(template.rangedDefense, 0, 999),
         shield: clampInteger(template.shield, 0, 999),
-        skills: clampInteger(template.skills, -999, 999),
-        skillValues: normalizeBossSkillValues(
-          template.skillValues,
-          clampInteger(template.skills, -999, 999),
-        ),
+        ...(() => {
+          const skillBase = clampInteger(template.skills, -999, 999);
+          const rawSkillValues = normalizeBossSkillValues(
+            template.skillValues,
+            skillBase,
+          );
+          const skillOverrides = normalizeBossSkillOverrides(
+            template.skillOverrides,
+            skillBase,
+            rawSkillValues,
+          );
+          return {
+            skills: skillBase,
+            skillValues: resolveBossSkillValues(
+              skillBase,
+              rawSkillValues,
+              skillOverrides,
+            ),
+            skillOverrides,
+          };
+        })(),
         damageReduction: clampInteger(template.damageReduction, 0, 999),
         nextAction: template.description,
         actionSeverity: template.actionSeverity,
@@ -7106,6 +7241,10 @@ const applyHealthMutation = (
   type: 'damage' | 'heal' | 'reset-health',
   bossId: string,
   amount = 0,
+  options: {
+    critical?: boolean;
+    minimumHealth?: number;
+  } = {},
 ) => {
   const previousBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!previousBoss) return;
@@ -7117,6 +7256,27 @@ const applyHealthMutation = (
   battleState = applyBattleCommand(battleState, command);
   if (type === 'damage') {
     battleState = clampSceneOverflowDamage(battleState, previousBoss);
+    const minimumHealth = Math.max(
+      0,
+      Math.min(previousBoss.maxHealth, Math.trunc(options.minimumHealth ?? 0)),
+    );
+    if (minimumHealth > 0 && previousBoss.currentHealth > 0) {
+      battleState = {
+        ...battleState,
+        bosses: battleState.bosses.map((boss) =>
+          boss.id === bossId
+            ? {
+              ...boss,
+              currentHealth: clampDamageToHealthFloor(
+                previousBoss.currentHealth,
+                boss.currentHealth,
+                minimumHealth,
+              ),
+            }
+            : boss
+        ),
+      };
+    }
   }
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!nextBoss) return;
@@ -7131,7 +7291,11 @@ const applyHealthMutation = (
       id: healthEffectSequence,
       bossId,
       type: type === 'damage' ? 'damage' : 'heal',
-      intensity: type === 'reset-health' ? 'full' : 'normal',
+      intensity: type === 'reset-health'
+        ? 'full'
+        : type === 'damage' && options.critical
+          ? 'critical'
+          : 'normal',
       from: previousBoss.currentHealth,
       to: nextBoss.currentHealth,
       maximum: nextBoss.maxHealth,
@@ -7272,10 +7436,10 @@ ipcMain.handle(
 
 ipcMain.handle(
   'player-combat:direct-damage',
-  (
+  async (
     event,
     request: DirectPlayerDamageRequest,
-  ): PlayerTargetActionResult => {
+  ): Promise<PlayerTargetActionResult> => {
     if (!isEncounterControllerSender(event.sender.id)) {
       return {
         ok: false,
@@ -7294,7 +7458,7 @@ ipcMain.handle(
           : 'Não há uma sessão multiplayer hospedada.',
       };
     }
-    return hostedSessionServer.applyDirectPlayerDamage(request);
+    return await hostedSessionServer.applyDirectPlayerDamage(request);
   },
 );
 

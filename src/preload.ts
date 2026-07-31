@@ -258,6 +258,27 @@ const bossAPI = {
     playerId: string,
   ): Promise<PlayerCombatActionResult> =>
     ipcRenderer.invoke('multiplayer:grant-hero-point', playerId),
+  grantHostedActionPoint: (
+    playerId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:grant-action-point', playerId),
+  revokeHostedHeroPoint: (
+    playerId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:revoke-hero-point', playerId),
+  revokeHostedActionPoint: (
+    playerId: string,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke('multiplayer:revoke-action-point', playerId),
+  setHostedUnarmedStrikeEnabled: (
+    playerId: string,
+    enabled: boolean,
+  ): Promise<PlayerCombatActionResult> =>
+    ipcRenderer.invoke(
+      'multiplayer:set-unarmed-strike-enabled',
+      playerId,
+      enabled,
+    ),
   setCharacterPrivate: async () => ({
     ok: false,
     error: 'A privacidade é controlada pelo próprio jogador no navegador.',

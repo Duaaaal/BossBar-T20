@@ -18,7 +18,10 @@ import {
 } from './custom-status-library.ts';
 import {
   createBossSkillValues,
+  normalizeBossSkillOverrides,
   normalizeBossSkillValues,
+  resolveBossSkillValues,
+  type BossSkillOverrides,
   type BossSkillValues,
 } from './boss-skills.ts';
 
@@ -39,6 +42,7 @@ export type BossState = {
   shield: number;
   skills: number;
   skillValues: BossSkillValues;
+  skillOverrides: BossSkillOverrides;
   damageReduction: number;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
@@ -72,7 +76,7 @@ export type HealthEffect = {
   id: number;
   bossId: string;
   type: 'damage' | 'heal';
-  intensity: 'normal' | 'full';
+  intensity: 'normal' | 'full' | 'critical';
   from: number;
   to: number;
   maximum: number;
@@ -104,7 +108,29 @@ export type RandomIntGenerator = (
 
 export const isHeavyDamageEffect = (effect: HealthEffect) =>
   effect.type === 'damage' &&
-  effect.from - effect.to > effect.maximum * 0.1;
+  effect.intensity === 'critical';
+
+/**
+ * Preserves a configured health floor after damage without reviving an
+ * already-defeated target. This is used by nonlethal attacks, whose floor is
+ * one hit point.
+ */
+export const clampDamageToHealthFloor = (
+  previousHealth: number,
+  nextHealth: number,
+  minimumHealth: number,
+) => {
+  const normalizedPrevious = Math.max(0, Math.trunc(previousHealth));
+  const normalizedNext = Math.max(0, Math.trunc(nextHealth));
+  const normalizedMinimum = Math.max(0, Math.trunc(minimumHealth));
+  if (normalizedPrevious <= 0 || normalizedMinimum <= 0) {
+    return normalizedNext;
+  }
+  return Math.max(
+    normalizedNext,
+    Math.min(normalizedPrevious, normalizedMinimum),
+  );
+};
 
 export const isShieldBreakEffect = (effect: HealthEffect) =>
   effect.type === 'damage' && effect.shieldFrom > 0 && effect.shieldTo === 0;
@@ -469,6 +495,7 @@ export type BattleCommand =
       shield: number;
       skills: number;
       skillValues?: BossSkillValues;
+      skillOverrides?: BossSkillOverrides;
       damageReduction: number;
       controlAmount?: string;
       applyDamageReduction?: boolean;
@@ -524,7 +551,8 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   shield: 0,
   skills: 10,
   skillValues: createBossSkillValues(10),
-  damageReduction: 10,
+  skillOverrides: [],
+  damageReduction: 0,
   nextAction: '',
   actionSeverity: 'normal',
   turnCount: 0,
@@ -570,6 +598,11 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
             Object.values(command.skillValues).every(
               (skill) => typeof skill === 'number' && Number.isFinite(skill),
             )
+          )) &&
+        (command.skillOverrides === undefined ||
+          (
+            Array.isArray(command.skillOverrides) &&
+            command.skillOverrides.every((skill) => typeof skill === 'string')
           )) &&
         (command.controlAmount === undefined ||
           typeof command.controlAmount === 'string') &&
@@ -692,6 +725,17 @@ export const applyBattleCommand = (
             ? maxHealth
             : Math.min(boss.currentHealth, maxHealth)
           : clampInteger(command.currentHealth, 0, maxHealth);
+        const normalizedSkillValues = normalizeBossSkillValues(
+          command.skillValues ?? boss.skillValues,
+          clampInteger(command.skills, -999, 999),
+        );
+        const skillOverrides = normalizeBossSkillOverrides(
+          command.skillOverrides ?? (
+            command.skillValues === undefined ? boss.skillOverrides : undefined
+          ),
+          clampInteger(command.skills, -999, 999),
+          normalizedSkillValues,
+        );
         return {
           ...boss,
           setupStatus: 'ready',
@@ -713,10 +757,12 @@ export const applyBattleCommand = (
           rangedDefense: clampInteger(command.rangedDefense ?? command.defense, 0, 999),
           shield: clampInteger(command.shield, 0, 999),
           skills: clampInteger(command.skills, -999, 999),
-          skillValues: normalizeBossSkillValues(
-            command.skillValues ?? boss.skillValues,
+          skillValues: resolveBossSkillValues(
             clampInteger(command.skills, -999, 999),
+            normalizedSkillValues,
+            skillOverrides,
           ),
+          skillOverrides,
           damageReduction: clampInteger(command.damageReduction, 0, 999),
         };
       });

@@ -117,14 +117,19 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await firstPage.locator('#web-player-sheet-input').setInputFiles({
       name: 'ficha-valora.pdf',
       mimeType: 'application/pdf',
-      buffer: await createEditableCharacterSheet(),
+      buffer: await createEditableCharacterSheet({ autoFixIssue: true }),
     });
     await expect(firstPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
+    await expect(firstPage.locator('#web-player-sheet-fix')).toBeVisible();
+    await firstPage.locator('#web-player-sheet-fix').click();
+    await expect(firstPage.locator('#web-player-sheet-status')).toContainText(
+      'Os campos objetivamente corrigíveis foram atualizados.',
+    );
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
-    await expect.poll(() => sheetTicketRequests).toBe(1);
+    await expect.poll(() => sheetTicketRequests).toBe(2);
     await firstPage.locator('#web-player-sheet-close').click();
 
     const characterHud = firstPage.locator('#web-player-character-hud');
@@ -136,6 +141,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(firstPage.locator('#web-player-character-defense-ranged')).toHaveText('AaD 10');
     await firstPage.locator('#web-player-character-expand').click();
     await expect(firstPage.locator('#web-player-character-details')).toBeVisible();
+    await expect(characterHud).toHaveCSS('z-index', '2147483647');
     await expect(firstPage.locator('#web-player-character-class-level')).toContainText('Guerreiro');
     await expect(firstPage.locator('#web-player-character-class-level')).not.toHaveAttribute('data-calculation');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('Modificadores de atributo');
@@ -214,7 +220,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       renewedSheetRequestPromise,
     ]);
     expect(renewedSheetRequest.url()).toBe(pdfUrl);
-    expect(sheetTicketRequests).toBe(1);
+    expect(sheetTicketRequests).toBe(2);
     await renewedSheetPopup.close();
     await firstPage.locator('#web-player-sheet-selection-remove').click();
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeHidden();

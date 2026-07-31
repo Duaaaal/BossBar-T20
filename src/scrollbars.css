@@ -40,8 +40,9 @@ input[type="number"]::-webkit-outer-spin-button {
   font-size: .64rem;
   font-weight: 700;
   line-height: 1.2;
+  overflow-wrap: anywhere;
   pointer-events: none;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 * {

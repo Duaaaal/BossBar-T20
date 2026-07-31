@@ -4,17 +4,32 @@ import {
   advanceEncounterTurns,
   actionPointRecoveryFormulas,
   beginEncounterTurns,
+  createUnarmedAttack,
+  criticalDamageExpression,
   emptyEncounterTurnState,
   formatEncounterDiceRolls,
   isAreaDamageRequest,
+  isDirectPlayerDamageRequest,
   isPlayerCombatActionRequest,
+  linkEncounterRollCorrelation,
+  normalizeActionPointCount,
+  normalizeEncounterFormulaRequest,
+  normalizeHeroPointCount,
+  attackTestFormulaExpression,
+  parseAttackTestFormula,
+  parseCriticalProfile,
   personalizeEncounterTurnState,
   prepareManualInitiative,
   resolveAreaDamage,
   resolveAttackCheck,
+  resolveExtremeAdvantage,
   rollInitiativeOrder,
   rollManualInitiative,
+  rollAttackTestExtraDice,
+  rollCriticalDamageFormulaDetailed,
+  splitDamageIntoHits,
 } from '../src/shared/player-combat.ts';
+import { parseDamageFormula } from '../src/shared/status.ts';
 
 const playerState = (overrides = {}) => ({
   clientId: 'client-1',
@@ -27,10 +42,14 @@ const playerState = (overrides = {}) => ({
   defenseRanged: 18,
   reflex: 7,
   statuses: [],
+  actionPoints: 1,
+  heroPoints: 1,
   actionPointAvailable: true,
-  heroPointAvailable: false,
+  heroPointAvailable: true,
+  unarmedStrikeEnabled: true,
   temporaryDefenseBonus: 0,
   protectionExpiresAtRound: null,
+  criticalImpactId: null,
   revision: 3,
   ...overrides,
 });
@@ -62,6 +81,91 @@ test('valida ações de perícia, ataque e recursos especiais sem aceitar fórmu
     damageFormula: 'process.exit()',
     resource: null,
   }), false);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'resource',
+    resource: 'hero-point',
+    ability: 'activate-power',
+    actionId: '<script>alert(1)</script>',
+  }), false);
+});
+
+test('normaliza e preserva correlação segura em rolagens de fórmula', () => {
+  assert.deepEqual(normalizeEncounterFormulaRequest({
+    participantId: 'boss:boss-1',
+    label: 'Derrubar',
+    formula: '1d20 + 8',
+    category: 'test',
+    correlationId: 'opposed-check:round-3',
+  }), {
+    participantId: 'boss:boss-1',
+    label: 'Derrubar',
+    formula: '1d20 + 8',
+    category: 'test',
+    correlationId: 'opposed-check:round-3',
+  });
+  assert.deepEqual(normalizeEncounterFormulaRequest({
+    participantId: 'boss:boss-1',
+    label: 'Iniciativa',
+    formula: '1d20 + 4',
+    category: 'initiative',
+  }), {
+    participantId: 'boss:boss-1',
+    label: 'Iniciativa',
+    formula: '1d20 + 4',
+    category: 'initiative',
+  });
+  assert.equal(normalizeEncounterFormulaRequest({
+    participantId: 'boss:boss-1',
+    label: 'Derrubar',
+    formula: '1d20 + 8',
+    category: 'test',
+    correlationId: '<script>alert(1)</script>',
+  }), null);
+  assert.equal(normalizeEncounterFormulaRequest({
+    participantId: 'boss:boss-1',
+    label: 'Derrubar',
+    formula: '1d20 + 8',
+    category: 'test',
+    correlationId: 'short',
+  }), null);
+});
+
+test('vincula o resultado local anterior por id ou identidade da ação', () => {
+  const existing = [{
+    id: 'roll:derrubar:1',
+    actionId: 'opposed-action:round-3',
+    participantId: 'boss:boss-1',
+    label: 'Derrubar',
+    expression: '1d20 + 8',
+    rolls: [12],
+    modifier: 8,
+    total: 20,
+    outcome: 'neutral',
+    category: 'test',
+    createdAt: 1,
+    retainedByParticipantId: null,
+  }];
+  const linkedByAction = linkEncounterRollCorrelation(
+    existing,
+    'opposed-action:round-3',
+  );
+  assert.equal(
+    linkedByAction[0].correlationId,
+    'opposed-action:round-3',
+  );
+  assert.notEqual(linkedByAction, existing);
+
+  const linkedById = linkEncounterRollCorrelation(
+    existing,
+    'roll:derrubar:1',
+  );
+  assert.equal(linkedById[0].correlationId, 'roll:derrubar:1');
+
+  const unchanged = linkEncounterRollCorrelation(
+    existing,
+    'unrelated-action:round-3',
+  );
+  assert.equal(unchanged, existing);
 });
 
 test('usa patamares oficiais para a recuperação do Ponto de Ação', () => {
@@ -80,6 +184,102 @@ test('seleciona a defesa correspondente ao ataque e respeita resultados naturais
   assert.equal(resolveAttackCheck(4, 15, 10).success, false);
   assert.equal(resolveAttackCheck(-999, 999, 20).success, true);
   assert.equal(resolveAttackCheck(999, 0, 1).success, false);
+});
+
+test('normaliza até cinco Pontos de Ação e um Ponto Heróico preservando estados legados', () => {
+  assert.equal(normalizeActionPointCount(9, false), 5);
+  assert.equal(normalizeActionPointCount(-2, true), 0);
+  assert.equal(normalizeActionPointCount(undefined, true), 1);
+  assert.equal(normalizeActionPointCount(undefined, false), 0);
+  assert.equal(normalizeHeroPointCount(4, false), 1);
+  assert.equal(normalizeHeroPointCount(undefined, true), 1);
+  assert.equal(normalizeHeroPointCount(undefined, false), 0);
+});
+
+test('cria Punhos canônicos pela ficha e ajusta o dado conforme o tamanho', () => {
+  const summary = {
+    attributes: { for: 3 },
+    skills: [{ id: '190', name: 'Luta', total: 8 }],
+    size: 'Médio',
+  };
+  assert.deepEqual(createUnarmedAttack(summary), {
+    source: { kind: 'unarmed' },
+    name: 'Punhos',
+    attackBonus: 8,
+    damageFormula: '1d3 + 3',
+    criticalThreat: 20,
+    criticalMultiplier: 2,
+    damageType: 'Impacto',
+    range: 'Adjacente',
+    nonlethal: true,
+  });
+  assert.equal(
+    createUnarmedAttack({ ...summary, size: 'Colossal' }).damageFormula,
+    '1d8 + 3',
+  );
+});
+
+test('interpreta a margem crítica e multiplica apenas os dados da arma', () => {
+  assert.deepEqual(parseCriticalProfile('19/x3'), {
+    threat: 19,
+    multiplier: 3,
+  });
+  assert.deepEqual(parseCriticalProfile('x4'), {
+    threat: 20,
+    multiplier: 4,
+  });
+  const formula = parseDamageFormula('1d8 + 1d6 + 3');
+  assert.ok(formula);
+  const values = [8, 7, 6, 5];
+  let index = 0;
+  const result = rollCriticalDamageFormulaDetailed(
+    formula,
+    3,
+    () => values[index++],
+  );
+  assert.deepEqual(result.rolls, [8, 7, 6, 5]);
+  assert.equal(result.total, 29);
+  assert.equal(result.modifier, 3);
+  assert.equal(criticalDamageExpression(formula, 3), '3d8 + 1d6 + 3');
+});
+
+test('combina o teste da arma com Luta ou Pontaria', () => {
+  const parsed = parseAttackTestFormula('1d20 + 1d6 + 5');
+  assert.equal(attackTestFormulaExpression(parsed, 12), '1d20 + 1d6 + 5 + 12');
+  assert.equal(
+    attackTestFormulaExpression(parseAttackTestFormula('2d20 + 3'), 12, 2),
+    '3d20 + 3 + 12',
+  );
+  const rolled = rollAttackTestExtraDice(parsed, (minimum) => minimum);
+  assert.deepEqual(rolled.rolls, [1]);
+  assert.equal(rolled.total, 6);
+});
+
+test('usa 1d20 quando o teste de ataque está vazio ou ilegível', () => {
+  assert.equal(attackTestFormulaExpression(parseAttackTestFormula(''), 8), '1d20 + 8');
+  assert.equal(
+    attackTestFormulaExpression(parseAttackTestFormula('texto ilegível'), -2),
+    '1d20 - 2',
+  );
+  assert.equal(
+    attackTestFormulaExpression(parseAttackTestFormula('+5'), 12),
+    '1d20 + 12',
+  );
+  assert.equal(
+    attackTestFormulaExpression(parseAttackTestFormula('5'), 12),
+    '1d20 + 5 + 12',
+  );
+});
+
+test('extrema vantagem soma dois d20 como um resultado natural limitado a 20', () => {
+  assert.deepEqual(resolveExtremeAdvantage(13, 16), {
+    rolls: [13, 16],
+    chosenDie: 20,
+  });
+  assert.deepEqual(resolveExtremeAdvantage(1, 1), {
+    rolls: [1, 1],
+    chosenDie: 2,
+  });
 });
 
 const areaDamage = (overrides = {}) => ({
@@ -149,7 +349,7 @@ test('aplica zero de dano quando a regra do sucesso Ã© evitar o dano', () => {
   assert.equal(impact.playerState.currentHealth, 40);
 });
 
-test('limita PV ao mÃ¡ximo antes do impacto e nunca deixa a vida negativa', () => {
+test('limita PV ao máximo antes do impacto e preserva dano excedente negativo', () => {
   const overMaximum = playerState({ currentHealth: 60, maxHealth: 40 });
   const impact = resolveAreaDamage(
     overMaximum,
@@ -159,8 +359,8 @@ test('limita PV ao mÃ¡ximo antes do impacto e nunca deixa a vida negativa', ()
   );
 
   assert.equal(impact.damage.healthBefore, 40);
-  assert.equal(impact.damage.healthAfter, 0);
-  assert.equal(impact.playerState.currentHealth, 0);
+  assert.equal(impact.damage.healthAfter, -60);
+  assert.equal(impact.playerState.currentHealth, -60);
   assert.equal(impact.playerState.revision, 4);
   assert.equal(overMaximum.currentHealth, 60);
   assert.equal(overMaximum.revision, 3);
@@ -168,10 +368,33 @@ test('limita PV ao mÃ¡ximo antes do impacto e nunca deixa a vida negativa', ()
 
 test('aceita somente requisiÃ§Ãµes de dano em Ã¡rea dentro dos limites', () => {
   assert.equal(isAreaDamageRequest(areaDamage()), true);
+  assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 5 }), true);
+  assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 0 }), false);
+  assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 1_001 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), damage: -1 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), damage: 1.5 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), reflexDc: 1000 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), successRule: 'quarter' }), false);
+});
+
+test('parcela dano sem inflar nem perder o total autoritativo', () => {
+  assert.deepEqual(splitDamageIntoHits(100, 3), [34, 33, 33]);
+  assert.deepEqual(splitDamageIntoHits(3, 5), [1, 1, 1, 0, 0]);
+  assert.equal(
+    splitDamageIntoHits(999_999, 1_000)
+      .reduce((total, parcel) => total + parcel, 0),
+    999_999,
+  );
+  assert.equal(isDirectPlayerDamageRequest({
+    playerIds: ['player-1'],
+    damage: 100,
+    hits: 5,
+  }), true);
+  assert.equal(isDirectPlayerDamageRequest({
+    playerIds: ['player-1'],
+    damage: 100,
+    hits: 0,
+  }), false);
 });
 
 test('ordena iniciativa e desempata pelo maior modificador', () => {

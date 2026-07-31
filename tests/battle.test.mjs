@@ -4,6 +4,7 @@ import {
   applyBattleCommand,
   advanceBossTurn,
   calculateHealthSequence,
+  clampDamageToHealthFloor,
   chooseEncounterSoundIndex,
   chooseNonRepeatingIndex,
   createInitialBoss,
@@ -116,6 +117,10 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.shield, 999);
 });
 
+test('inicia novos chefões com RD zero', () => {
+  assert.equal(createInitialBoss('boss-default').damageReduction, 0);
+});
+
 test('configura vida atual e perícias exatas sem perder compatibilidade com o valor base', () => {
   const skillValues = Object.fromEntries(
     Object.keys(freshBattle().bosses[0].skillValues).map((id) => [id, 18]),
@@ -142,6 +147,41 @@ test('configura vida atual e perícias exatas sem perder compatibilidade com o v
   assert.equal(boss.skills, 18);
   assert.equal(boss.skillValues.iniciativa, 27);
   assert.equal(boss.skillValues.reflexos, 18);
+});
+
+test('uma nova base atualiza somente perícias que continuam herdadas', () => {
+  const initialSkills = freshBattle().bosses[0].skillValues;
+  let state = applyBattleCommand(freshBattle(), {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Sentinela',
+    maxHealth: 500,
+    attack: 10,
+    rangedAttack: 10,
+    defense: 20,
+    shield: 0,
+    skills: 10,
+    skillValues: initialSkills,
+    skillOverrides: ['iniciativa'],
+    damageReduction: 0,
+  });
+  state = applyBattleCommand(state, {
+    type: 'configure',
+    bossId: 'boss-1',
+    bossName: 'Sentinela',
+    maxHealth: 500,
+    attack: 14,
+    rangedAttack: 14,
+    defense: 20,
+    shield: 0,
+    skills: 14,
+    skillValues: { ...state.bosses[0].skillValues, iniciativa: 10 },
+    skillOverrides: ['iniciativa'],
+    damageReduction: 0,
+  });
+
+  assert.equal(state.bosses[0].skillValues.iniciativa, 10);
+  assert.equal(state.bosses[0].skillValues.reflexos, 14);
 });
 
 test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () => {
@@ -298,7 +338,7 @@ test('valida comandos limitados aos 20 botões do soundboard', () => {
   assert.equal(isSoundboardCommand({ type: 'set-volume', volume: Number.NaN }), false);
 });
 
-test('só considera pesado o golpe que remove mais de dez por cento da vida', () => {
+test('só considera pesado o golpe marcado explicitamente como crítico', () => {
   const effect = {
     id: 1,
     bossId: 'boss-1',
@@ -311,8 +351,28 @@ test('só considera pesado o golpe que remove mais de dez por cento da vida', ()
     shieldTo: 0,
   };
   assert.equal(isHeavyDamageEffect(effect), false);
-  assert.equal(isHeavyDamageEffect({ ...effect, to: 449 }), true);
-  assert.equal(isHeavyDamageEffect({ ...effect, type: 'heal', to: 300 }), false);
+  assert.equal(isHeavyDamageEffect({ ...effect, to: 1 }), false);
+  assert.equal(
+    isHeavyDamageEffect({ ...effect, intensity: 'critical' }),
+    true,
+  );
+  assert.equal(
+    isHeavyDamageEffect({
+      ...effect,
+      type: 'heal',
+      intensity: 'critical',
+      to: 500,
+    }),
+    false,
+  );
+});
+
+test('preserva o piso não letal sem ressuscitar um alvo derrotado', () => {
+  assert.equal(clampDamageToHealthFloor(20, 0, 1), 1);
+  assert.equal(clampDamageToHealthFloor(1, 0, 1), 1);
+  assert.equal(clampDamageToHealthFloor(0, 0, 1), 0);
+  assert.equal(clampDamageToHealthFloor(20, 7, 1), 7);
+  assert.equal(clampDamageToHealthFloor(20, 0, 0), 0);
 });
 
 test('consome um ponto de escudo por golpe antes de atingir a vida', () => {
@@ -379,6 +439,7 @@ test('consome um ponto de escudo por golpe antes de atingir a vida', () => {
     ...breakEffect,
     from: 500,
     to: 449,
+    intensity: 'critical',
     shieldFrom: 0,
     shieldTo: 0,
   }), 'critical-damage');

@@ -111,9 +111,11 @@ export type HostedTestSession = {
 export const createEditableCharacterSheet = async ({
   characterName = 'Valora',
   playerName = 'Jogador Ferramentas',
+  autoFixIssue = false,
 }: {
   characterName?: string;
   playerName?: string;
+  autoFixIssue?: boolean;
 } = {}) => {
   const document = await PDFDocument.create();
   const page = document.addPage([600, 800]);
@@ -133,7 +135,7 @@ export const createEditableCharacterSheet = async ({
     Car: '10', ModCar: '0',
     'PVs Totais': '21', 'PVs Atuais': '21',
     'PMs Totais': '3', 'PMs Atuais': '3',
-    CA: '10', 'Base CA': '10', 'B.Arm': '0', 'B.Esc': '0',
+    CA: autoFixIssue ? '99' : '10', 'Base CA': '10', 'B.Arm': '0', 'B.Esc': '0',
     'Outros B.CA': '0', ModAtribDefe: '0',
     TesteResist: '10', ModAtribMagia: '0',
     Desloc: '9m', SeleTamanho: 'Médio', CargaTotal: '3',

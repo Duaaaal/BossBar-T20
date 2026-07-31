@@ -1,12 +1,15 @@
 import type { CharacterSheetSummary } from './character-sheet';
-import type { ActiveBossStatus } from './status';
 import {
   normalizeDamageFormula,
   parseDamageFormula,
+  type ActiveBossStatus,
+  type DamageFormulaRoll,
+  type ParsedDamageFormula,
 } from './status.ts';
 
 export type AreaDamageSuccessRule = 'half' | 'none';
 export type AttackType = 'melee' | 'ranged';
+export type EncounterFaction = 'players' | 'bosses';
 
 export type PlayerEncounterState = {
   clientId: string;
@@ -19,10 +22,17 @@ export type PlayerEncounterState = {
   defenseRanged: number;
   reflex: number;
   statuses: ActiveBossStatus[];
+  actionPoints: number;
+  heroPoints: number;
+  /** @deprecated Use actionPoints. Kept during the multiplayer protocol migration. */
   actionPointAvailable: boolean;
+  /** @deprecated Use heroPoints. Kept during the multiplayer protocol migration. */
   heroPointAvailable: boolean;
+  unarmedStrikeEnabled: boolean;
   temporaryDefenseBonus: number;
   protectionExpiresAtRound: number | null;
+  /** Changes only when this character receives a critical combat impact. */
+  criticalImpactId: number | null;
   revision: number;
 };
 
@@ -47,9 +57,16 @@ export type PlayerHudState = {
   defenseMelee: number | null;
   defenseRanged: number | null;
   statuses: ActiveBossStatus[];
+  faction: EncounterFaction;
+  actionPoints: number | null;
+  heroPoints: number | null;
+  /** @deprecated Use actionPoints. Kept during the multiplayer protocol migration. */
   actionPointAvailable: boolean | null;
+  /** @deprecated Use heroPoints. Kept during the multiplayer protocol migration. */
   heroPointAvailable: boolean | null;
+  unarmedStrikeEnabled: boolean;
   temporaryDefenseBonus: number | null;
+  criticalImpactId: number | null;
   summary: CharacterSheetSummary | null;
   actions: PlayerHudActionState;
   revision: number;
@@ -62,6 +79,7 @@ export type EncounterTurnParticipant = {
   kind: EncounterActorKind;
   sourceId: string;
   name: string;
+  faction?: EncounterFaction;
   initiativeModifier: number;
   initiativeRoll: number;
   initiativeTotal: number;
@@ -89,7 +107,15 @@ export type EncounterRollResult = {
   retainedByParticipantId: string | null;
   visibility?: EncounterRollVisibility;
   resourceEffect?: 'action-point' | 'hero-point';
-  rollMode?: 'sum' | 'keep-highest';
+  rollMode?: 'sum' | 'sum-capped' | 'reroll';
+  /** Monotonic order assigned by the authoritative encounter server. */
+  sequence?: number;
+  /** Stable identity shared by every result produced by one action. */
+  actionId?: string;
+  /** Links opposed or otherwise related actions without exposing hidden values. */
+  correlationId?: string;
+  critical?: boolean;
+  criticalMultiplier?: number;
 };
 
 export type EncounterTurnState = {
@@ -113,6 +139,8 @@ export type EncounterFormulaRollRequest = {
   label: string;
   formula: string;
   category: EncounterRollResult['category'];
+  /** Links this roll to an opposed or otherwise related action. */
+  correlationId?: string;
 };
 
 export type EncounterFormulaRollResult = {
@@ -130,15 +158,76 @@ export type PlayerSkillTestRequest = {
   kind: 'skill';
   skillId: string;
   resource: PlayerResourceUse;
+  actionId?: string;
+  correlationId?: string;
+};
+
+export type PlayerAttackSource =
+  | { kind: 'sheet'; attackIndex: number }
+  | { kind: 'unarmed' };
+
+export type CanonicalAttack = {
+  source: PlayerAttackSource;
+  name: string;
+  attackBonus: number;
+  damageFormula: string;
+  criticalThreat: number;
+  criticalMultiplier: number;
+  damageType: string;
+  range: string;
+  nonlethal: boolean;
+};
+
+export const UNARMED_ATTACK = Object.freeze({
+  source: { kind: 'unarmed' },
+  name: 'Punhos',
+  damageFormula: '1d3',
+  criticalThreat: 20,
+  criticalMultiplier: 2,
+  damageType: 'Impacto',
+  range: 'Adjacente',
+  nonlethal: true,
+} as const);
+
+const unarmedDamageDieForSize = (size: string) => {
+  const normalized = size.trim().toLocaleLowerCase('pt-BR');
+  if (normalized.includes('colossal')) return '1d8';
+  if (normalized.includes('enorme')) return '1d6';
+  if (normalized.includes('grande')) return '1d4';
+  return '1d3';
+};
+
+export const createUnarmedAttack = (
+  summary: CharacterSheetSummary,
+): CanonicalAttack => {
+  const strength = summary.attributes.for ?? 0;
+  const luta = summary.skills.find(
+    ({ id, name }) =>
+      id === '190' || name.trim().toLocaleLowerCase('pt-BR') === 'luta',
+  )?.total ?? 0;
+  const damageDie = unarmedDamageDieForSize(summary.size);
+  return {
+    ...UNARMED_ATTACK,
+    source: { kind: 'unarmed' },
+    attackBonus: luta,
+    damageFormula:
+      strength === 0
+        ? damageDie
+        : `${damageDie} ${strength > 0 ? '+' : '-'} ${Math.abs(strength)}`,
+  };
 };
 
 export type PlayerAttackRequest = {
   kind: 'attack';
-  attackIndex: number;
+  /** @deprecated Prefer attackSource. */
+  attackIndex?: number;
+  attackSource?: PlayerAttackSource;
   attackType: AttackType;
   targetBossId: string;
   damageFormula: string;
   resource: PlayerResourceUse;
+  actionId?: string;
+  correlationId?: string;
 };
 
 export type PlayerStandaloneResourceRequest =
@@ -146,11 +235,15 @@ export type PlayerStandaloneResourceRequest =
     kind: 'resource';
     resource: 'action-point';
     ability: 'protection' | 'recovery';
+    actionId?: string;
+    correlationId?: string;
   }
   | {
     kind: 'resource';
     resource: 'hero-point';
     ability: 'activate-power';
+    actionId?: string;
+    correlationId?: string;
   };
 
 export type PlayerCombatActionRequest =
@@ -171,6 +264,7 @@ export type PendingActionPointRequest = {
   playerName: string;
   label: string;
   requestedAt: number;
+  actionId?: string;
 };
 
 export type PlayerResourceNotice = {
@@ -198,6 +292,8 @@ export type ResolvedPlayerAttackAgainstBoss = {
   damage: number;
   damageFormula: string;
   damageRolls: number[];
+  critical: boolean;
+  criticalMultiplier: number;
 };
 
 export type InitiativeActor = Pick<
@@ -449,14 +545,35 @@ export const normalizeEncounterFormulaRequest = (
     !parseDamageFormula(candidate.formula) ||
     !['initiative', 'test', 'attack', 'damage', 'status'].includes(
       candidate.category ?? '',
-    )
+    ) ||
+    !isSafeActionIdentity(candidate.correlationId)
   ) return null;
   return {
     participantId: candidate.participantId,
     label: candidate.label.trim(),
     formula: normalizeDamageFormula(candidate.formula)!,
     category: candidate.category!,
+    ...(candidate.correlationId === undefined
+      ? {}
+      : { correlationId: candidate.correlationId }),
   };
+};
+
+export const linkEncounterRollCorrelation = (
+  results: EncounterRollResult[],
+  correlationId: string | undefined,
+): EncounterRollResult[] => {
+  if (correlationId === undefined) return results;
+  let changed = false;
+  const linkedResults = results.map((result) => {
+    if (result.correlationId === correlationId) return result;
+    if (result.actionId !== correlationId && result.id !== correlationId) {
+      return result;
+    }
+    changed = true;
+    return { ...result, correlationId };
+  });
+  return changed ? linkedResults : results;
 };
 
 export const advanceEncounterTurns = (
@@ -558,24 +675,36 @@ export const personalizeEncounterTurnState = (
 
 export type AreaDamageRequest = {
   damage: number;
+  damageFormula?: string;
+  /** Splits the resolved total into this many consecutive impacts. */
+  hits?: number;
   reflexDc: number;
   successRule: AreaDamageSuccessRule;
   playerIds?: string[];
+  attackerParticipantId?: string;
+  actionId?: string;
+  correlationId?: string;
 };
 
 export type AreaDamageResult = {
   ok: boolean;
   appliedPlayers: number;
   skippedPlayers: string[];
+  rolledDamage?: number;
   error?: string;
 };
 
 export type DirectPlayerDamageRequest = {
   playerIds: string[];
   damage: number;
+  damageFormula?: string;
+  /** Splits the resolved total into this many consecutive impacts. */
+  hits?: number;
   attackType?: AttackType;
   attackBonus?: number;
   attackerParticipantId?: string;
+  actionId?: string;
+  correlationId?: string;
 };
 
 export type PlayerStatusRequest = {
@@ -588,6 +717,15 @@ export type PlayerTargetActionResult = {
   appliedPlayers: number;
   skippedPlayers: string[];
   missedPlayers?: string[];
+  rolledDamage?: number;
+  impacts?: Array<{
+    playerId: string;
+    hit: boolean;
+    appliedDamage: number;
+    healthBefore: number;
+    healthAfter: number;
+    critical: boolean;
+  }>;
   error?: string;
 };
 
@@ -614,8 +752,29 @@ export type PlayerAreaDamageImpact = {
 export const isAreaDamageRequest = (value: unknown): value is AreaDamageRequest => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<AreaDamageRequest>;
+  const formula = candidate.damageFormula === undefined
+    ? null
+    : typeof candidate.damageFormula === 'string'
+      ? normalizeDamageFormula(candidate.damageFormula)
+      : null;
   return Number.isInteger(candidate.damage) && (candidate.damage ?? 0) >= 0 &&
     (candidate.damage ?? 0) <= 999_999 &&
+    (
+      (candidate.damage ?? 0) > 0 ||
+      Boolean(formula)
+    ) &&
+    (
+      candidate.damageFormula === undefined ||
+      formula !== null
+    ) &&
+    (
+      candidate.hits === undefined ||
+      (
+        Number.isInteger(candidate.hits) &&
+        (candidate.hits ?? 0) >= 1 &&
+        (candidate.hits ?? 0) <= 1_000
+      )
+    ) &&
     Number.isInteger(candidate.reflexDc) && (candidate.reflexDc ?? 0) >= 0 &&
     (candidate.reflexDc ?? 0) <= 999 &&
     (candidate.successRule === 'half' || candidate.successRule === 'none') &&
@@ -628,7 +787,17 @@ export const isAreaDamageRequest = (value: unknown): value is AreaDamageRequest 
           (id) => typeof id === 'string' && id.length > 0 && id.length <= 128,
         )
       )
-    );
+    ) &&
+    (
+      candidate.attackerParticipantId === undefined ||
+      (
+        typeof candidate.attackerParticipantId === 'string' &&
+        candidate.attackerParticipantId.length > 0 &&
+        candidate.attackerParticipantId.length <= 160
+      )
+    ) &&
+    isSafeActionIdentity(candidate.actionId) &&
+    isSafeActionIdentity(candidate.correlationId);
 };
 
 export const isDirectPlayerDamageRequest = (
@@ -647,8 +816,30 @@ export const isDirectPlayerDamageRequest = (
       (id) => typeof id === 'string' && id.length > 0 && id.length <= 128,
     ) &&
     Number.isInteger(candidate.damage) &&
-    (candidate.damage ?? 0) > 0 &&
+    (candidate.damage ?? 0) >= 0 &&
     (candidate.damage ?? 0) <= 999_999 &&
+    (
+      (candidate.damage ?? 0) > 0 ||
+      (
+        typeof candidate.damageFormula === 'string' &&
+        Boolean(normalizeDamageFormula(candidate.damageFormula))
+      )
+    ) &&
+    (
+      candidate.damageFormula === undefined ||
+      (
+        typeof candidate.damageFormula === 'string' &&
+        Boolean(normalizeDamageFormula(candidate.damageFormula))
+      )
+    ) &&
+    (
+      candidate.hits === undefined ||
+      (
+        Number.isInteger(candidate.hits) &&
+        (candidate.hits ?? 0) >= 1 &&
+        (candidate.hits ?? 0) <= 1_000
+      )
+    ) &&
     (!hasAttackCheck || (
       (candidate.attackType === 'melee' || candidate.attackType === 'ranged') &&
       Number.isInteger(candidate.attackBonus) &&
@@ -657,7 +848,9 @@ export const isDirectPlayerDamageRequest = (
       typeof candidate.attackerParticipantId === 'string' &&
       candidate.attackerParticipantId.length > 0 &&
       candidate.attackerParticipantId.length <= 160
-    ));
+    )) &&
+    isSafeActionIdentity(candidate.actionId) &&
+    isSafeActionIdentity(candidate.correlationId);
 };
 
 export const resolveAttackCheck = (
@@ -683,6 +876,246 @@ export const resolveAttackCheck = (
   };
 };
 
+/**
+ * Extrema Vantagem treats two d20 results as one effective natural result.
+ * Their sum is capped at 20, so it can threaten a critical without ever
+ * producing a natural 1.
+ */
+export const resolveExtremeAdvantage = (
+  firstDie: number,
+  secondDie: number,
+) => {
+  const rolls = [firstDie, secondDie].map((die) =>
+    Math.max(1, Math.min(20, Math.trunc(die))));
+  return {
+    rolls,
+    chosenDie: Math.min(20, rolls[0] + rolls[1]),
+  };
+};
+
+export const normalizeActionPointCount = (
+  points: unknown,
+  legacyAvailable: unknown = true,
+) => Number.isInteger(points)
+  ? Math.max(0, Math.min(5, Number(points)))
+  : legacyAvailable === false ? 0 : 1;
+
+export const normalizeHeroPointCount = (
+  points: unknown,
+  legacyAvailable: unknown = false,
+) => Number.isInteger(points)
+  ? Math.max(0, Math.min(1, Number(points)))
+  : legacyAvailable === true ? 1 : 0;
+
+/**
+ * Splits an authoritative total into a stable number of consecutive impacts.
+ * Remainders are assigned to the earliest impacts, so the sum is always
+ * exactly the requested total instead of being inflated by per-hit rounding.
+ */
+export const splitDamageIntoHits = (
+  total: number,
+  hits: number,
+): number[] => {
+  const normalizedTotal = Math.max(0, Math.min(999_999, Math.trunc(total)));
+  const normalizedHits = Math.max(1, Math.min(1_000, Math.trunc(hits)));
+  const base = Math.floor(normalizedTotal / normalizedHits);
+  const remainder = normalizedTotal % normalizedHits;
+  return Array.from(
+    { length: normalizedHits },
+    (_, index) => base + (index < remainder ? 1 : 0),
+  );
+};
+
+export const parseCriticalProfile = (
+  value: string | null | undefined,
+): { threat: number; multiplier: number } => {
+  const normalized = String(value ?? '').trim().toLocaleLowerCase('pt-BR');
+  const multiplierMatch = normalized.match(/x\s*(\d+)/i);
+  const threatMatch = normalized.match(/(?:^|[^\d])(1\d|20)(?:\s*-\s*20)?/);
+  return {
+    threat: threatMatch
+      ? Math.max(2, Math.min(20, Number(threatMatch[1])))
+      : 20,
+    multiplier: multiplierMatch
+      ? Math.max(2, Math.min(10, Number(multiplierMatch[1])))
+      : 2,
+  };
+};
+
+const standardAttackTestFormula = () => parseDamageFormula('1d20') as ParsedDamageFormula;
+
+/**
+ * Reads the weapon's "Teste de ataque" field. A legacy standalone modifier is
+ * kept compatible as 1d20 + modifier; empty, malformed or non-d20 formulas
+ * safely fall back to the standard 1d20 test.
+ */
+export const parseAttackTestFormula = (
+  value: string | null | undefined,
+): ParsedDamageFormula => {
+  const source = String(value ?? '').trim();
+  if (!source) return standardAttackTestFormula();
+  const parsed = parseDamageFormula(source);
+  if (!parsed) return standardAttackTestFormula();
+  if (parsed.kind === 'fixed') {
+    return parseDamageFormula(
+      `1d20 ${parsed.value >= 0 ? '+' : '-'} ${Math.abs(parsed.value)}`,
+    ) ?? standardAttackTestFormula();
+  }
+  const terms = parsed.kind === 'dice'
+    ? [{ diceCount: parsed.diceCount, sides: parsed.sides, sign: 1 as const }]
+    : parsed.terms;
+  return terms.some(({ sides, sign }) => sides === 20 && sign > 0)
+    ? parsed
+    : standardAttackTestFormula();
+};
+
+export const attackTestFormulaExpression = (
+  formula: ParsedDamageFormula,
+  skillValue: number,
+  primaryD20Count = 1,
+  includeIntervention = false,
+) => {
+  const normalized = formula.kind === 'fixed'
+    ? '1d20'
+    : normalizeDamageFormula(
+      formula.kind === 'dice'
+        ? `${formula.diceCount}d${formula.sides}${
+          formula.modifier === 0
+            ? ''
+            : ` ${formula.modifier > 0 ? '+' : '-'} ${Math.abs(formula.modifier)}`
+        }`
+        : `${formula.terms.map((term, index) => `${
+          index === 0 ? (term.sign < 0 ? '-' : '') : term.sign > 0 ? ' + ' : ' - '
+        }${term.diceCount}d${term.sides}`).join('')}${
+          formula.modifier === 0
+            ? ''
+            : ` ${formula.modifier > 0 ? '+' : '-'} ${Math.abs(formula.modifier)}`
+        }`,
+    ) ?? '1d20';
+  const withPrimaryDice = normalized.replace(
+    /\b(\d+)d20\b/i,
+    (_, originalCount: string) => `${Math.max(
+      1,
+      Number(originalCount) - 1 + primaryD20Count,
+    )}d20`,
+  );
+  return `${withPrimaryDice} ${skillValue >= 0 ? '+' : '-'} ${Math.abs(skillValue)}${
+    includeIntervention ? ' + 1d6' : ''
+  }`;
+};
+
+/** Rolls every die in an attack-test expression except its first positive d20. */
+export const rollAttackTestExtraDice = (
+  formula: ParsedDamageFormula,
+  randomInteger: (minimum: number, maximumExclusive: number) => number,
+) => {
+  if (formula.kind === 'fixed') return { total: formula.value, rolls: [] as number[] };
+  const terms = formula.kind === 'dice'
+    ? [{ diceCount: formula.diceCount, sides: formula.sides, sign: 1 as const }]
+    : formula.terms;
+  const rolls: number[] = [];
+  let total = formula.modifier;
+  let primaryD20Skipped = false;
+  for (const term of terms) {
+    for (let index = 0; index < term.diceCount; index += 1) {
+      if (!primaryD20Skipped && term.sign > 0 && term.sides === 20) {
+        primaryD20Skipped = true;
+        continue;
+      }
+      const roll = randomInteger(1, term.sides + 1);
+      if (!Number.isInteger(roll) || roll < 1 || roll > term.sides) {
+        throw new RangeError('A fonte aleatória retornou um resultado inválido.');
+      }
+      const signedRoll = roll * term.sign;
+      rolls.push(signedRoll);
+      total += signedRoll;
+    }
+  }
+  return { total, rolls };
+};
+
+/**
+ * Tormenta20 critical damage repeats only the weapon dice. Static modifiers
+ * are added once after every repeated die has been rolled.
+ */
+export const rollCriticalDamageFormulaDetailed = (
+  formula: ParsedDamageFormula,
+  multiplier: number,
+  randomInteger: (minimum: number, maximumExclusive: number) => number,
+): DamageFormulaRoll => {
+  const normalizedMultiplier = Math.max(1, Math.min(10, Math.trunc(multiplier)));
+  if (formula.kind === 'fixed') {
+    return { total: formula.value, rolls: [], modifier: formula.value };
+  }
+  const terms = formula.kind === 'dice'
+    ? [{ diceCount: formula.diceCount, sides: formula.sides, sign: 1 as const }]
+    : formula.terms;
+  const rolls: number[] = [];
+  let total = formula.modifier;
+  let weaponDiceRepeated = false;
+  for (const term of terms) {
+    const repeats = !weaponDiceRepeated && term.sign > 0
+      ? normalizedMultiplier
+      : 1;
+    if (!weaponDiceRepeated && term.sign > 0) weaponDiceRepeated = true;
+    for (
+      let die = 0;
+      die < term.diceCount * repeats;
+      die += 1
+    ) {
+      const result = randomInteger(1, term.sides + 1);
+      if (!Number.isInteger(result) || result < 1 || result > term.sides) {
+        throw new RangeError('A fonte aleatória retornou um resultado inválido.');
+      }
+      const signed = result * term.sign;
+      rolls.push(signed);
+      total += signed;
+    }
+  }
+  return {
+    total: Math.max(0, Math.min(999_999, total)),
+    rolls,
+    modifier: formula.modifier,
+  };
+};
+
+/**
+ * Expands the first positive dice term so the critical calculation can show
+ * every extra weapon die that was actually rolled. Other dice and the static
+ * modifier remain unchanged, matching Tormenta20 critical damage.
+ */
+export const criticalDamageExpression = (
+  formula: ParsedDamageFormula,
+  multiplier: number,
+) => {
+  if (formula.kind === 'fixed') return String(formula.value);
+  const normalizedMultiplier = Math.max(1, Math.min(10, Math.trunc(multiplier)));
+  const terms = formula.kind === 'dice'
+    ? [{ diceCount: formula.diceCount, sides: formula.sides, sign: 1 as const }]
+    : formula.terms;
+  let weaponDiceExpanded = false;
+  const diceExpression = terms.map((term, index) => {
+    const isWeaponDice = !weaponDiceExpanded && term.sign > 0;
+    if (isWeaponDice) weaponDiceExpanded = true;
+    const count = term.diceCount * (isWeaponDice ? normalizedMultiplier : 1);
+    const operator = index === 0
+      ? ''
+      : term.sign > 0 ? ' + ' : ' - ';
+    return `${operator}${count}d${term.sides}`;
+  }).join('');
+  if (formula.modifier === 0) return diceExpression;
+  return `${diceExpression} ${formula.modifier > 0 ? '+' : '-'} ${Math.abs(formula.modifier)}`;
+};
+
+const isSafeActionIdentity = (value: unknown) =>
+  value === undefined ||
+  (
+    typeof value === 'string' &&
+    value.length >= 8 &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9:_-]+$/.test(value)
+  );
+
 export const isPlayerCombatActionRequest = (
   value: unknown,
 ): value is PlayerCombatActionRequest => {
@@ -696,28 +1129,49 @@ export const isPlayerCombatActionRequest = (
     return typeof skill.skillId === 'string' &&
       skill.skillId.length > 0 &&
       skill.skillId.length <= 80 &&
-      isPlayerResourceUse(skill.resource);
+      isPlayerResourceUse(skill.resource) &&
+      isSafeActionIdentity(skill.actionId) &&
+      isSafeActionIdentity(skill.correlationId);
   }
   if (candidate.kind === 'attack') {
     const attack = candidate as Partial<PlayerAttackRequest>;
-    return Number.isInteger(attack.attackIndex) &&
-      (attack.attackIndex ?? -1) >= 0 &&
-      (attack.attackIndex ?? -1) < 5 &&
+    const source = attack.attackSource ??
+      (
+        Number.isInteger(attack.attackIndex)
+          ? { kind: 'sheet' as const, attackIndex: attack.attackIndex! }
+          : null
+      );
+    const sourceIsValid = source?.kind === 'unarmed' ||
+      (
+        source?.kind === 'sheet' &&
+        Number.isInteger(source.attackIndex) &&
+        source.attackIndex >= 0 &&
+        source.attackIndex < 5
+      );
+    return sourceIsValid &&
       (attack.attackType === 'melee' || attack.attackType === 'ranged') &&
       typeof attack.targetBossId === 'string' &&
       attack.targetBossId.length > 0 &&
       attack.targetBossId.length <= 128 &&
       typeof attack.damageFormula === 'string' &&
       Boolean(normalizeDamageFormula(attack.damageFormula)) &&
-      isPlayerResourceUse(attack.resource);
+      isPlayerResourceUse(attack.resource) &&
+      isSafeActionIdentity(attack.actionId) &&
+      isSafeActionIdentity(attack.correlationId);
   }
   if (candidate.kind === 'resource') {
-    return (
-      candidate.resource === 'action-point' &&
-      (candidate.ability === 'protection' || candidate.ability === 'recovery')
-    ) || (
-      candidate.resource === 'hero-point' &&
-      candidate.ability === 'activate-power'
+    return isSafeActionIdentity(
+      (candidate as { actionId?: unknown }).actionId,
+    ) && isSafeActionIdentity(
+      (candidate as { correlationId?: unknown }).correlationId,
+    ) && (
+      (
+        candidate.resource === 'action-point' &&
+        (candidate.ability === 'protection' || candidate.ability === 'recovery')
+      ) || (
+        candidate.resource === 'hero-point' &&
+        candidate.ability === 'activate-power'
+      )
     );
   }
   return false;
@@ -764,8 +1218,8 @@ export const resolveAreaDamage = (
   const applied = success
     ? request.successRule === 'none' ? 0 : Math.ceil(request.damage / 2)
     : request.damage;
-  const healthBefore = Math.max(0, Math.min(state.maxHealth, state.currentHealth));
-  const healthAfter = Math.max(0, healthBefore - applied);
+  const healthBefore = Math.min(state.maxHealth, state.currentHealth);
+  const healthAfter = healthBefore - applied;
   const playerState: PlayerEncounterState = {
     ...state,
     currentHealth: healthAfter,

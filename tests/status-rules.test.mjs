@@ -29,7 +29,7 @@ const baseAttributes = (overrides = {}) => ({
   ...overrides,
 });
 
-test('soma todos os modificadores numéricos e permite Ataque, Tiro e Perícias negativos', () => {
+test('soma todos os modificadores numéricos e permite Luta, Pontaria e Perícias negativas', () => {
   const activeStatuses = [
     status('abalado'),
     status('agarrado'),

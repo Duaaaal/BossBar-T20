@@ -119,6 +119,19 @@ export type BossAPI = {
   grantHostedHeroPoint: (
     playerId: string,
   ) => Promise<PlayerCombatActionResult>;
+  grantHostedActionPoint: (
+    playerId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  revokeHostedHeroPoint: (
+    playerId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  revokeHostedActionPoint: (
+    playerId: string,
+  ) => Promise<PlayerCombatActionResult>;
+  setHostedUnarmedStrikeEnabled: (
+    playerId: string,
+    enabled: boolean,
+  ) => Promise<PlayerCombatActionResult>;
   setCharacterPrivate: (
     privateMode: boolean,
   ) => Promise<{ ok: boolean; error?: string }>;

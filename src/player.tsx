@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import {
 } from './shared/battle';
 import type { ScenePlan, SceneTransitionEvent } from './shared/scene';
 import {
+  createUnarmedAttack,
   emptyEncounterTurnState,
   formatEncounterDiceRolls,
   type AttackType,
@@ -42,6 +44,7 @@ import { bundledAssetUrl, statusIconUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import {
+  type ActiveBossStatus,
   getDamageFormulaRange,
   getActiveStatusDescription,
   getActiveStatusName,
@@ -198,6 +201,16 @@ const AnimatedHealthBar = ({
   const [healingPreviewPercent, setHealingPreviewPercent] = useState(0);
   const [healingPreviewActive, setHealingPreviewActive] = useState(false);
   const [healingPreviewPrimed, setHealingPreviewPrimed] = useState(false);
+  const [statusTooltipTarget, setStatusTooltipTarget] = useState<{
+    status: ActiveBossStatus;
+    anchor: HTMLElement;
+  } | null>(null);
+  const [statusTooltipPosition, setStatusTooltipPosition] = useState({
+    left: 0,
+    top: 0,
+    ready: false,
+  });
+  const richStatusTooltipRef = useRef<HTMLSpanElement>(null);
   const {
     damageEffects,
     shieldBreakEffects,
@@ -406,6 +419,148 @@ const AnimatedHealthBar = ({
     });
   }, [effects, visuals]);
 
+  const statusTooltipStatus = statusTooltipTarget
+    ? activeStatuses.find(
+      ({ statusId }) => statusId === statusTooltipTarget.status.statusId,
+    ) ?? null
+    : null;
+
+  const positionStatusTooltip = useCallback(() => {
+    const anchor = statusTooltipTarget?.anchor;
+    const tooltip = richStatusTooltipRef.current;
+    if (!anchor?.isConnected || !tooltip) return;
+
+    const viewportMargin = 8;
+    const anchorGap = 8;
+    const anchorRect = anchor.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const maximumLeft = Math.max(
+      viewportMargin,
+      window.innerWidth - tooltipRect.width - viewportMargin,
+    );
+    const maximumTop = Math.max(
+      viewportMargin,
+      window.innerHeight - tooltipRect.height - viewportMargin,
+    );
+    const left = Math.min(
+      maximumLeft,
+      Math.max(
+        viewportMargin,
+        anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2,
+      ),
+    );
+    const preferredTop = anchorRect.top - tooltipRect.height - anchorGap;
+    const fallbackTop = anchorRect.bottom + anchorGap;
+    const top = Math.min(
+      maximumTop,
+      Math.max(
+        viewportMargin,
+        preferredTop >= viewportMargin ? preferredTop : fallbackTop,
+      ),
+    );
+
+    setStatusTooltipPosition({ left, top, ready: true });
+  }, [statusTooltipTarget]);
+
+  useLayoutEffect(() => {
+    if (!statusTooltipTarget) return;
+    positionStatusTooltip();
+  }, [positionStatusTooltip, statusTooltipStatus, statusTooltipTarget]);
+
+  useEffect(() => {
+    if (!statusTooltipTarget) return;
+    const reposition = () => positionStatusTooltip();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [positionStatusTooltip, statusTooltipTarget]);
+
+  useEffect(() => {
+    if (statusTooltipTarget && !statusTooltipStatus) {
+      setStatusTooltipTarget(null);
+    }
+  }, [statusTooltipStatus, statusTooltipTarget]);
+
+  const showStatusTooltip = (
+    status: ActiveBossStatus,
+    anchor: HTMLElement,
+  ) => {
+    setStatusTooltipPosition((current) => ({ ...current, ready: false }));
+    setStatusTooltipTarget({ status, anchor });
+  };
+  const hideHoveredStatusTooltip = (anchor: HTMLElement) => {
+    if (document.activeElement !== anchor) setStatusTooltipTarget(null);
+  };
+  const hideFocusedStatusTooltip = (anchor: HTMLElement) => {
+    if (!anchor.matches(':hover')) setStatusTooltipTarget(null);
+  };
+
+  const richStatusTooltip = statusTooltipTarget && statusTooltipStatus
+    ? (() => {
+      const definition = getStatusDefinition(statusTooltipStatus.statusId);
+      if (!definition) return null;
+      const statusName = getActiveStatusName(statusTooltipStatus);
+      const statusDescription = getActiveStatusDescription(statusTooltipStatus);
+      const damageFormula = (statusTooltipStatus.damageFormula ?? '').trim();
+      const damageRange = damageFormula
+        ? getDamageFormulaRange(damageFormula)
+        : null;
+      const turnLabel = statusTooltipStatus.turnsRemaining === 1
+        ? '1 turno restante'
+        : `${statusTooltipStatus.turnsRemaining} turnos restantes`;
+      const tooltipId =
+        `${statusTooltipPrefix}-${statusTooltipStatus.statusId}`;
+
+      return createPortal(
+        <span
+          className={`boss-status-tooltip is-portal ${
+            statusTooltipPosition.ready ? 'is-visible' : ''
+          }`}
+          id={tooltipId}
+          ref={richStatusTooltipRef}
+          role="tooltip"
+          style={{
+            left: statusTooltipPosition.left,
+            top: statusTooltipPosition.top,
+          }}
+        >
+          <span className="boss-status-tooltip-header">
+            <img
+              alt=""
+              draggable={false}
+              src={statusIconUrl(definition.iconFile)}
+            />
+            <strong>{statusName}</strong>
+          </span>
+          <span><StatusRichText text={statusDescription} /></span>
+          {damageFormula && (
+            <span className="boss-status-tooltip-detail">
+              <span>
+                Dano: <StatusDamageValue>{damageFormula}</StatusDamageValue>
+              </span>
+              {damageRange && (
+                <span className="boss-status-damage-range">
+                  (Min = <StatusDamageValue>
+                    {String(damageRange.minimum)}
+                  </StatusDamageValue>, Max = <StatusDamageValue>
+                    {String(damageRange.maximum)}
+                  </StatusDamageValue>)
+                </span>
+              )}
+            </span>
+          )}
+          <span className="boss-status-tooltip-detail">
+            Duração: <StatusTurnValue>{turnLabel}</StatusTurnValue>
+          </span>
+        </span>,
+        document.body,
+      );
+    })()
+    : null;
+
   return (
     <div className="health-bar-shell">
       <div
@@ -476,9 +631,6 @@ const AnimatedHealthBar = ({
                 const statusName = getActiveStatusName(activeStatus);
                 const statusDescription = getActiveStatusDescription(activeStatus);
                 const damageFormula = (activeStatus.damageFormula ?? '').trim();
-                const damageRange = damageFormula
-                  ? getDamageFormulaRange(damageFormula)
-                  : null;
                 const turnLabel = activeStatus.turnsRemaining === 1
                   ? '1 turno restante'
                   : `${activeStatus.turnsRemaining} turnos restantes`;
@@ -495,42 +647,20 @@ const AnimatedHealthBar = ({
                     tabIndex={0}
                     aria-describedby={tooltipId}
                     aria-label={`${statusName}: ${statusDescription}${damageLabel}. ${turnLabel}`}
+                    onBlur={(event) =>
+                      hideFocusedStatusTooltip(event.currentTarget)}
+                    onFocus={(event) =>
+                      showStatusTooltip(activeStatus, event.currentTarget)}
+                    onMouseEnter={(event) =>
+                      showStatusTooltip(activeStatus, event.currentTarget)}
+                    onMouseLeave={(event) =>
+                      hideHoveredStatusTooltip(event.currentTarget)}
                   >
                     <img
                       alt=""
                       draggable={false}
                       src={statusIconUrl(definition.iconFile)}
                     />
-                    <span className="boss-status-tooltip" id={tooltipId} role="tooltip">
-                      <span className="boss-status-tooltip-header">
-                        <img
-                          alt=""
-                          draggable={false}
-                          src={statusIconUrl(definition.iconFile)}
-                        />
-                        <strong>{statusName}</strong>
-                      </span>
-                      <span><StatusRichText text={statusDescription} /></span>
-                      {damageFormula && (
-                        <span className="boss-status-tooltip-detail">
-                          <span>
-                            Dano: <StatusDamageValue>{damageFormula}</StatusDamageValue>
-                          </span>
-                          {damageRange && (
-                            <span className="boss-status-damage-range">
-                              (Min = <StatusDamageValue>
-                                {String(damageRange.minimum)}
-                              </StatusDamageValue>, Max = <StatusDamageValue>
-                                {String(damageRange.maximum)}
-                              </StatusDamageValue>)
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      <span className="boss-status-tooltip-detail">
-                        Duração: <StatusTurnValue>{turnLabel}</StatusTurnValue>
-                      </span>
-                    </span>
                   </span>
                 );
               })}
@@ -574,6 +704,7 @@ const AnimatedHealthBar = ({
           <span>{maximum}</span>
         </span>
       )}
+      {richStatusTooltip}
     </div>
   );
 };
@@ -1098,6 +1229,16 @@ const EncounterEffectsPlayer = () => {
   return null;
 };
 
+const formatRollResultDice = (result: EncounterRollResult) => {
+  const rollMode = (result as { rollMode?: string }).rollMode;
+  if (rollMode === 'reroll' && result.rolls.length >= 2) {
+    const originalRoll = Math.abs(result.rolls[0]);
+    const replacementRoll = Math.abs(result.rolls[1]);
+    return `1d20(${originalRoll} → ${replacementRoll})`;
+  }
+  return formatEncounterDiceRolls(result.expression, result.rolls);
+};
+
 const RollResultStack = ({
   results,
   placement,
@@ -1105,37 +1246,147 @@ const RollResultStack = ({
   results: EncounterRollResult[];
   placement: 'player' | 'boss' | 'self';
 }) => {
-  if (results.length === 0) return null;
+  type ExtendedRollResult = EncounterRollResult & {
+    sequence?: number;
+    correlationId?: string;
+    relationId?: string;
+    linkedRollGroupId?: string;
+  };
+  type PresentedRollResult = {
+    result: ExtendedRollResult;
+    leaving: boolean;
+  };
+  const initialResults = results as ExtendedRollResult[];
+  const [presentedResults, setPresentedResults] = useState<
+    PresentedRollResult[]
+  >(() => initialResults.map((result) => ({ result, leaving: false })));
+  const visibleIds = useRef(new Set(initialResults.map(({ id }) => id)));
+  const removalTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+
+  useEffect(() => {
+    const nextResults = results as ExtendedRollResult[];
+    const nextIds = new Set(nextResults.map(({ id }) => id));
+
+    for (const result of nextResults) {
+      const pendingRemoval = removalTimers.current.get(result.id);
+      if (pendingRemoval) {
+        clearTimeout(pendingRemoval);
+        removalTimers.current.delete(result.id);
+      }
+    }
+    for (const previousId of visibleIds.current) {
+      if (nextIds.has(previousId) || removalTimers.current.has(previousId)) {
+        continue;
+      }
+      const timer = setTimeout(() => {
+        removalTimers.current.delete(previousId);
+        setPresentedResults((current) =>
+          current.filter(({ result }) => result.id !== previousId));
+      }, 280);
+      removalTimers.current.set(previousId, timer);
+    }
+
+    setPresentedResults((current) => {
+      const nextById = new Map(nextResults.map((result) => [result.id, result]));
+      const leaving = current
+        .filter(({ result }) => !nextById.has(result.id))
+        .map((entry) => ({ ...entry, leaving: true }));
+      return [
+        ...leaving,
+        ...nextResults.map((result) => ({ result, leaving: false })),
+      ];
+    });
+    visibleIds.current = nextIds;
+  }, [results]);
+
+  useEffect(() => () => {
+    removalTimers.current.forEach(clearTimeout);
+    removalTimers.current.clear();
+  }, []);
+
+  const relatedActionIds = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const { result } of presentedResults) {
+      if (!result.actionId) continue;
+      counts.set(result.actionId, (counts.get(result.actionId) ?? 0) + 1);
+    }
+    return new Set(
+      [...counts]
+        .filter(([, count]) => count > 1)
+        .map(([actionId]) => actionId),
+    );
+  }, [presentedResults]);
+
+  if (presentedResults.length === 0) return null;
   return (
     <div
       className={`encounter-roll-results is-${placement}`}
       aria-live="polite"
     >
-      {results.slice(-6).map((result) => (
-        <div
-          className={`encounter-roll-result is-${
-            result.visibility === 'hidden' || result.visibility === 'dice-only'
-              ? 'neutral'
-              : result.outcome
-          } ${result.resourceEffect ? `is-${result.resourceEffect}` : ''}`}
-          key={result.id}
-        >
-          <strong>{result.label}:</strong>
-          {result.visibility === 'hidden' || result.visibility === 'dice-only' ? (
-            <span className="encounter-roll-dice-only">
-              <b>{formatEncounterDiceRolls(result.expression, result.rolls)}</b>
-              {' + ??? = ???'}
-            </span>
-          ) : (
-            <span>
-              {formatEncounterDiceRolls(result.expression, result.rolls)}
-              {' '}{result.modifier >= 0 ? '+' : '−'} {Math.abs(result.modifier)}
-              {' = '}
-              <b>{result.total}</b>
-            </span>
-          )}
-        </div>
-      ))}
+      {presentedResults.map(({ result, leaving }) => {
+        const explicitRelationId =
+          result.correlationId ??
+          result.relationId ??
+          result.linkedRollGroupId;
+        const relationId = explicitRelationId ??
+          (result.actionId && relatedActionIds.has(result.actionId)
+            ? result.actionId
+            : undefined);
+        return (
+          <div
+            className={`encounter-roll-result is-${
+              result.visibility === 'hidden' || result.visibility === 'dice-only'
+                ? 'neutral'
+                : result.outcome
+            } ${result.resourceEffect ? `is-${result.resourceEffect}` : ''} ${
+              leaving ? 'is-leaving' : ''
+            }`}
+            data-relation-id={relationId}
+            data-roll-id={result.id}
+            key={result.id}
+          >
+            {Number.isInteger(result.sequence) && (
+              <span
+                className="encounter-roll-sequence"
+                aria-label={`Resultado ${result.sequence}`}
+              >
+                #{result.sequence}
+              </span>
+            )}
+            {relationId && (
+              <span
+                className="encounter-roll-relation"
+                aria-label="Teste relacionado"
+                data-app-tooltip="Teste relacionado"
+              >
+                ↔
+              </span>
+            )}
+            <strong>
+              {result.label}
+              {result.critical && result.category === 'damage' && result.criticalMultiplier
+                ? ` x${result.criticalMultiplier}`
+                : ''}
+              :
+            </strong>
+            {result.visibility === 'hidden' || result.visibility === 'dice-only' ? (
+              <span className="encounter-roll-dice-only">
+                <b>{formatRollResultDice(result)}</b>
+                {' + ??? = ???'}
+              </span>
+            ) : (
+              <span>
+                {formatRollResultDice(result)}
+                {' '}{result.modifier >= 0 ? '+' : '−'} {Math.abs(result.modifier)}
+                {' = '}
+                <b>{result.total}</b>
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -1188,6 +1439,16 @@ const playerBarPercent = (current: number | null, maximum: number | null) =>
     ? 0
     : Math.max(0, Math.min(100, (current / maximum) * 100));
 
+const actionPointTooltip = (uses: number, unavailableThisTurn = false) =>
+  `Ponto de Ação — melhora ou repete uma jogada com aprovação · ${uses}/5 usos restantes${
+    unavailableThisTurn ? ' · disponível no seu turno' : ''
+  }`;
+
+const heroPointTooltip = (uses: number, unavailableThisTurn = false) =>
+  `Ponto Heróico — concede vantagem extrema ou ativa um poder · ${uses}/1 uso restante${
+    unavailableThisTurn ? ' · disponível no seu turno' : ''
+  }`;
+
 const PlayerHudCard = ({
   player,
   active,
@@ -1198,10 +1459,28 @@ const PlayerHudCard = ({
   rollResults: EncounterRollResult[];
 }) => {
   const [expanded, setExpanded] = useState(false);
+  const [criticalImpactActive, setCriticalImpactActive] = useState(false);
+  const previousCriticalImpactId = useRef(player.criticalImpactId);
   const summary = player.summary;
+
+  useEffect(() => {
+    const nextId = player.criticalImpactId;
+    if (nextId === null || nextId === previousCriticalImpactId.current) return;
+    previousCriticalImpactId.current = nextId;
+    setCriticalImpactActive(false);
+    const frame = requestAnimationFrame(() => setCriticalImpactActive(true));
+    const timer = setTimeout(() => setCriticalImpactActive(false), 1_100);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [player.criticalImpactId]);
+
   return (
     <article
-      className={`party-player-card ${active ? 'is-turn-active' : ''} ${player.redacted ? 'is-private' : ''}`}
+      className={`party-player-card ${active ? 'is-turn-active' : ''} ${
+        player.redacted ? 'is-private' : ''
+      } ${criticalImpactActive ? 'is-critical-impact' : ''}`}
     >
       <RollResultStack results={rollResults} placement="player" />
       <div className="party-player-statuses">
@@ -1265,55 +1544,24 @@ const PlayerHudCard = ({
         <span>CaC {player.redacted ? '???' : player.defenseMelee ?? '—'}</span>
         <span>AaD {player.redacted ? '???' : player.defenseRanged ?? '—'}</span>
       </div>
-      {(typeof player.actionPointAvailable === 'boolean' ||
-        typeof player.heroPointAvailable === 'boolean') && (
-        <div className="party-player-resources" aria-label="Recursos especiais">
-          <span
-            className={`is-action-point ${player.actionPointAvailable ? 'is-available' : ''}`}
-            style={{
-              backgroundImage: `url("${bundledAssetUrl('player-resource-points.png')}")`,
-            }}
-            data-tooltip={
-              player.actionPointAvailable
-                ? 'Ponto de Ação disponível'
-                : 'Ponto de Ação utilizado'
-            }
-            role="img"
-            tabIndex={0}
-          />
-          <span
-            className={`is-hero-point ${player.heroPointAvailable ? 'is-available' : ''}`}
-            style={{
-              backgroundImage: `url("${bundledAssetUrl('player-resource-points.png')}")`,
-            }}
-            data-tooltip={
-              player.heroPointAvailable
-                ? 'Ponto Heróico disponível'
-                : 'Nenhum Ponto Heróico'
-            }
-            role="img"
-            tabIndex={0}
-          />
-        </div>
-      )}
       <div className="party-player-actions" aria-label="Ações disponíveis">
         <span
           className={player.actions.free ? 'is-ready' : ''}
-          data-tooltip={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
+          data-app-tooltip={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
           aria-label={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
           role="img"
           tabIndex={0}
         />
         <span
           className={player.actions.movement ? 'is-ready' : ''}
-          data-tooltip={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
+          data-app-tooltip={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
           aria-label={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
           role="img"
           tabIndex={0}
         />
         <span
           className={player.actions.standard ? 'is-ready' : ''}
-          data-tooltip={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
+          data-app-tooltip={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
           aria-label={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
           role="img"
           tabIndex={0}
@@ -1540,51 +1788,16 @@ const SelfRollResults = ({
   return selfHud ? createPortal(results, selfHud) : results;
 };
 
-const SelfInitiativeButton = ({
-  players,
-  turn,
-}: {
-  players: PlayerHudState[];
-  turn: EncounterTurnState;
-}) => {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  if (!window.__BOSS_WEB_PLAYER__ || turn.started) return null;
-  const self = players.find(({ isSelf }) => isSelf);
-  const participant = self
-    ? turn.participants.find(
-      ({ id }) => id === `player:${self.id}`,
-    )
-    : null;
-  if (!participant || participant.initiativeRolled !== false) return null;
-  const content = (
-    <div className="self-initiative-control">
-      <button
-        type="button"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          setError('');
-          const result = await window.bossAPI.rollEncounterInitiative();
-          if (!result.ok) setError(result.error ?? 'Não foi possível rolar.');
-          setBusy(false);
-        }}
-      >
-        {busy ? 'Rolando…' : 'Rodar Iniciativa'}
-      </button>
-      {error && <small>{error}</small>}
-    </div>
-  );
-  const selfHud = document.getElementById('web-player-character-hud');
-  return selfHud ? createPortal(content, selfHud) : content;
-};
-
 type SelfCombatModal = 'skill' | 'attack' | 'action-point' | 'hero-point';
 type TestResourceChoice =
   | 'none'
   | 'action-intervention'
   | 'action-reroll'
   | 'hero-advantage';
+type CombatActionAttempt = {
+  kind: 'skill' | 'attack';
+  id: string;
+};
 
 const nextBrowserPaint = () => new Promise<void>((resolve) => {
   requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -1601,11 +1814,25 @@ const SelfCombatControls = ({
 }) => {
   const self = players.find(({ isSelf }) => isSelf);
   const summary = self?.summary;
+  const unarmedAttack = useMemo(
+    () => summary ? createUnarmedAttack(summary) : null,
+    [summary],
+  );
+  const unarmedStrikeEnabled = self?.unarmedStrikeEnabled !== false;
   const active = Boolean(
     self &&
     turn.started &&
     turn.activeParticipantId === `player:${self.id}`,
   );
+  const selfParticipant = self
+    ? turn.participants.find(({ id }) => id === `player:${self.id}`)
+    : null;
+  const initiativePending = Boolean(
+    !turn.started && selfParticipant?.initiativeRolled === false,
+  );
+  const initiativeSkillId = summary?.skills.find((skill) =>
+    `${skill.id} ${skill.name}`.toLocaleLowerCase('pt-BR').includes('iniciativa')
+  )?.id ?? '';
   const [modal, setModal] = useState<SelfCombatModal | null>(null);
   const [skillId, setSkillId] = useState('');
   const [attackIndex, setAttackIndex] = useState(0);
@@ -1619,6 +1846,14 @@ const SelfCombatControls = ({
   );
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const [linkToPreviousRoll, setLinkToPreviousRoll] = useState(false);
+  const actionAttemptRef = useRef<CombatActionAttempt | null>(null);
+  const previousRollResult = turn.rollResults.at(-1);
+  const previousRollCorrelationId = previousRollResult
+    ? previousRollResult.correlationId ??
+      previousRollResult.actionId ??
+      previousRollResult.id
+    : undefined;
 
   useEffect(() => {
     window.localStorage.setItem('bossbar.player.attack-type', attackType);
@@ -1626,16 +1861,33 @@ const SelfCombatControls = ({
 
   useEffect(() => {
     if (!summary) return;
-    setSkillId((current) => current || summary.skills[0]?.id || '');
-    setAttackIndex((current) =>
-      Math.min(current, Math.max(0, summary.attacks.length - 1)),
-    );
-  }, [summary]);
+    setSkillId((current) =>
+      initiativePending && initiativeSkillId
+        ? initiativeSkillId
+        : current || summary.skills[0]?.id || '');
+    setAttackIndex((current) => {
+      if (current === -1 && unarmedStrikeEnabled) return -1;
+      if (summary.attacks.length === 0) {
+        return unarmedStrikeEnabled ? -1 : 0;
+      }
+      return Math.min(Math.max(0, current), summary.attacks.length - 1);
+    });
+  }, [
+    initiativePending,
+    initiativeSkillId,
+    summary,
+    unarmedStrikeEnabled,
+  ]);
 
   useEffect(() => {
+    if (attackIndex === -1 && unarmedAttack) {
+      setDamageFormula(unarmedAttack.damageFormula);
+      setAttackType('melee');
+      return;
+    }
     const attack = summary?.attacks[attackIndex];
     if (attack?.damage) setDamageFormula(attack.damage);
-  }, [attackIndex, summary]);
+  }, [attackIndex, summary, unarmedAttack]);
 
   useEffect(() => {
     if (
@@ -1654,7 +1906,28 @@ const SelfCombatControls = ({
     return () => clearTimeout(timer);
   }, [feedback]);
 
+  useEffect(() => {
+    const attempt = actionAttemptRef.current;
+    if (
+      attempt &&
+      turn.rollResults.some(({ actionId }) => actionId === attempt.id)
+    ) {
+      actionAttemptRef.current = null;
+    }
+  }, [turn.rollResults]);
+
   if (!window.__BOSS_WEB_PLAYER__ || !self || !summary) return null;
+
+  const resourceCounts = self as PlayerHudState & {
+    actionPoints?: number | null;
+    heroPoints?: number | null;
+  };
+  const actionPoints = typeof resourceCounts.actionPoints === 'number'
+    ? Math.max(0, Math.min(5, Math.trunc(resourceCounts.actionPoints)))
+    : self.actionPointAvailable ? 1 : 0;
+  const heroPoints = typeof resourceCounts.heroPoints === 'number'
+    ? Math.max(0, Math.min(1, Math.trunc(resourceCounts.heroPoints)))
+    : self.heroPointAvailable ? 1 : 0;
 
   const combatResource = (): PlayerResourceUse => {
     if (resource === 'action-intervention') {
@@ -1670,18 +1943,61 @@ const SelfCombatControls = ({
   };
 
   const submit = async () => {
-    if (!active || busy) return;
+    if (busy) return;
+    const rollingInitiative =
+      modal === 'skill' &&
+      initiativePending &&
+      Boolean(initiativeSkillId) &&
+      skillId === initiativeSkillId;
+    if (!active && !rollingInitiative) return;
+    if (rollingInitiative) {
+      setBusy(true);
+      setModal(null);
+      actionAttemptRef.current = null;
+      await nextBrowserPaint();
+      const result = await window.bossAPI.rollEncounterInitiative();
+      setFeedback(
+        result.ok
+          ? ''
+          : result.error ?? 'Não foi possível rolar a iniciativa.',
+      );
+      setBusy(false);
+      return;
+    }
     let request: PlayerCombatActionRequest | null = null;
     if (modal === 'skill' && skillId) {
-      request = { kind: 'skill', skillId, resource: combatResource() };
+      const attempt = actionAttemptRef.current?.kind === 'skill'
+        ? actionAttemptRef.current
+        : { kind: 'skill' as const, id: crypto.randomUUID() };
+      actionAttemptRef.current = attempt;
+      request = {
+        kind: 'skill',
+        skillId,
+        resource: combatResource(),
+        actionId: attempt.id,
+        ...(linkToPreviousRoll && previousRollCorrelationId
+          ? { correlationId: previousRollCorrelationId }
+          : {}),
+      };
     } else if (modal === 'attack' && targetBossId) {
+      const attempt = actionAttemptRef.current?.kind === 'attack'
+        ? actionAttemptRef.current
+        : { kind: 'attack' as const, id: crypto.randomUUID() };
+      actionAttemptRef.current = attempt;
       request = {
         kind: 'attack',
-        attackIndex,
-        attackType,
+        attackIndex: attackIndex >= 0 ? attackIndex : undefined,
+        attackSource: attackIndex === -1
+          ? { kind: 'unarmed' }
+          : { kind: 'sheet', attackIndex },
+        attackType: attackIndex === -1 ? 'melee' : attackType,
         targetBossId,
         damageFormula,
         resource: combatResource(),
+        actionId: attempt.id,
+        ...(linkToPreviousRoll && previousRollCorrelationId
+          ? { correlationId: previousRollCorrelationId }
+          : {}),
       };
     } else if (modal === 'action-point') {
       const ability = resource === 'action-intervention'
@@ -1700,276 +2016,368 @@ const SelfCombatControls = ({
     setModal(null);
     await nextBrowserPaint();
     const result = await window.bossAPI.requestPlayerCombatAction(request);
+    if (result.ok && !result.pendingApproval) {
+      actionAttemptRef.current = null;
+    }
+    if (result.ok) setLinkToPreviousRoll(false);
+    const isTestAction = request.kind === 'skill' || request.kind === 'attack';
     setFeedback(
       result.ok
         ? result.pendingApproval
           ? 'Aguardando aprovação do mestre.'
-          : 'Ação concluída.'
+          : isTestAction ? '' : 'Ação concluída.'
         : result.error ?? 'Não foi possível realizar a ação.',
     );
     setBusy(false);
   };
 
   const openTestModal = (next: 'skill' | 'attack') => {
-    if (!active) {
+    if (!active && !(next === 'skill' && initiativePending)) {
       setFeedback('Aguarde o seu turno para realizar testes.');
       return;
     }
     setResource('none');
+    setLinkToPreviousRoll(false);
+    if (next === 'skill' && initiativePending && initiativeSkillId) {
+      setSkillId(initiativeSkillId);
+    }
+    if (actionAttemptRef.current?.kind !== next) {
+      actionAttemptRef.current = {
+        kind: next,
+        id: crypto.randomUUID(),
+      };
+    }
     setModal(next);
   };
 
-  const controls = (
-    <>
-      <div className="self-combat-shortcuts" aria-label="Ações de combate">
-        <button
-          type="button"
-          data-tooltip={active ? 'Teste de perícia' : 'Disponível no seu turno'}
-          aria-label="Teste de perícia"
-          onClick={() => openTestModal('skill')}
-        >
-          🎲
-        </button>
-        <button
-          type="button"
-          data-tooltip={active ? 'Atacar' : 'Disponível no seu turno'}
-          aria-label="Atacar"
-          onClick={() => openTestModal('attack')}
-        >
-          ⚔
-        </button>
-      </div>
-      <div className="self-resource-points" aria-label="Recursos especiais">
-        <button
-          className="is-action-point"
-          type="button"
-          style={{
-            backgroundImage: `url("${bundledAssetUrl('player-resource-points.png')}")`,
-          }}
-          disabled={!self.actionPointAvailable || !active}
-          data-tooltip={
-            self.actionPointAvailable
-              ? active ? 'Usar Ponto de Ação' : 'Disponível no seu turno'
-              : 'Ponto de Ação já utilizado'
-          }
-          aria-label="Ponto de Ação"
-          onClick={() => {
-            setResource('action-intervention');
-            setModal('action-point');
-          }}
-        />
-        <button
-          className="is-hero-point"
-          type="button"
-          style={{
-            backgroundImage: `url("${bundledAssetUrl('player-resource-points.png')}")`,
-          }}
-          disabled={!self.heroPointAvailable || !active}
-          data-tooltip={
-            self.heroPointAvailable
-              ? active ? 'Usar Ponto Heróico' : 'Disponível no seu turno'
-              : 'Nenhum Ponto Heróico disponível'
-          }
-          aria-label="Ponto Heróico"
-          onClick={() => setModal('hero-point')}
-        />
-      </div>
-      {feedback && (
-        <button
-          className="self-combat-feedback"
-          type="button"
-          onClick={() => setFeedback('')}
-        >
-          {feedback}
-        </button>
-      )}
-      {modal && (
-        <div className="player-combat-modal-layer" role="presentation">
-          <section
-            className="player-combat-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="player-combat-modal-title"
+  const cancelModal = () => {
+    if (modal === 'skill' || modal === 'attack') {
+      actionAttemptRef.current = null;
+    }
+    setLinkToPreviousRoll(false);
+    setModal(null);
+  };
+
+  const hudControls = (
+    <div className="self-combat-shortcuts" aria-label="Ações e recursos">
+      <button
+        className={initiativePending ? 'is-initiative-pending' : undefined}
+        type="button"
+        data-app-tooltip={
+          initiativePending
+            ? 'Rodar iniciativa'
+            : active ? 'Teste de perícia' : 'Disponível no seu turno'
+        }
+        aria-label="Teste de perícia"
+        onClick={() => openTestModal('skill')}
+      >
+        🎲
+      </button>
+      <button
+        type="button"
+        disabled={!self.actions.standard}
+        data-app-tooltip={
+          !active
+            ? 'Disponível no seu turno'
+            : self.actions.standard ? 'Combate' : 'Ação padrão não disponível'
+        }
+        aria-label="Combate"
+        onClick={() => openTestModal('attack')}
+      >
+        ⚔
+      </button>
+      <button
+        className={`is-resource is-action-point ${
+          active && actionPoints > 0 ? 'is-turn-available' : ''
+        }`}
+        type="button"
+        style={{
+          '--player-resource-image':
+            `url("${bundledAssetUrl('player-resource-points.png')}")`,
+        } as CSSProperties}
+        disabled={actionPoints <= 0 || !active}
+        data-app-tooltip={actionPointTooltip(
+          actionPoints,
+          !active && actionPoints > 0,
+        )}
+        aria-label={`Ponto de Ação, ${actionPoints} de 5 usos restantes`}
+        onClick={() => {
+          actionAttemptRef.current = null;
+          setResource('action-intervention');
+          setModal('action-point');
+        }}
+      />
+      <button
+        className={`is-resource is-hero-point ${
+          active && heroPoints > 0 ? 'is-turn-available' : ''
+        }`}
+        type="button"
+        style={{
+          '--player-resource-image':
+            `url("${bundledAssetUrl('player-resource-points.png')}")`,
+        } as CSSProperties}
+        disabled={heroPoints <= 0 || !active}
+        data-app-tooltip={heroPointTooltip(
+          heroPoints,
+          !active && heroPoints > 0,
+        )}
+        aria-label={`Ponto Heróico, ${heroPoints} de 1 uso restante`}
+        onClick={() => {
+          actionAttemptRef.current = null;
+          setModal('hero-point');
+        }}
+      />
+    </div>
+  );
+
+  const feedbackNotice = feedback ? (
+    <button
+      className="self-combat-feedback"
+      type="button"
+      role="status"
+      aria-live="polite"
+      onClick={() => setFeedback('')}
+    >
+      {feedback}
+    </button>
+  ) : null;
+
+  const modalLayer = modal ? (
+    <div className="player-combat-modal-layer" role="presentation">
+      <section
+        className={`player-combat-modal ${modal === 'skill' ? 'is-skill-table' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="player-combat-modal-title"
+      >
+        <header>
+          <h2 id="player-combat-modal-title">
+            {modal === 'skill'
+              ? 'Teste de perícia'
+              : modal === 'attack'
+                ? 'Realizar ataque'
+                : modal === 'action-point'
+                  ? 'Ponto de Ação'
+                  : 'Ponto Heróico'}
+          </h2>
+          <button type="button" aria-label="Fechar" onClick={cancelModal}>
+            ×
+          </button>
+        </header>
+        {modal === 'skill' && (
+          <div
+            className={`player-skill-table ${
+              initiativePending ? 'is-initiative-pending' : ''
+            }`}
+            aria-label="Perícias disponíveis"
           >
-            <header>
-              <h2 id="player-combat-modal-title">
-                {modal === 'skill'
-                  ? 'Teste de perícia'
-                  : modal === 'attack'
-                    ? 'Realizar ataque'
-                    : modal === 'action-point'
-                      ? 'Ponto de Ação'
-                      : 'Ponto Heróico'}
-              </h2>
-              <button type="button" aria-label="Fechar" onClick={() => setModal(null)}>
-                ×
-              </button>
-            </header>
-            {modal === 'skill' && (
-              <label>
-                <span>Perícia</span>
-                <select
-                  value={skillId}
-                  onChange={(event) => setSkillId(event.currentTarget.value)}
+            {summary.skills.map((skill) => {
+              const unavailable =
+                initiativePending && skill.id !== initiativeSkillId;
+              return (
+                <button
+                  className={`${skillId === skill.id ? 'is-selected' : ''} ${
+                    skill.id === initiativeSkillId ? 'is-initiative' : ''
+                  }`}
+                  type="button"
+                  disabled={unavailable}
+                  data-disabled-reason="Role Iniciativa antes de começar o encontro"
+                  aria-pressed={skillId === skill.id}
+                  onClick={() => setSkillId(skill.id)}
+                  key={skill.id}
                 >
-                  {summary.skills.map((skill) => (
-                    <option value={skill.id} key={skill.id}>
-                      {skill.name} ({skill.total ?? 0})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {modal === 'attack' && (
-              <>
-                <label>
-                  <span>Arma ou ataque</span>
-                  <select
-                    value={attackIndex}
-                    onChange={(event) => setAttackIndex(Number(event.currentTarget.value))}
-                  >
-                    {summary.attacks.map((attack, index) => (
-                      <option value={index} key={`${attack.name}:${index}`}>
-                        {attack.name || `Ataque ${index + 1}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Alvo</span>
-                  <select
-                    value={targetBossId}
-                    onChange={(event) => setTargetBossId(event.currentTarget.value)}
-                  >
-                    {bosses
-                      .filter(({ currentHealth }) => currentHealth > 0)
-                      .map((boss) => (
-                        <option value={boss.id} key={boss.id}>{boss.bossName}</option>
-                      ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Dados de dano</span>
-                  <input
-                    type="text"
-                    value={damageFormula}
-                    maxLength={80}
-                    placeholder="Ex.: 1d8 + 4"
-                    onChange={(event) => setDamageFormula(event.currentTarget.value)}
-                  />
-                </label>
-                <fieldset className="player-combat-attack-type">
-                  <legend>Tipo do ataque</legend>
-                  <label>
-                    <input
-                      type="radio"
-                      name="player-attack-type"
-                      checked={attackType === 'melee'}
-                      onChange={() => setAttackType('melee')}
-                    />
-                    Corpo a corpo
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="player-attack-type"
-                      checked={attackType === 'ranged'}
-                      onChange={() => setAttackType('ranged')}
-                    />
-                    À distância
-                  </label>
-                </fieldset>
-              </>
-            )}
-            {(modal === 'skill' || modal === 'attack') && (
-              <label>
-                <span>Recurso opcional</span>
-                <select
-                  value={resource}
-                  onChange={(event) =>
-                    setResource(event.currentTarget.value as TestResourceChoice)}
-                >
-                  <option value="none">Nenhum</option>
-                  <option
-                    value="action-intervention"
-                    disabled={!self.actionPointAvailable}
-                  >
-                    Ponto de Ação · Intervenção (+1d6)
-                  </option>
-                  <option
-                    value="action-reroll"
-                    disabled={!self.actionPointAvailable}
-                  >
-                    Ponto de Ação · Rolar novamente
-                  </option>
-                  <option
-                    value="hero-advantage"
-                    disabled={!self.heroPointAvailable}
-                  >
-                    Ponto Heróico · Extrema vantagem
-                  </option>
-                </select>
-              </label>
-            )}
-            {modal === 'action-point' && (
-              <fieldset className="player-resource-options">
-                <legend>Escolha o benefício</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="action-point-ability"
-                    checked={resource === 'action-intervention'}
-                    onChange={() => setResource('action-intervention')}
-                  />
-                  Proteção · +1d6 na Defesa até seu próximo turno
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="action-point-ability"
-                    checked={resource === 'action-reroll'}
-                    onChange={() => setResource('action-reroll')}
-                  />
-                  Recuperação · recupera PV e PM conforme o patamar
-                </label>
-              </fieldset>
-            )}
-            {modal === 'hero-point' && (
-              <p className="player-resource-narrative">
-                Consuma o Ponto Heróico para ativar narrativamente um poder ou
-                habilidade. Nenhuma rolagem será feita.
-              </p>
-            )}
-            <footer>
-              <button type="button" onClick={() => setModal(null)}>Cancelar</button>
-              <button
-                className="is-confirm"
-                type="button"
-                disabled={
-                  busy ||
-                  (modal === 'skill' && !skillId) ||
-                  (modal === 'attack' && (
-                    summary.attacks.length === 0 ||
-                    !targetBossId ||
-                    !damageFormula.trim()
-                  ))
-                }
-                onClick={() => void submit()}
+                  <span>{skill.name}</span>
+                  <strong>
+                    {(skill.total ?? 0) >= 0 ? '+' : ''}{skill.total ?? 0}
+                  </strong>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {modal === 'attack' && (
+          <>
+            <label>
+              <span>Arma ou ataque</span>
+              <select
+                value={attackIndex}
+                onChange={(event) => setAttackIndex(Number(event.currentTarget.value))}
               >
-                {modal === 'action-point'
-                  ? 'Solicitar ao mestre'
-                  : modal === 'hero-point'
-                    ? 'Consumir ponto'
-                    : 'Rolar'}
-              </button>
-            </footer>
-          </section>
-        </div>
-      )}
+                {unarmedStrikeEnabled && (
+                  <option value={-1}>Punhos</option>
+                )}
+                {summary.attacks.map((attack, index) => (
+                  <option value={index} key={`${attack.name}:${index}`}>
+                    {attack.name || `Ataque ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Alvo</span>
+              <select
+                value={targetBossId}
+                onChange={(event) => setTargetBossId(event.currentTarget.value)}
+              >
+                {bosses
+                  .filter(({ currentHealth }) => currentHealth > 0)
+                  .map((boss) => (
+                    <option value={boss.id} key={boss.id}>{boss.bossName}</option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              <span>Dados de dano</span>
+              <input
+                type="text"
+                value={damageFormula}
+                maxLength={80}
+                disabled={attackIndex === -1}
+                data-disabled-reason="Os dados de Punhos seguem a ficha e as regras do sistema"
+                placeholder="Ex.: 1d8 + 4"
+                onChange={(event) => setDamageFormula(event.currentTarget.value)}
+              />
+            </label>
+            <fieldset className="player-combat-attack-type">
+              <legend>Tipo do ataque</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="player-attack-type"
+                  checked={attackType === 'melee'}
+                  onChange={() => setAttackType('melee')}
+                />
+                Corpo a corpo
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="player-attack-type"
+                  checked={attackType === 'ranged'}
+                  disabled={attackIndex === -1}
+                  data-disabled-reason="Punhos são um ataque corpo a corpo"
+                  onChange={() => setAttackType('ranged')}
+                />
+                À distância
+              </label>
+            </fieldset>
+          </>
+        )}
+        {(modal === 'attack' || (modal === 'skill' && !initiativePending)) && (
+          <label>
+            <span>Recurso opcional</span>
+            <select
+              value={resource}
+              onChange={(event) =>
+                setResource(event.currentTarget.value as TestResourceChoice)}
+            >
+              <option value="none">Nenhum</option>
+              <option
+                value="action-intervention"
+                disabled={actionPoints <= 0}
+              >
+                Ponto de Ação · Intervenção (+1d6)
+              </option>
+              <option
+                value="action-reroll"
+                disabled={actionPoints <= 0}
+              >
+                Ponto de Ação · Rolar novamente
+              </option>
+              <option
+                value="hero-advantage"
+                disabled={heroPoints <= 0}
+              >
+                Ponto Heróico · Extrema vantagem
+              </option>
+            </select>
+          </label>
+        )}
+        {(modal === 'skill' || modal === 'attack') &&
+          turn.started &&
+          previousRollResult && (
+            <label className="player-combat-correlation">
+              <input
+                type="checkbox"
+                checked={linkToPreviousRoll}
+                onChange={(event) =>
+                  setLinkToPreviousRoll(event.currentTarget.checked)}
+              />
+              <span>
+                Vincular ao último teste
+                <small>
+                  {Number.isInteger(previousRollResult.sequence)
+                    ? `#${previousRollResult.sequence} · `
+                    : ''}
+                  {previousRollResult.label}
+                </small>
+              </span>
+            </label>
+          )}
+        {modal === 'action-point' && (
+          <fieldset className="player-resource-options">
+            <legend>Escolha o benefício</legend>
+            <label>
+              <input
+                type="radio"
+                name="action-point-ability"
+                checked={resource === 'action-intervention'}
+                onChange={() => setResource('action-intervention')}
+              />
+              Proteção · +1d6 na Defesa até seu próximo turno
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="action-point-ability"
+                checked={resource === 'action-reroll'}
+                onChange={() => setResource('action-reroll')}
+              />
+              Recuperação · recupera PV e PM conforme o patamar
+            </label>
+          </fieldset>
+        )}
+        {modal === 'hero-point' && (
+          <p className="player-resource-narrative">
+            Consuma o Ponto Heróico para ativar narrativamente um poder ou
+            habilidade. Nenhuma rolagem será feita.
+          </p>
+        )}
+        <footer>
+          <button type="button" onClick={cancelModal}>Cancelar</button>
+          <button
+            className="is-confirm"
+            type="button"
+            disabled={
+              busy ||
+              (modal === 'skill' && !skillId) ||
+              (modal === 'attack' && (
+                (summary.attacks.length === 0 && !unarmedStrikeEnabled) ||
+                !targetBossId ||
+                !damageFormula.trim()
+              ))
+            }
+            onClick={() => void submit()}
+          >
+            {modal === 'action-point'
+              ? 'Solicitar ao mestre'
+              : modal === 'hero-point'
+                ? 'Consumir ponto'
+                : 'Rolar'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  ) : null;
+
+  const selfHud = document.getElementById('web-player-character-hud');
+  return (
+    <>
+      {selfHud ? createPortal(hudControls, selfHud) : hudControls}
+      {feedbackNotice && createPortal(feedbackNotice, document.body)}
+      {modalLayer && createPortal(modalLayer, document.body)}
     </>
   );
-  const selfHud = document.getElementById('web-player-character-hud');
-  return selfHud ? createPortal(controls, selfHud) : controls;
 };
 
 type AnimatedActionProps = {
@@ -2250,7 +2658,7 @@ const PlayerApp = () => {
         setResourceNotices((current) =>
           current.filter(({ id }) => id !== notice.id));
         timers.delete(timer);
-      }, 6_000);
+      }, 5_000);
       timers.add(timer);
     });
     return () => {
@@ -2561,14 +2969,17 @@ const PlayerApp = () => {
         <div className="critical-screen-flash" aria-hidden="true" />
         <PartyHud players={playerHuds} turn={turnState} />
         <SelfRollResults players={playerHuds} turn={turnState} />
-        <SelfInitiativeButton players={playerHuds} turn={turnState} />
         <SelfCombatControls
           players={playerHuds}
           turn={turnState}
           bosses={visibleBosses}
         />
         {resourceNotices.length > 0 && (
-          <aside className="player-resource-notices" aria-live="polite">
+          <aside
+            className="player-resource-notices"
+            role="status"
+            aria-live="polite"
+          >
             {resourceNotices.map((notice) => (
               <button
                 className={`is-${notice.tone}`}

@@ -79,13 +79,81 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
       name: 'Dano em jogador',
     });
     await expect(damageTargets).toContainText('Titã Automatizado');
+    const targetFilters = damageTargets.getByRole('group', {
+      name: 'Filtros de alvos',
+    });
+    await expect(targetFilters.getByRole('button')).toHaveCount(3);
+    await expect(
+      targetFilters.getByRole('button', { name: 'Todos' }),
+    ).toBeVisible();
+    await expect(
+      targetFilters.getByRole('button', { name: 'Aliados' }),
+    ).toBeVisible();
+    await expect(
+      targetFilters.getByRole('button', { name: 'Inimigos' }),
+    ).toBeDisabled();
+    await expect(
+      damageTargets.locator('[data-target-faction="bosses"]'),
+    ).toContainText('Titã Automatizado');
+    await expect(
+      damageTargets.getByRole('button', { name: 'Cancelar' }),
+    ).toHaveClass(/control-status-modal-cancel/);
+    await expect(
+      damageTargets.getByRole('button', { name: 'Aplicar dano' }),
+    ).toHaveClass(/control-status-modal-apply/);
+    await targetFilters.getByRole('button', { name: 'Aliados' }).click();
+    await expect(
+      damageTargets.getByLabel(/Titã Automatizado.*Chefão/),
+    ).toBeChecked();
+    await targetFilters.getByRole('button', { name: 'Aliados' }).click();
+    await expect(
+      damageTargets.getByLabel(/Titã Automatizado.*Chefão/),
+    ).not.toBeChecked();
+    await expect(
+      damageTargets.getByRole('button', { name: 'Aplicar dano' }),
+    ).toBeDisabled();
     await damageTargets.getByRole('button', { name: 'Cancelar' }).click();
 
     await master.getByRole('button', { name: 'Iniciar Batalha' }).click();
     await expect(player.getByRole('heading', { name: 'Titã Automatizado' })).toBeVisible();
     await expect(control.locator('.health-difference strong')).toHaveText('600/600');
-    await expect(control.getByRole('button', { name: 'Rodar Iniciativa' })).toBeVisible();
-    await control.getByRole('button', { name: 'Rodar Iniciativa' }).click();
+    const skillButton = control.getByRole('button', {
+      name: 'Teste de perícia',
+    });
+    await expect(skillButton).toHaveClass(/is-initiative-pending/);
+    await expect(
+      control.getByRole('button', { name: 'Iniciar turno' }),
+    ).toBeDisabled();
+    await skillButton.click();
+    const skillDialog = control.getByRole('dialog', {
+      name: 'Teste de perícia',
+    });
+    await expect(
+      skillDialog.locator('.control-skill-picker-item.is-initiative-required'),
+    ).toContainText('Iniciativa');
+    await skillDialog.getByLabel('Iniciativa').fill('14');
+    const skillLayout = await skillDialog.evaluate((dialog) => {
+      const bounds = dialog.getBoundingClientRect();
+      const list = dialog.querySelector<HTMLElement>('.control-skill-picker-list');
+      return {
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom,
+        listScrollHeight: list?.scrollHeight ?? 0,
+        listClientHeight: list?.clientHeight ?? 0,
+      };
+    });
+    expect(skillLayout.left).toBeGreaterThanOrEqual(0);
+    expect(skillLayout.top).toBeGreaterThanOrEqual(0);
+    expect(skillLayout.right).toBeLessThanOrEqual(skillLayout.viewportWidth + 1);
+    expect(skillLayout.bottom).toBeLessThanOrEqual(skillLayout.viewportHeight + 1);
+    expect(skillLayout.listScrollHeight).toBeLessThanOrEqual(
+      skillLayout.listClientHeight + 1,
+    );
+    await skillDialog.getByRole('button', { name: 'Rolar Iniciativa' }).click();
     await expect(control.getByRole('button', { name: 'Iniciar turno' })).toBeEnabled();
     await expect(
       control.locator('.control-target-area-group').getByLabel('CD do dano em área'),
@@ -95,7 +163,10 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     const activeDamageTargets = control.getByRole('dialog', {
       name: 'Dano em jogador',
     });
-    await activeDamageTargets.getByLabel(/Titã Automatizado.*Chefão/).check();
+    await activeDamageTargets
+      .getByRole('group', { name: 'Filtros de alvos' })
+      .getByRole('button', { name: 'Aliados' })
+      .click();
     await activeDamageTargets.getByRole('button', { name: 'Aplicar dano' }).click();
     await expect(
       player.locator('.encounter-roll-result').filter({ hasText: 'Dano:' }),

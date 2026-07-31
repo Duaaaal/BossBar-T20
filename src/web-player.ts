@@ -109,6 +109,7 @@ let creatingAccount = false;
 let authenticating = false;
 let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
 let playerEncounterState: PlayerEncounterState | null = null;
+let observedCriticalImpactId: number | null | undefined;
 let selfHudId: string | null = null;
 let activeTurnParticipantId: string | null = null;
 
@@ -117,6 +118,70 @@ const updateOwnTurnHighlight = () => {
     'is-turn-active',
     Boolean(selfHudId && activeTurnParticipantId === `player:${selfHudId}`),
   );
+};
+
+const playCharacterCriticalImpact = () => {
+  document.querySelector<HTMLElement>('.player-stage')?.animate(
+    [
+      { transform: 'translate3d(0, 0, 0) scale(1)' },
+      { transform: 'translate3d(-8px, 4px, 0) scale(1.012)', offset: .12 },
+      { transform: 'translate3d(7px, -4px, 0) scale(1.01)', offset: .28 },
+      { transform: 'translate3d(-4px, 2px, 0) scale(1.006)', offset: .48 },
+      { transform: 'translate3d(2px, -1px, 0) scale(1.002)', offset: .68 },
+      { transform: 'translate3d(0, 0, 0) scale(1)' },
+    ],
+    { duration: 900, easing: 'cubic-bezier(.16,.84,.24,1)' },
+  );
+  characterHud?.animate(
+    [
+      { transform: 'translate3d(0, 0, 0) scale(1)', filter: 'none' },
+      {
+        transform: 'translate3d(-9px, 4px, 0) scale(1.035)',
+        filter: 'brightness(2) saturate(1.7)',
+        offset: .14,
+      },
+      { transform: 'translate3d(8px, -4px, 0) scale(1.02)', offset: .3 },
+      { transform: 'translate3d(-5px, 2px, 0) scale(1.012)', offset: .48 },
+      { transform: 'translate3d(3px, -1px, 0) scale(1.006)', offset: .68 },
+      { transform: 'translate3d(0, 0, 0) scale(1)', filter: 'none' },
+    ],
+    { duration: 1_050, easing: 'cubic-bezier(.16,.84,.24,1)' },
+  );
+  characterHealthFill?.parentElement?.animate(
+    [
+      { boxShadow: 'inset 0 1px 4px rgb(0 0 0 / 68%)' },
+      {
+        boxShadow:
+          '0 0 24px rgb(255 43 37 / 96%), inset 0 0 12px rgb(255 218 144 / 84%)',
+        offset: .18,
+      },
+      { boxShadow: 'inset 0 1px 4px rgb(0 0 0 / 68%)' },
+    ],
+    { duration: 1_050, easing: 'ease-out' },
+  );
+  document.querySelector<HTMLElement>('.critical-screen-flash')?.animate(
+    [
+      { opacity: 0 },
+      { opacity: .72, offset: .1 },
+      { opacity: .18, offset: .32 },
+      { opacity: 0 },
+    ],
+    { duration: 900, easing: 'ease-out' },
+  );
+};
+
+const observeCharacterCriticalImpact = (
+  state: PlayerEncounterState | null,
+) => {
+  const nextId = state?.criticalImpactId ?? null;
+  if (observedCriticalImpactId === undefined) {
+    observedCriticalImpactId = nextId;
+    return;
+  }
+  if (nextId !== null && nextId !== observedCriticalImpactId) {
+    playCharacterCriticalImpact();
+  }
+  observedCriticalImpactId = nextId;
 };
 
 const showConnectionState = ({
@@ -140,6 +205,7 @@ const showConnectionState = ({
     changeNameButton?.setAttribute('hidden', '');
     toolsElement?.setAttribute('hidden', '');
     playerEncounterState = null;
+    observedCriticalImpactId = undefined;
     characterHud?.setAttribute('hidden', '');
     closedElement?.removeAttribute('hidden');
     statusElement.dataset.visible = 'false';
@@ -204,10 +270,12 @@ const {
   onConnectionState: showConnectionState,
   onPlayerState: (state) => {
     playerEncounterState = state;
+    observeCharacterCriticalImpact(state);
     renderCharacterSheet(getPlayerToolsState().sheet);
   },
   onPlayerCombatImpact: (impact) => {
     playerEncounterState = impact.playerState;
+    observeCharacterCriticalImpact(impact.playerState);
     renderCharacterSheet(getPlayerToolsState().sheet);
     showReflexResult(impact);
   },
@@ -248,9 +316,10 @@ api.subscribePlayerHuds((players) => {
           : 'Ação padrão';
       button.classList.toggle('is-ready', ready);
       button.disabled = !ready;
-      button.dataset.tooltip = ready
+      button.dataset.appTooltip = ready
         ? `${label} disponível`
         : `${label} não disponível`;
+      delete button.dataset.tooltip;
     }
   }
 });
@@ -1243,6 +1312,7 @@ changeNameButton?.addEventListener('click', () => {
   leave();
   sessionReady = false;
   playerEncounterState = null;
+  observedCriticalImpactId = undefined;
   characterHud?.setAttribute('hidden', '');
   toolsElement?.setAttribute('hidden', '');
   changeNameButton.setAttribute('hidden', '');

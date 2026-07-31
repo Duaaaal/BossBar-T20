@@ -126,7 +126,7 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
 .scene-confirmation-modal button.is-destructive { border-color: #a84658; background: #792f41; color: #fff; }
 .scene-attributes-modal {
   display: grid;
-  width: min(820px, 100%);
+  width: min(720px, 100%);
   max-height: calc(100vh - 48px);
   gap: 12px;
   overflow: hidden;
@@ -140,6 +140,35 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.scene-attributes-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.scene-attributes-heading h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scene-base-skill-field {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px !important;
+}
+.scene-base-skill-field span {
+  color: #d8b3c2;
+  font-size: .64rem;
+  white-space: nowrap;
+}
+.scene-base-skill-field input {
+  box-sizing: border-box;
+  width: 44px;
+  min-height: 29px;
+  padding: 4px;
+  text-align: center;
 }
 .scene-attributes-modal h2 {
   margin: 0;
@@ -158,8 +187,8 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
 }
 .scene-attribute-modal-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(85px, 1fr));
-  gap: 7px;
+  grid-template-columns: repeat(8, minmax(72px, 1fr));
+  gap: 6px;
 }
 .scene-attributes-modal label {
   display: grid;
@@ -174,7 +203,15 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.scene-exact-skills { display: grid; min-height: 0; gap: 7px; }
+.scene-exact-skills {
+  display: grid;
+  min-height: 0;
+  gap: 8px;
+  margin-top: 2px;
+  border-top: 1px solid rgb(207 104 140 / 32%);
+  padding-top: 10px;
+  box-shadow: 0 -8px 18px rgb(93 34 63 / 8%);
+}
 .scene-exact-skills h3 {
   margin: 0;
   color: #d8b3c2;
@@ -183,12 +220,18 @@ input:focus, select:focus { border-color: #c05d7d; box-shadow: 0 0 0 2px rgba(19
 .scene-exact-skills > div {
   display: grid;
   min-height: 0;
-  max-height: min(290px, calc(100vh - 260px));
-  grid-template-columns: repeat(5, minmax(95px, 1fr));
+  grid-template-columns: repeat(10, minmax(0, 60px));
+  justify-content: space-between;
   gap: 6px;
-  overflow-y: auto;
-  padding-right: 3px;
+  overflow: visible;
 }
+.scene-exact-skills input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 4px;
+  text-align: center;
+}
+.scene-exact-skills label span { max-width: 60px; }
 .scene-attributes-modal > footer {
   display: flex;
   justify-content: flex-end;

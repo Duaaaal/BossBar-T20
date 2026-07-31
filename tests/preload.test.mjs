@@ -27,3 +27,39 @@ test('cada renderer recebe somente os métodos de preload que utiliza', async ()
     );
   }
 });
+
+test('mantém controles administrativos de personagens restritos ao mestre', () => {
+  const administrativeMethods = [
+    'grantHostedActionPoint',
+    'grantHostedHeroPoint',
+    'revokeHostedActionPoint',
+    'revokeHostedHeroPoint',
+    'setHostedUnarmedStrikeEnabled',
+  ];
+
+  for (const method of administrativeMethods) {
+    assert.ok(
+      bossApiMethodsByRole.master.includes(method),
+      `${method} precisa estar disponível para o mestre`,
+    );
+
+    for (const [role, exposedMethods] of Object.entries(bossApiMethodsByRole)) {
+      if (role === 'master') continue;
+      assert.equal(
+        exposedMethods.includes(method),
+        false,
+        `${method} não pode ser exposto ao renderer ${role}`,
+      );
+    }
+  }
+});
+
+test('permite ao mestre observar os HUDs sem ampliar a superfície do launcher', () => {
+  assert.ok(bossApiMethodsByRole.master.includes('getPlayerHuds'));
+  assert.ok(bossApiMethodsByRole.master.includes('subscribePlayerHuds'));
+  assert.equal(bossApiMethodsByRole.launcher.includes('getPlayerHuds'), false);
+  assert.equal(
+    bossApiMethodsByRole.launcher.includes('subscribePlayerHuds'),
+    false,
+  );
+});

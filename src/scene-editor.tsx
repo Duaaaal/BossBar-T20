@@ -9,7 +9,9 @@ import {
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import {
   BOSS_SKILL_DEFINITIONS,
+  inferManuallyEditedBossSkills,
   normalizeBossSkillValues,
+  updateInheritedBossSkillDrafts,
   type BossSkillId,
 } from './shared/boss-skills';
 import { isUndoEditableTarget } from './shared/undo-shortcut';
@@ -31,6 +33,10 @@ import {
 } from './shared/scene';
 import './scene-editor.css';
 import './scrollbars.css';
+
+const BOSS_ADDITIONAL_SKILL_DEFINITIONS = BOSS_SKILL_DEFINITIONS.filter(
+  ([id]) => id !== 'luta' && id !== 'pontaria',
+);
 
 installDisabledControlTooltips();
 
@@ -58,6 +64,7 @@ const identityPatchFromBoss = (boss: BossState): SceneBossPatch => ({
   damageReduction: boss.damageReduction,
   shield: boss.shield,
   skillValues: boss.skillValues,
+  skillOverrides: boss.skillOverrides,
 });
 
 type SceneAttributesDraft = {
@@ -71,6 +78,23 @@ type SceneAttributesDraft = {
   damageReduction: string;
   shield: string;
   skillValues: Record<BossSkillId, string>;
+  manuallyEditedSkills: BossSkillId[];
+};
+
+const updateTwoDigitSkillDraft = (
+  current: SceneAttributesDraft | null,
+  skillId: BossSkillId,
+  value: string,
+) => {
+  if (!current || !/^-?\d{0,2}$/.test(value)) return current;
+  return {
+    ...current,
+    manuallyEditedSkills: [...new Set([...current.manuallyEditedSkills, skillId])],
+    skillValues: {
+      ...current.skillValues,
+      [skillId]: value,
+    },
+  };
 };
 
 const draftFromPlan = (
@@ -1106,12 +1130,13 @@ const SceneEditorApp = () => {
     selectedIndex,
   );
   const openAttributesEditor = () => {
+    const resolvedSkillBase = resolvedCurrentBoss.skills ?? 10;
     setAttributesDraft({
       maxHealth: String(resolvedCurrentBoss.maxHealth),
       currentHealth: String(resolvedCurrentBoss.currentHealth),
       attack: String(resolvedCurrentBoss.attack),
       rangedAttack: String(resolvedCurrentBoss.rangedAttack),
-      skills: String(resolvedCurrentBoss.skills),
+      skills: String(resolvedSkillBase),
       defense: String(resolvedCurrentBoss.defense),
       rangedDefense: String(resolvedCurrentBoss.rangedDefense),
       damageReduction: String(resolvedCurrentBoss.damageReduction),
@@ -1119,9 +1144,17 @@ const SceneEditorApp = () => {
       skillValues: Object.fromEntries(
         BOSS_SKILL_DEFINITIONS.map(([id]) => [
           id,
-          String(resolvedCurrentBoss.skillValues?.[id] ?? resolvedCurrentBoss.skills),
+          String(resolvedCurrentBoss.skillValues?.[id] ?? resolvedSkillBase),
         ]),
       ) as Record<BossSkillId, string>,
+      manuallyEditedSkills: resolvedCurrentBoss.skillOverrides ??
+        inferManuallyEditedBossSkills(
+          resolvedSkillBase,
+          normalizeBossSkillValues(
+            resolvedCurrentBoss.skillValues,
+            resolvedSkillBase,
+          ),
+        ),
     });
   };
   const applyAttributesEditor = () => {
@@ -1137,15 +1170,28 @@ const SceneEditorApp = () => {
       damageReduction: Number(attributesDraft.damageReduction),
       shield: Number(attributesDraft.shield),
     };
-    const exactSkills = Object.fromEntries(
+    const rawSkills = Object.fromEntries(
       BOSS_SKILL_DEFINITIONS.map(([id]) => [
         id,
         Number(attributesDraft.skillValues[id]),
       ]),
-    );
+    ) as Record<BossSkillId, number>;
+    rawSkills.luta = numeric.attack;
+    rawSkills.pontaria = numeric.rangedAttack;
+    const exactSkills = rawSkills;
+    numeric.attack = exactSkills.luta;
+    numeric.rangedAttack = exactSkills.pontaria;
     if (
       Object.values(numeric).some((value) => !Number.isFinite(value)) ||
-      Object.values(exactSkills).some((value) => !Number.isFinite(value)) ||
+      Object.values(attributesDraft.skillValues).some(
+        (value) => !/^-?\d{1,2}$/.test(value),
+      ) ||
+      Object.values(exactSkills).some(
+        (value) =>
+          !Number.isInteger(value) ||
+          value < -99 ||
+          value > 99,
+      ) ||
       numeric.maxHealth < 1 ||
       numeric.currentHealth < 0 ||
       numeric.currentHealth > numeric.maxHealth
@@ -1159,6 +1205,7 @@ const SceneEditorApp = () => {
         ...directive.patch,
         ...numeric,
         skillValues: normalizeBossSkillValues(exactSkills, numeric.skills),
+        skillOverrides: [...attributesDraft.manuallyEditedSkills],
       },
     }), `phase:${currentPhase.id}:boss:${selectedBossId}:attributes`);
     setAttributesDraft(null);
@@ -1364,7 +1411,7 @@ const SceneEditorApp = () => {
                   <strong>Alterar Perícias</strong>
                   <small>
                     PV {resolvedCurrentBoss.currentHealth}/{resolvedCurrentBoss.maxHealth}
-                    {' · '}Atq. {resolvedCurrentBoss.attack}/{resolvedCurrentBoss.rangedAttack}
+                    {' · '}Luta {resolvedCurrentBoss.attack} · Pontaria {resolvedCurrentBoss.rangedAttack}
                     {' · '}Def. {resolvedCurrentBoss.defense}/{resolvedCurrentBoss.rangedDefense}
                   </small>
                 </button>
@@ -1411,9 +1458,41 @@ const SceneEditorApp = () => {
             aria-labelledby="scene-attributes-title"
           >
             <header>
-              <div>
-                <h2 id="scene-attributes-title">Alterar Perícias</h2>
-                <span>{bossNameInPhase(draft, selectedBossId, selectedIndex)}</span>
+              <div className="scene-attributes-heading">
+                <h2 id="scene-attributes-title">
+                  Alterar perícias - {bossNameInPhase(draft, selectedBossId, selectedIndex)} - Base
+                </h2>
+                <label className="scene-base-skill-field">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={3}
+                    aria-label="Perícia base"
+                    value={attributesDraft.skills}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (!/^-?\d{0,2}$/.test(value)) return;
+                      setAttributesDraft((current) => {
+                        if (!current) return current;
+                        const manual = new Set(current.manuallyEditedSkills);
+                        const skillValues = updateInheritedBossSkillDrafts(
+                          value,
+                          current.skillValues,
+                          manual,
+                        );
+                        return {
+                          ...current,
+                          skills: value,
+                          attack: manual.has('luta') ? current.attack : value,
+                          rangedAttack: manual.has('pontaria')
+                            ? current.rangedAttack
+                            : value,
+                          skillValues,
+                        };
+                      });
+                    }}
+                  />
+                </label>
               </div>
               <button
                 type="button"
@@ -1427,24 +1506,44 @@ const SceneEditorApp = () => {
               {([
                 ['maxHealth', 'Vida máxima', 1, 1_000_000],
                 ['currentHealth', 'Vida atual', 0, 1_000_000],
-                ['attack', 'Ataque', -999, 999],
-                ['rangedAttack', 'Tiro', -999, 999],
-                ['skills', 'Perícia base', -999, 999],
+                ['attack', 'Luta', -99, 99],
+                ['rangedAttack', 'Pontaria', -99, 99],
                 ['defense', 'Defesa CaC', 0, 999],
                 ['rangedDefense', 'Defesa AaD', 0, 999],
                 ['damageReduction', 'RD', 0, 999],
                 ['shield', 'Escudo', 0, 999],
               ] as const).map(([key, label, min, max]) => (
                 <label key={key}>
-                  <span>{label}</span>
+                  <span title={label}>{label}</span>
                   <input
                     type="number"
                     min={min}
                     max={max}
                     value={attributesDraft[key]}
-                    onChange={(event) => setAttributesDraft((current) => current
-                      ? { ...current, [key]: event.target.value }
-                      : current)}
+                    onChange={(event) => setAttributesDraft((current) => {
+                      if (!current) return current;
+                      const value = event.target.value;
+                      if (
+                        (key === 'attack' || key === 'rangedAttack') &&
+                        !/^-?\d{0,2}$/.test(value)
+                      ) return current;
+                      const skillId: BossSkillId | null = key === 'attack'
+                        ? 'luta'
+                        : key === 'rangedAttack' ? 'pontaria' : null;
+                      return {
+                        ...current,
+                        [key]: value,
+                        ...(skillId ? {
+                          manuallyEditedSkills: [
+                            ...new Set([...current.manuallyEditedSkills, skillId]),
+                          ],
+                          skillValues: {
+                            ...current.skillValues,
+                            [skillId]: value,
+                          },
+                        } : {}),
+                      };
+                    })}
                   />
                 </label>
               ))}
@@ -1452,23 +1551,16 @@ const SceneEditorApp = () => {
             <div className="scene-exact-skills">
               <h3>Valores exatos de perícia</h3>
               <div>
-                {BOSS_SKILL_DEFINITIONS.map(([id, label]) => (
+                {BOSS_ADDITIONAL_SKILL_DEFINITIONS.map(([id, label]) => (
                   <label key={id}>
-                    <span>{label}</span>
+                    <span title={label}>{label}</span>
                     <input
-                      type="number"
-                      min={-999}
-                      max={999}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={3}
                       value={attributesDraft.skillValues[id]}
-                      onChange={(event) => setAttributesDraft((current) => current
-                        ? {
-                            ...current,
-                            skillValues: {
-                              ...current.skillValues,
-                              [id]: event.target.value,
-                            },
-                          }
-                        : current)}
+                      onChange={(event) => setAttributesDraft((current) =>
+                        updateTwoDigitSkillDraft(current, id, event.target.value))}
                     />
                   </label>
                 ))}

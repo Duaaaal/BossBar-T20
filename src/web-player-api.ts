@@ -229,6 +229,7 @@ export const toBattleState = (
     rangedDefense: 0,
     skills: 0,
     skillValues: createBossSkillValues(0),
+    skillOverrides: [],
     damageReduction: 0,
   })),
   activeBossId: state.bosses[0]?.id ?? '',
@@ -565,6 +566,7 @@ export const createWebPlayerApi = ({
       method: 'POST',
       cache: 'no-store',
       headers: accountHeaders('application/json'),
+      body: '{}',
     });
     const result = await response.json() as CharacterSheetUploadResult;
     if (result.sheet) {

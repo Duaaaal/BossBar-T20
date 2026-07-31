@@ -21,6 +21,7 @@ import type {
   ConnectionQuality,
   HostedSessionState,
 } from './shared/multiplayer';
+import type { PlayerHudState } from './shared/player-combat';
 import type { ScenePlan } from './shared/scene';
 import {
   createPlayerNotesDocument,
@@ -145,6 +146,7 @@ const MasterApp = () => {
     null,
   );
   const [hostedSessionFeedback, setHostedSessionFeedback] = useState('');
+  const [playerHuds, setPlayerHuds] = useState<PlayerHudState[]>([]);
   const [universalMuted, setUniversalMuted] = useState(false);
   const [musicState, setMusicState] = useState<MusicState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState | null>(null);
@@ -342,6 +344,22 @@ const MasterApp = () => {
     });
     const unsubscribe = window.bossAPI.subscribeHostedSession((nextSession) => {
       if (active) setHostedSession(nextSession);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    window.bossAPI.getPlayerHuds().then((players) => {
+      if (active) setPlayerHuds(players);
+    }).catch(() => {
+      if (active) setPlayerHuds([]);
+    });
+    const unsubscribe = window.bossAPI.subscribePlayerHuds((players) => {
+      if (active) setPlayerHuds(players);
     });
     return () => {
       active = false;
@@ -711,6 +729,75 @@ const MasterApp = () => {
       );
     } catch {
       showHostedSessionFeedback('Não foi possível responder ao pedido.');
+    }
+  };
+
+  const grantActionPoint = async (player: PlayerHudState) => {
+    try {
+      const result = await window.bossAPI.grantHostedActionPoint(player.id);
+      showHostedSessionFeedback(
+        result.ok
+          ? `Ponto de Ação concedido a ${player.characterName}.`
+          : result.error ?? 'Não foi possível conceder o ponto.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível conceder o Ponto de Ação.');
+    }
+  };
+
+  const grantHeroPoint = async (player: PlayerHudState) => {
+    try {
+      const result = await window.bossAPI.grantHostedHeroPoint(player.id);
+      showHostedSessionFeedback(
+        result.ok
+          ? `Ponto Heroico concedido a ${player.characterName}.`
+          : result.error ?? 'Não foi possível conceder o ponto.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível conceder o Ponto Heroico.');
+    }
+  };
+
+  const revokeActionPoint = async (player: PlayerHudState) => {
+    try {
+      const result = await window.bossAPI.revokeHostedActionPoint(player.id);
+      showHostedSessionFeedback(
+        result.ok
+          ? `Ponto de Ação retirado de ${player.characterName}.`
+          : result.error ?? 'Não foi possível retirar o ponto.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível retirar o Ponto de Ação.');
+    }
+  };
+
+  const revokeHeroPoint = async (player: PlayerHudState) => {
+    try {
+      const result = await window.bossAPI.revokeHostedHeroPoint(player.id);
+      showHostedSessionFeedback(
+        result.ok
+          ? `Ponto Heroico retirado de ${player.characterName}.`
+          : result.error ?? 'Não foi possível retirar o ponto.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível retirar o Ponto Heroico.');
+    }
+  };
+
+  const toggleUnarmedStrike = async (player: PlayerHudState) => {
+    try {
+      const enabled = player.unarmedStrikeEnabled !== false;
+      const result = await window.bossAPI.setHostedUnarmedStrikeEnabled(
+        player.id,
+        !enabled,
+      );
+      showHostedSessionFeedback(
+        result.ok
+          ? `Ataque desarmado ${enabled ? 'desativado' : 'ativado'} para ${player.characterName}.`
+          : result.error ?? 'Não foi possível alterar o ataque desarmado.',
+      );
+    } catch {
+      showHostedSessionFeedback('Não foi possível alterar o ataque desarmado.');
     }
   };
 
@@ -1090,32 +1177,6 @@ const MasterApp = () => {
             </div>
           )}
 
-          {hostedSession.pendingActionPointRequests.length > 0 && (
-            <div className="hosted-join-requests is-action-points">
-              <div className="hosted-roster-heading">
-                <span>Pontos de Ação aguardando aprovação</span>
-              </div>
-              <ol className="hosted-request-list">
-                {hostedSession.pendingActionPointRequests.map((request) => (
-                  <li className="hosted-request" key={request.id}>
-                    <span title={`${request.playerName}: ${request.label}`}>
-                      {request.playerName} · {request.label}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void decideActionPoint(request.id, true)}
-                    >Aprovar</button>
-                    <button
-                      className="is-reject"
-                      type="button"
-                      onClick={() => void decideActionPoint(request.id, false)}
-                    >Recusar</button>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-
           <div className="hosted-roster-heading">
             <span>Jogadores conectados</span>
             {hostedSessionFeedback && (
@@ -1169,24 +1230,6 @@ const MasterApp = () => {
                   </button>
                   {!player.isHost && (
                     <button
-                      className="hosted-player-tool is-hero"
-                      type="button"
-                      onClick={async () => {
-                        const result = await window.bossAPI.grantHostedHeroPoint(
-                          player.id,
-                        );
-                        showHostedSessionFeedback(
-                          result.ok
-                            ? `Ponto Heróico concedido a ${player.name}.`
-                            : result.error ?? 'Não foi possível conceder o ponto.',
-                        );
-                      }}
-                    >
-                      + Heróico
-                    </button>
-                  )}
-                  {!player.isHost && (
-                    <button
                       className="hosted-player-tool is-delete"
                       type="button"
                       onClick={() => {
@@ -1212,6 +1255,132 @@ const MasterApp = () => {
           {hostedSession.error && (
             <p className="hosted-session-error" role="alert">
               {hostedSession.error}
+            </p>
+          )}
+        </section>
+      )}
+
+      {hostedSession?.active && (
+        <section
+          className="compact-panel hosted-players-panel"
+          aria-labelledby="hosted-players-title"
+        >
+          <div className="hosted-players-heading">
+            <div className="compact-panel-title">
+              <h2 id="hosted-players-title">Jogadores</h2>
+            </div>
+            {hostedSessionFeedback && (
+              <small role="status">{hostedSessionFeedback}</small>
+            )}
+          </div>
+          {playerHuds.length > 0 ? (
+            <ol className="hosted-character-list">
+              {playerHuds.map((player) => {
+                const pendingRequests =
+                  hostedSession.pendingActionPointRequests.filter(
+                    ({ playerId }) => playerId === player.id,
+                  );
+                return (
+                  <li className="hosted-character" key={player.id}>
+                    <div className="hosted-character-summary">
+                      <strong title={player.characterName}>
+                        {player.characterName}
+                      </strong>
+                      <span>
+                        Ação <b>{player.actionPoints ?? 0}/5</b>
+                      </span>
+                      <span>
+                        Heroico <b>{player.heroPoints ?? 0}/1</b>
+                      </span>
+                      <button
+                        className="hosted-grant-action"
+                        type="button"
+                        disabled={(player.actionPoints ?? 0) >= 5}
+                        data-disabled-reason="Limite de cinco pontos atingido"
+                        data-app-tooltip="Conceder Ponto de Ação"
+                        aria-label="Conceder Ponto de Ação"
+                        onClick={() => void grantActionPoint(player)}
+                      >
+                        +
+                      </button>
+                      <button
+                        className="hosted-revoke-action"
+                        type="button"
+                        disabled={(player.actionPoints ?? 0) <= 0}
+                        data-disabled-reason="O personagem não possui este ponto"
+                        data-app-tooltip="Retirar Ponto de Ação"
+                        aria-label="Retirar Ponto de Ação"
+                        onClick={() => void revokeActionPoint(player)}
+                      >
+                        −
+                      </button>
+                      <button
+                        className="hosted-grant-hero"
+                        type="button"
+                        disabled={(player.heroPoints ?? 0) >= 1}
+                        data-disabled-reason="O personagem já possui este ponto"
+                        data-app-tooltip="Conceder Ponto Heroico"
+                        aria-label="Conceder Ponto Heroico"
+                        onClick={() => void grantHeroPoint(player)}
+                      >
+                        +
+                      </button>
+                      <button
+                        className="hosted-revoke-hero"
+                        type="button"
+                        disabled={(player.heroPoints ?? 0) <= 0}
+                        data-disabled-reason="O personagem não possui este ponto"
+                        data-app-tooltip="Retirar Ponto Heroico"
+                        aria-label="Retirar Ponto Heroico"
+                        onClick={() => void revokeHeroPoint(player)}
+                      >
+                        −
+                      </button>
+                      <button
+                        className={`hosted-unarmed-toggle ${
+                          player.unarmedStrikeEnabled !== false ? 'is-active' : ''
+                        }`}
+                        type="button"
+                        aria-pressed={player.unarmedStrikeEnabled !== false}
+                        data-app-tooltip={
+                          player.unarmedStrikeEnabled !== false
+                            ? 'Desativar Punhos para este personagem'
+                            : 'Ativar Punhos para este personagem'
+                        }
+                        onClick={() => void toggleUnarmedStrike(player)}
+                      >
+                        Punhos
+                      </button>
+                    </div>
+                    {pendingRequests.length > 0 && (
+                      <ol className="hosted-character-requests">
+                        {pendingRequests.map((request) => (
+                          <li key={request.id}>
+                            <span title={request.label}>{request.label}</span>
+                            <button
+                              type="button"
+                              onClick={() => void decideActionPoint(request.id, true)}
+                            >
+                              Aprovar
+                            </button>
+                            <button
+                              className="is-reject"
+                              type="button"
+                              onClick={() => void decideActionPoint(request.id, false)}
+                            >
+                              Negar
+                            </button>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="hosted-player-empty">
+              Nenhum personagem presente na sala.
             </p>
           )}
         </section>
@@ -1420,7 +1589,13 @@ const MasterApp = () => {
                 {playerProfiles.map((profile) => (
                   <li key={profile.id}>
                     <span className="player-profile-name" title={profile.username}>{profile.username}</span>
-                    <small>{profile.sheet.hasSheet ? profile.sheet.fileName : 'Sem ficha'}</small>
+                    <small title={profile.sheet.hasSheet
+                      ? profile.sheet.fileName ?? 'Ficha vinculada'
+                      : 'Sem ficha'}>
+                      {profile.sheet.hasSheet
+                        ? profile.sheet.fileName ?? 'Ficha vinculada'
+                        : 'Sem ficha'}
+                    </small>
                     <button
                       type="button"
                       disabled={!profile.sheet.hasSheet}
