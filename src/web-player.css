@@ -295,6 +295,15 @@
 .web-player-character-hud header strong { overflow: hidden; font: 800 clamp(12px, 1.1vw, 15px)/1.1 Cinzel, Georgia, serif; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .web-player-character-hud header button { flex: 0 0 auto; width: 24px; min-height: 24px; border: 1px solid rgb(160 118 65 / 58%); border-radius: 5px; padding: 0; background: rgb(10 8 8 / 82%); color: #d9bd91; cursor: pointer; }
 .web-player-character-hud.is-turn-active { border-color: #ef9e48; box-shadow: 0 0 0 1px rgb(255 76 34 / 68%), 0 0 20px rgb(255 158 49 / 72%), 0 0 36px rgb(164 35 24 / 48%); animation: web-player-turn-glow 1.5s ease-in-out infinite alternate; }
+.web-player-character-hud.is-dead {
+  border-color: rgb(122 118 113 / 58%);
+  background:
+    linear-gradient(112deg, transparent 0 39%, rgb(218 218 214 / 18%) 39.5% 40%, transparent 40.5% 100%),
+    linear-gradient(67deg, transparent 0 64%, rgb(218 218 214 / 15%) 64.5% 65%, transparent 65.5% 100%),
+    linear-gradient(145deg, rgb(23 23 23 / 92%), rgb(7 7 7 / 91%));
+  filter: grayscale(1) brightness(.68);
+  box-shadow: inset 0 0 22px rgb(0 0 0 / 78%), 0 7px 26px rgb(0 0 0 / 52%);
+}
 .web-player-character-actions { display: flex; justify-content: center; gap: 9px; margin-top: 6px; }
 .web-player-character-actions button { position: relative; width: 10px; min-width: 10px; height: 10px; min-height: 10px; border: 0; border-radius: 50%; padding: 0; background: #777; box-shadow: none; opacity: .3; cursor: not-allowed; filter: saturate(.2); }
 .web-player-character-actions button:nth-child(1) { background: #3697ff; color: #3697ff; }
@@ -318,14 +327,25 @@
 .web-player-character-bar.is-mana > span { background: linear-gradient(90deg, #123a82, #2181c5); box-shadow: 0 0 5px rgb(35 124 202 / 34%); }
 .web-player-character-bar output { position: absolute; right: 5px; bottom: 50%; transform: translateY(50%); color: #fff2dd; font: 850 11px/1 Inter, "Segoe UI", sans-serif; text-shadow: 0 1px 2px #000, 0 0 3px #000; }
 .web-player-character-bar.is-mana output { font-size: 10px; }
-.web-player-character-defenses { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; color: #e0cfb1; font: 850 10px/1 Inter, "Segoe UI", sans-serif; }
+.web-player-character-defenses { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 6px; color: #e0cfb1; font: 850 10px/1 Inter, "Segoe UI", sans-serif; }
+.web-player-character-defenses > strong { font: inherit; }
+.web-player-character-defenses > span { display: inline-flex; align-items: center; gap: 2px; }
+.web-player-character-defenses img,
+.web-player-character-detail-defense img { width: 14px; height: 14px; object-fit: contain; filter: drop-shadow(0 1px 2px #000); }
+.web-player-character-defenses b { color: inherit; font: inherit; }
+.web-player-character-defenses i { color: rgb(225 204 171 / 64%); font-style: normal; }
 .web-player-character-defenses .is-penalty { color: #ef6969; }
 .web-player-character-defenses .is-bonus { color: #68d68d; }
 .web-player-character-details { max-height: min(58vh, 520px); margin-top: 8px; overflow: auto; border-top: 1px solid rgb(145 104 58 / 35%); padding-top: 7px; color: #ded2bf; font: 11px/1.4 Inter, "Segoe UI", sans-serif; }
 .web-player-character-details[hidden] { display: none; }
 .web-player-character-details p { margin: 0 0 6px; color: #ebd8b8; font-weight: 750; }
 .web-player-character-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
-.web-player-character-detail-heading p { min-width: 0; margin: 0; }
+.web-player-character-detail-heading p { display: grid; min-width: 0; gap: 3px; margin: 0; }
+.web-player-character-detail-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 9px; }
+.web-player-character-detail-vitals > b { color: #e8d4b2; font-weight: 800; }
+.web-player-character-detail-defense { display: inline-flex; align-items: center; gap: 2px; }
+.web-player-character-detail-defense b.is-bonus { color: #68d68d; }
+.web-player-character-detail-defense b.is-penalty { color: #ef6969; }
 .web-player-character-detail-heading label { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: #c9b18b; cursor: pointer; font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .web-player-character-detail-heading input { width: 13px; height: 13px; margin: 0; accent-color: #b7402e; }
 .web-player-character-detail-section { display: grid; gap: 3px; margin-top: 8px; }

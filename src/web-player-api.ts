@@ -8,6 +8,7 @@ import type {
   PlayerCharacterSheetStatus,
 } from './shared/character-sheet.ts';
 import {
+  BOSS_CRITICAL_THREAT_DURATION_MS,
   initialBattleState,
   initialEncounterEffectsState,
   type BackgroundState,
@@ -15,12 +16,18 @@ import {
   type EncounterEffectsState,
   type EncounterSoundEffect,
   type HealthEffect,
+  type MusicDuckEvent,
   type MusicState,
   type SoundEffect,
   type SoundboardState,
   type SoundboardStop,
 } from './shared/battle.ts';
 import { createBossSkillValues } from './shared/boss-skills.ts';
+import { createInitialBossAttack } from './shared/boss-attacks.ts';
+import {
+  MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
+  MEDIA_CACHE_ITEM_LIMIT_BYTES,
+} from './shared/media-cache.ts';
 import {
   MAX_MULTIPLAYER_PLAYERS,
   MULTIPLAYER_PROTOCOL_VERSION,
@@ -111,6 +118,7 @@ type PlayerApi = Pick<
   | 'subscribeMusic'
   | 'subscribeMusicSeek'
   | 'subscribeMusicFadeOut'
+  | 'subscribeMusicDuck'
   | 'musicTrackEnded'
   | 'musicFadeoutComplete'
   | 'reportMusicProgress'
@@ -231,6 +239,8 @@ export const toBattleState = (
     skillValues: createBossSkillValues(0),
     skillOverrides: [],
     damageReduction: 0,
+    attacks: [createInitialBossAttack(boss.id)],
+    selectedAttackId: `boss-attack:${boss.id}:1`,
   })),
   activeBossId: state.bosses[0]?.id ?? '',
   battleStarted: state.battleStarted,
@@ -385,6 +395,10 @@ export const createWebPlayerApi = ({
   const sceneTransitions = createReplayEventChannel<SceneTransitionEvent>();
   const musicSeek = createReplayEventChannel<number>();
   const musicFadeOut = createEventChannel<number>();
+  // A critical cue can arrive while the React presentation is completing its
+  // dynamic mount. Replaying only the latest phase prevents that short race;
+  // the subsequent restore phase replaces any stale threat/impact event.
+  const musicDuck = createReplayEventChannel<MusicDuckEvent>();
   const soundboardStops = createEventChannel<SoundboardStop>();
   const soundEffects = createEventChannel<SoundEffect>();
   const encounterSoundEffects = createEventChannel<EncounterSoundEffect>();
@@ -397,8 +411,8 @@ export const createWebPlayerApi = ({
     resolveConnectionParameters();
   const mediaPreloadPromises = new Map<string, Promise<boolean>>();
   const resolvedMediaUrls = new Map<string, string>();
-  const maxResidentMediaItemBytes = 8 * 1024 * 1024;
-  const maxResidentMediaTotalBytes = 32 * 1024 * 1024;
+  const maxResidentMediaItemBytes = MEDIA_CACHE_ITEM_LIMIT_BYTES;
+  const maxResidentMediaTotalBytes = MEDIA_CACHE_GLOBAL_LIMIT_BYTES;
   const activePreloadControllers = new Set<AbortController>();
   const activePreloadElements = new Set<HTMLImageElement | HTMLMediaElement>();
   const eventQueue = createOrderedEventQueue((error) => {
@@ -408,6 +422,8 @@ export const createWebPlayerApi = ({
     impact: PublicCombatImpact;
     timeout: ReturnType<typeof setTimeout> | null;
   }> = [];
+  const musicDuckThreatEndsAt = new Map<number, number>();
+  const musicDuckImpactEndsAt = new Map<number, number>();
 
   let latestOccupancy: MultiplayerOccupancy | null = null;
   let receivedSnapshot = false;
@@ -834,6 +850,8 @@ export const createWebPlayerApi = ({
   const clearTransientMediaCache = () => {
     snapshotLoadSequence += 1;
     eventQueue.reset();
+    musicDuckThreatEndsAt.clear();
+    musicDuckImpactEndsAt.clear();
     activePreloadControllers.forEach((controller) => controller.abort());
     activePreloadControllers.clear();
     activePreloadElements.forEach((element) => {
@@ -1011,10 +1029,15 @@ export const createWebPlayerApi = ({
     ok: false,
     error: 'O jogador ainda não está conectado.',
   });
-  let rollInitiativeHandler = async (): Promise<EncounterTurnActionResult> => ({
-    ok: false,
-    error: 'O jogador ainda não está conectado.',
-  });
+  let rollInitiativeHandler = async (
+    extremeAdvantage = false,
+  ): Promise<EncounterTurnActionResult> => {
+    void extremeAdvantage;
+    return {
+      ok: false,
+      error: 'O jogador ainda não está conectado.',
+    };
+  };
   let usePlayerActionHandler: BossAPI['usePlayerAction'] = async () => ({
     ok: false,
     error: 'O jogador ainda não está conectado.',
@@ -1045,6 +1068,7 @@ export const createWebPlayerApi = ({
     subscribeMusic: music.subscribe,
     subscribeMusicSeek: musicSeek.subscribe,
     subscribeMusicFadeOut: musicFadeOut.subscribe,
+    subscribeMusicDuck: musicDuck.subscribe,
     musicTrackEnded: () => undefined,
     musicFadeoutComplete: () => undefined,
     reportMusicProgress: () => undefined,
@@ -1067,7 +1091,8 @@ export const createWebPlayerApi = ({
       return unsubscribe;
     },
     advanceEncounterTurn: () => endOwnTurnHandler(),
-    rollEncounterInitiative: () => rollInitiativeHandler(),
+    rollEncounterInitiative: (_participantId, extremeAdvantage = false) =>
+      rollInitiativeHandler(extremeAdvantage),
     rollEncounterFormula: async () => ({
       ok: false,
       error: 'Somente o mestre pode rolar fórmulas pelo painel.',
@@ -1216,10 +1241,12 @@ export const createWebPlayerApi = ({
     void eventQueue.enqueue(() => onPlayerState?.(state));
   });
   socket.on('players:hud-state', (state) => {
-    // These lightweight projections do not depend on media. Keeping them out
-    // of the media queue prevents a slow background/audio preload from
-    // delaying party visibility or privacy changes.
-    playerHuds.publish(state);
+    void eventQueue.enqueue(() => {
+      // Keep party bars in the same ordered stream as critical impact audio.
+      // Otherwise observers could see another player's PV change while the
+      // associated SFX was still waiting for its cached media.
+      playerHuds.publish(state);
+    });
   });
   socket.on('encounter:turn-state', (state) => {
     encounterTurn.publish(state);
@@ -1269,6 +1296,54 @@ export const createWebPlayerApi = ({
   });
   socket.on('presentation:music-fade-out', (duration) => {
     void eventQueue.enqueue(() => musicFadeOut.publish(duration));
+  });
+  socket.on('presentation:music-duck', (event) => {
+    void eventQueue.enqueue(async (isCurrent) => {
+      const soundUrl = event.phase !== 'restore'
+        ? event.soundEffect?.url
+        : null;
+      const loaded = soundUrl
+        ? await waitForMediaUrls([soundUrl], isCurrent)
+        : true;
+      if (!loaded || !isCurrent()) return;
+      if (event.phase === 'restore') {
+        const remaining = (musicDuckImpactEndsAt.get(event.id) ?? 0) - Date.now();
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+          if (!isCurrent()) return;
+        }
+        musicDuckThreatEndsAt.delete(event.id);
+        musicDuckImpactEndsAt.delete(event.id);
+      } else if (event.phase === 'impact') {
+        const remainingThreat =
+          (musicDuckThreatEndsAt.get(event.id) ?? 0) - Date.now();
+        if (remainingThreat > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainingThreat));
+          if (!isCurrent()) return;
+        }
+        musicDuckThreatEndsAt.delete(event.id);
+        musicDuckImpactEndsAt.set(
+          event.id,
+          Date.now() + Math.max(0, event.duration),
+        );
+      } else {
+        musicDuckThreatEndsAt.clear();
+        musicDuckImpactEndsAt.clear();
+        musicDuckThreatEndsAt.set(
+          event.id,
+          Date.now() + BOSS_CRITICAL_THREAT_DURATION_MS,
+        );
+      }
+      musicDuck.publish({
+        ...event,
+        soundEffect: event.soundEffect
+          ? {
+            ...event.soundEffect,
+            url: resolvedMediaUrl(event.soundEffect.url) ?? event.soundEffect.url,
+          }
+          : null,
+      });
+    });
   });
   socket.on('presentation:soundboard', (state) => {
     void eventQueue.enqueue(() => soundboard.publish(toSoundboardState(state)));
@@ -1330,7 +1405,7 @@ export const createWebPlayerApi = ({
       });
     });
   endOwnTurnHandler = endOwnTurn;
-  const rollInitiative = () =>
+  const rollInitiative = (extremeAdvantage = false) =>
     new Promise<EncounterTurnActionResult>((resolve) => {
       if (!socket.connected) {
         resolve({ ok: false, error: 'O jogador não está conectado.' });
@@ -1339,7 +1414,7 @@ export const createWebPlayerApi = ({
       const timeout = window.setTimeout(() => {
         resolve({ ok: false, error: 'A sala não confirmou a iniciativa.' });
       }, 5_000);
-      socket.emit('encounter:roll-initiative', (result) => {
+      socket.emit('encounter:roll-initiative', extremeAdvantage, (result) => {
         window.clearTimeout(timeout);
         resolve(result);
       });
@@ -1415,6 +1490,8 @@ export const createWebPlayerApi = ({
   const leave = () => {
     snapshotLoadSequence += 1;
     eventQueue.reset();
+    musicDuckThreatEndsAt.clear();
+    musicDuckImpactEndsAt.clear();
     clearPendingCombatImpacts();
     socket.disconnect();
   };

@@ -137,8 +137,10 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(firstPage.locator('#web-player-character-name')).toHaveText('Valora');
     await expect(firstPage.locator('#web-player-character-health-value')).toHaveText('21/21');
     await expect(firstPage.locator('#web-player-character-mana-value')).toHaveText('3/3');
-    await expect(firstPage.locator('#web-player-character-defense-melee')).toHaveText('CaC 10');
-    await expect(firstPage.locator('#web-player-character-defense-ranged')).toHaveText('AaD 10');
+    await expect(firstPage.locator('#web-player-character-defense-melee')).toHaveText('10');
+    await expect(firstPage.locator('#web-player-character-defense-ranged')).toHaveText('10');
+    await expect(firstPage.locator('.web-player-character-defenses img')).toHaveCount(2);
+    await expect(firstPage.locator('.web-player-character-defenses')).toContainText('Defesa:');
     await firstPage.locator('#web-player-character-expand').click();
     await expect(firstPage.locator('#web-player-character-details')).toBeVisible();
     await expect(characterHud).toHaveCSS('z-index', '2147483647');

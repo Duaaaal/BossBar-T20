@@ -134,3 +134,134 @@ test('libera som e alteração da barra como um único impacto após o preload',
     await session.close();
   }
 });
+
+test('separa a ameaça crítica do impacto e sincroniza áudio e efeito final', async ({ page }) => {
+  const session = await startHostedTestSession({
+    preloadMediaIds: [
+      TEST_MEDIA_IDS.background,
+      TEST_MEDIA_IDS.music,
+      TEST_MEDIA_IDS.impactSound,
+    ],
+  });
+  try {
+    await page.addInitScript(() => {
+      const events: Array<{ kind: string; at: number }> = [];
+      Object.assign(window, { __bossCriticalCueEvents: events });
+      HTMLMediaElement.prototype.play = function patchedPlay() {
+        events.push({ kind: 'critical-audio', at: performance.now() });
+        queueMicrotask(() => this.dispatchEvent(new Event('playing')));
+        return Promise.resolve();
+      };
+      const originalAnimate = Element.prototype.animate;
+      Element.prototype.animate = function patchedAnimate(keyframes, options) {
+        if (this instanceof HTMLElement && this.classList.contains('player-stage')) {
+          events.push({ kind: 'critical-visual', at: performance.now() });
+        }
+        return originalAnimate.call(this, keyframes, options);
+      };
+    });
+    await joinHostedSession(page, session.inviteUrl, 'Jogador Crítico');
+    session.server.publishBattleState(createPublicBattle({ battleStarted: true, revision: 2 }));
+    await expect(page.locator('.player-stage')).toBeVisible();
+    await page.evaluate(() => {
+      const target = window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+        __bossCriticalPhases?: Array<{ phase: string; at: number }>;
+      };
+      if (target.__bossCriticalCueEvents) target.__bossCriticalCueEvents.length = 0;
+      target.__bossCriticalPhases = [];
+      window.bossAPI.subscribeMusicDuck((event) => {
+        target.__bossCriticalPhases?.push({
+          phase: event.phase,
+          at: performance.now(),
+        });
+      });
+    });
+
+    session.server.publishMusicDuck({
+      id: 41,
+      phase: 'duck',
+      duration: 1_000,
+      targetVolume: 0.2,
+      soundEffect: {
+        id: 41,
+        kind: 'natural-success-enemy',
+        url: session.mediaUrl(TEST_MEDIA_IDS.impactSound),
+      },
+      targetPlayerIds: [],
+    });
+
+    await expect.poll(() => page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+      }
+    ).__bossCriticalCueEvents?.filter(({ kind }) => kind === 'critical-visual').length ?? 0)).toBe(1);
+    await expect.poll(() => page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+      }
+    ).__bossCriticalCueEvents?.filter(({ kind }) => kind === 'critical-audio').length ?? 0)).toBe(1);
+    const threatEvents = await page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+      }
+    ).__bossCriticalCueEvents ?? []);
+    const threatAudioAt = threatEvents.find(({ kind }) => kind === 'critical-audio')?.at;
+    const threatVisualAt = threatEvents.find(({ kind }) => kind === 'critical-visual')?.at;
+    expect(threatAudioAt).toBeDefined();
+    expect(threatVisualAt).toBeDefined();
+    expect(Math.abs((threatAudioAt ?? 0) - (threatVisualAt ?? 0))).toBeLessThan(120);
+
+    session.server.publishMusicDuck({
+      id: 41,
+      phase: 'impact',
+      duration: 1_100,
+      soundEffect: {
+        id: 42,
+        kind: 'critical-damage',
+        url: session.mediaUrl(TEST_MEDIA_IDS.impactSound),
+      },
+      targetPlayerIds: [],
+    });
+    session.server.publishMusicDuck({
+      id: 41,
+      phase: 'restore',
+      duration: 500,
+      soundEffect: null,
+      targetPlayerIds: [],
+    });
+
+    await expect.poll(() => page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+      }
+    ).__bossCriticalCueEvents?.length ?? 0)).toBeGreaterThanOrEqual(4);
+    const events = await page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalCueEvents?: Array<{ kind: string; at: number }>;
+      }
+    ).__bossCriticalCueEvents ?? []);
+    const audioAt = events.filter(({ kind }) => kind === 'critical-audio').at(-1)?.at;
+    const visualAt = events.filter(({ kind }) => kind === 'critical-visual').at(-1)?.at;
+    expect(audioAt).toBeDefined();
+    expect(visualAt).toBeDefined();
+    expect(Math.abs((audioAt ?? 0) - (visualAt ?? 0))).toBeLessThan(120);
+    await expect.poll(() => page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalPhases?: Array<{ phase: string; at: number }>;
+      }
+    ).__bossCriticalPhases?.length ?? 0)).toBe(3);
+    const phases = await page.evaluate(() => (
+      window as typeof window & {
+        __bossCriticalPhases?: Array<{ phase: string; at: number }>;
+      }
+    ).__bossCriticalPhases ?? []);
+    const threatAt = phases.find(({ phase }) => phase === 'duck')?.at ?? 0;
+    const impactAt = phases.find(({ phase }) => phase === 'impact')?.at ?? 0;
+    const restoreAt = phases.find(({ phase }) => phase === 'restore')?.at ?? 0;
+    expect(impactAt - threatAt).toBeGreaterThanOrEqual(2_950);
+    expect(restoreAt - impactAt).toBeGreaterThanOrEqual(1_050);
+  } finally {
+    await session.close();
+  }
+});

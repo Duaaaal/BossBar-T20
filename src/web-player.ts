@@ -25,6 +25,13 @@ import {
   getActiveStatusName,
   getStatusDefinition,
 } from './shared/status';
+import { deriveStatusAttributes } from './shared/status-rules';
+import {
+  BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+  BOSS_CRITICAL_THREAT_DURATION_MS,
+} from './shared/battle';
+import { escalatingCriticalShakeKeyframes } from './critical-presentation';
+import { sanitizeNotesHtml } from './notes-html';
 import './web-player.css';
 
 window.__BOSS_WEB_PLAYER__ = true;
@@ -109,7 +116,6 @@ let creatingAccount = false;
 let authenticating = false;
 let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
 let playerEncounterState: PlayerEncounterState | null = null;
-let observedCriticalImpactId: number | null | undefined;
 let selfHudId: string | null = null;
 let activeTurnParticipantId: string | null = null;
 
@@ -120,32 +126,49 @@ const updateOwnTurnHighlight = () => {
   );
 };
 
-const playCharacterCriticalImpact = () => {
-  document.querySelector<HTMLElement>('.player-stage')?.animate(
-    [
-      { transform: 'translate3d(0, 0, 0) scale(1)' },
-      { transform: 'translate3d(-8px, 4px, 0) scale(1.012)', offset: .12 },
-      { transform: 'translate3d(7px, -4px, 0) scale(1.01)', offset: .28 },
-      { transform: 'translate3d(-4px, 2px, 0) scale(1.006)', offset: .48 },
-      { transform: 'translate3d(2px, -1px, 0) scale(1.002)', offset: .68 },
-      { transform: 'translate3d(0, 0, 0) scale(1)' },
-    ],
-    { duration: 900, easing: 'cubic-bezier(.16,.84,.24,1)' },
+let activeCharacterCriticalThreatAnimations: Animation[] = [];
+let characterCriticalThreatFallback: ReturnType<typeof setTimeout> | null = null;
+
+const stopCharacterCriticalThreat = () => {
+  activeCharacterCriticalThreatAnimations.forEach((animation) => animation.cancel());
+  activeCharacterCriticalThreatAnimations = [];
+  if (characterCriticalThreatFallback) clearTimeout(characterCriticalThreatFallback);
+  characterCriticalThreatFallback = null;
+};
+
+const playCharacterCriticalImpact = (
+  requestedDuration = BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+) => {
+  stopCharacterCriticalThreat();
+  const duration = Math.max(
+    BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+    Math.min(5_000, requestedDuration),
   );
   characterHud?.animate(
     [
-      { transform: 'translate3d(0, 0, 0) scale(1)', filter: 'none' },
       {
-        transform: 'translate3d(-9px, 4px, 0) scale(1.035)',
-        filter: 'brightness(2) saturate(1.7)',
+        transform: 'translate3d(-18px, 9px, 0) scale(1.055) rotate(-.72deg)',
+        filter: 'brightness(2.35) saturate(2.2)',
+        boxShadow: '0 0 58px rgb(255 20 30 / 98%), inset 0 0 28px rgb(154 0 10 / 88%)',
+      },
+      {
+        transform: 'translate3d(14px, -7px, 0) scale(1.038) rotate(.54deg)',
+        filter: 'brightness(1.85) saturate(1.85)',
         offset: .14,
       },
-      { transform: 'translate3d(8px, -4px, 0) scale(1.02)', offset: .3 },
-      { transform: 'translate3d(-5px, 2px, 0) scale(1.012)', offset: .48 },
+      { transform: 'translate3d(-10px, 5px, 0) scale(1.024)', offset: .3 },
+      { transform: 'translate3d(7px, -3px, 0) scale(1.014)', offset: .48 },
       { transform: 'translate3d(3px, -1px, 0) scale(1.006)', offset: .68 },
-      { transform: 'translate3d(0, 0, 0) scale(1)', filter: 'none' },
+      {
+        transform: 'translate3d(0, 0, 0) scale(1)',
+        filter: 'none',
+        boxShadow: '0 6px 24px rgb(0 0 0 / 28%)',
+      },
     ],
-    { duration: 1_050, easing: 'cubic-bezier(.16,.84,.24,1)' },
+    {
+      duration,
+      easing: 'cubic-bezier(.16,.84,.24,1)',
+    },
   );
   characterHealthFill?.parentElement?.animate(
     [
@@ -157,31 +180,37 @@ const playCharacterCriticalImpact = () => {
       },
       { boxShadow: 'inset 0 1px 4px rgb(0 0 0 / 68%)' },
     ],
-    { duration: 1_050, easing: 'ease-out' },
-  );
-  document.querySelector<HTMLElement>('.critical-screen-flash')?.animate(
-    [
-      { opacity: 0 },
-      { opacity: .72, offset: .1 },
-      { opacity: .18, offset: .32 },
-      { opacity: 0 },
-    ],
-    { duration: 900, easing: 'ease-out' },
+    { duration, easing: 'ease-out' },
   );
 };
 
-const observeCharacterCriticalImpact = (
-  state: PlayerEncounterState | null,
-) => {
-  const nextId = state?.criticalImpactId ?? null;
-  if (observedCriticalImpactId === undefined) {
-    observedCriticalImpactId = nextId;
-    return;
-  }
-  if (nextId !== null && nextId !== observedCriticalImpactId) {
-    playCharacterCriticalImpact();
-  }
-  observedCriticalImpactId = nextId;
+const playCharacterCriticalThreat = () => {
+  stopCharacterCriticalThreat();
+  if (!characterHud) return;
+  const frames = escalatingCriticalShakeKeyframes({
+    maximumX: 25,
+    maximumY: 17,
+    maximumRotation: 1.05,
+    maximumScale: .045,
+  }).map((frame) => {
+    const progress = typeof frame.offset === 'number' ? frame.offset : 0;
+    return {
+      ...frame,
+      filter: `saturate(${(1 + progress * 1.7).toFixed(2)}) brightness(${(1 + progress * .22).toFixed(2)})`,
+      boxShadow:
+        `0 0 ${(8 + progress * 50).toFixed(1)}px rgb(255 20 30 / ${(0.2 + progress * .76).toFixed(2)}), ` +
+        `inset 0 0 ${(progress * 26).toFixed(1)}px rgb(154 0 10 / ${(progress * .82).toFixed(2)})`,
+    } satisfies Keyframe;
+  });
+  activeCharacterCriticalThreatAnimations.push(characterHud.animate(frames, {
+    duration: BOSS_CRITICAL_THREAT_DURATION_MS,
+    easing: 'linear',
+    fill: 'forwards',
+  }));
+  characterCriticalThreatFallback = setTimeout(
+    stopCharacterCriticalThreat,
+    BOSS_CRITICAL_THREAT_DURATION_MS + 7_000,
+  );
 };
 
 const showConnectionState = ({
@@ -205,7 +234,6 @@ const showConnectionState = ({
     changeNameButton?.setAttribute('hidden', '');
     toolsElement?.setAttribute('hidden', '');
     playerEncounterState = null;
-    observedCriticalImpactId = undefined;
     characterHud?.setAttribute('hidden', '');
     closedElement?.removeAttribute('hidden');
     statusElement.dataset.visible = 'false';
@@ -270,12 +298,10 @@ const {
   onConnectionState: showConnectionState,
   onPlayerState: (state) => {
     playerEncounterState = state;
-    observeCharacterCriticalImpact(state);
     renderCharacterSheet(getPlayerToolsState().sheet);
   },
   onPlayerCombatImpact: (impact) => {
     playerEncounterState = impact.playerState;
-    observeCharacterCriticalImpact(impact.playerState);
     renderCharacterSheet(getPlayerToolsState().sheet);
     showReflexResult(impact);
   },
@@ -297,6 +323,13 @@ const {
   },
 });
 window.bossAPI = api;
+
+api.subscribeMusicDuck((event) => {
+  if (!selfHudId || !event.targetPlayerIds?.includes(selfHudId)) return;
+  if (event.phase === 'duck') playCharacterCriticalThreat();
+  if (event.phase === 'impact') playCharacterCriticalImpact(event.duration);
+  if (event.phase === 'restore') stopCharacterCriticalThreat();
+});
 
 api.subscribePlayerHuds((players) => {
   const self = players.find(({ isSelf }) => isSelf);
@@ -480,19 +513,59 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   const currentMana = playerEncounterState?.currentMana ?? summary.currentMana;
   const maxMana = playerEncounterState?.maxMana ?? summary.maxMana;
   const temporaryDefenseBonus = playerEncounterState?.temporaryDefenseBonus ?? 0;
-  const defenseMelee = playerEncounterState
-    ? playerEncounterState.defenseMelee + temporaryDefenseBonus
+  const statusDefenses = playerEncounterState
+    ? deriveStatusAttributes({
+      attack: 0,
+      rangedAttack: 0,
+      skills: 0,
+      meleeDefense: playerEncounterState.defenseMelee,
+      rangedDefense: playerEncounterState.defenseRanged,
+      damageReduction: 0,
+      shield: 0,
+    }, playerEncounterState.statuses)
+    : null;
+  const defenseMelee = statusDefenses
+    ? statusDefenses.values.meleeDefense + temporaryDefenseBonus
     : defenses.melee;
-  const defenseRanged = playerEncounterState
-    ? playerEncounterState.defenseRanged + temporaryDefenseBonus
+  const defenseRanged = statusDefenses
+    ? statusDefenses.values.rangedDefense + temporaryDefenseBonus
     : defenses.ranged;
   characterHud?.removeAttribute('hidden');
+  characterHud?.classList.toggle('is-dead', Boolean(playerEncounterState?.dead));
   renderCharacterStatuses(playerEncounterState);
   if (characterName) {
     characterName.textContent = playerEncounterState?.characterName || summary.characterName || 'Personagem';
   }
   if (characterClassLevel) {
-    characterClassLevel.textContent = `${summary.characterClass || 'Classe não informada'} • Nível ${summary.level ?? '—'}`;
+    const classLevel = document.createElement('span');
+    classLevel.textContent = `${summary.characterClass || 'Classe não informada'} • Nível ${summary.level ?? '—'}`;
+    const vitalSummary = document.createElement('span');
+    vitalSummary.className = 'web-player-character-detail-vitals';
+    const health = document.createElement('b');
+    health.textContent = `PV ${currentHealth ?? '—'}/${maxHealth ?? '—'}`;
+    const mana = document.createElement('b');
+    mana.textContent = `PM ${currentMana ?? '—'}/${maxMana ?? '—'}`;
+    const defense = document.createElement('span');
+    defense.className = 'web-player-character-detail-defense';
+    const meleeIcon = document.createElement('img');
+    meleeIcon.src = '/session-assets/ui/defense-melee.png';
+    meleeIcon.alt = 'Corpo a corpo';
+    const rangedIcon = document.createElement('img');
+    rangedIcon.src = '/session-assets/ui/defense-ranged.png';
+    rangedIcon.alt = 'À distância';
+    const meleeValue = document.createElement('b');
+    meleeValue.textContent = `${defenseMelee ?? '—'}`;
+    meleeValue.className = defenseMelee !== null && defenses.melee !== null
+      ? defenseMelee > defenses.melee ? 'is-bonus' : defenseMelee < defenses.melee ? 'is-penalty' : ''
+      : '';
+    const rangedValue = document.createElement('b');
+    rangedValue.textContent = `${defenseRanged ?? '—'}`;
+    rangedValue.className = defenseRanged !== null && defenses.ranged !== null
+      ? defenseRanged > defenses.ranged ? 'is-bonus' : defenseRanged < defenses.ranged ? 'is-penalty' : ''
+      : '';
+    defense.append('Defesa: ', meleeIcon, meleeValue, ' / ', rangedIcon, rangedValue);
+    vitalSummary.append(health, mana, defense);
+    characterClassLevel.replaceChildren(classLevel, vitalSummary);
     characterClassLevel.tabIndex = -1;
     delete characterClassLevel.dataset.calculation;
   }
@@ -521,7 +594,7 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   }
   if (characterManaValue) characterManaValue.textContent = `${currentMana ?? '—'}/${maxMana ?? '—'}`;
   if (characterDefenseMelee) {
-    characterDefenseMelee.textContent = `CaC ${defenseMelee ?? '—'}`;
+    characterDefenseMelee.textContent = `${defenseMelee ?? '—'}`;
     const modifier = defenseMelee !== null && defenses.melee !== null
       ? defenseMelee - defenses.melee
       : 0;
@@ -539,7 +612,7 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
     );
   }
   if (characterDefenseRanged) {
-    characterDefenseRanged.textContent = `AaD ${defenseRanged ?? '—'}`;
+    characterDefenseRanged.textContent = `${defenseRanged ?? '—'}`;
     const modifier = defenseRanged !== null && defenses.ranged !== null
       ? defenseRanged - defenses.ranged
       : 0;
@@ -662,32 +735,6 @@ const renderCharacterSheet = (sheet: PlayerCharacterSheetStatus | null) => {
     'hidden',
     !hasSheet || !(sheet?.validation?.issues.some(({ autoFixable }) => autoFixable) ?? false),
   );
-};
-
-const allowedNoteTags = new Set([
-  'B', 'BR', 'DIV', 'EM', 'FONT', 'I', 'LI', 'OL', 'P', 'SPAN', 'STRONG', 'U',
-]);
-
-const sanitizeNotesHtml = (value: string) => {
-  const template = document.createElement('template');
-  template.innerHTML = value.slice(0, 90_000);
-  const sanitizeNode = (node: Node) => {
-    for (const child of [...node.childNodes]) sanitizeNode(child);
-    if (!(node instanceof HTMLElement)) return;
-    if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') {
-      node.remove();
-      return;
-    }
-    if (!allowedNoteTags.has(node.tagName)) {
-      node.replaceWith(...node.childNodes);
-      return;
-    }
-    const fontSize = node.tagName === 'FONT' ? node.getAttribute('size') : null;
-    for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
-    if (fontSize && /^[2-5]$/.test(fontSize)) node.setAttribute('size', fontSize);
-  };
-  sanitizeNode(template.content);
-  return template.innerHTML;
 };
 
 const activeNoteTab = () => notesDocument.tabs.find(
@@ -1312,7 +1359,6 @@ changeNameButton?.addEventListener('click', () => {
   leave();
   sessionReady = false;
   playerEncounterState = null;
-  observedCriticalImpactId = undefined;
   characterHud?.setAttribute('hidden', '');
   toolsElement?.setAttribute('hidden', '');
   changeNameButton.setAttribute('hidden', '');

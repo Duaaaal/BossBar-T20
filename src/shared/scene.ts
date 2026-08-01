@@ -6,6 +6,8 @@ import {
   type BossSkillOverrides,
   type BossSkillValues,
 } from './boss-skills.ts';
+import type { BossAttack } from './boss-attacks.ts';
+import { normalizeBossAttacks, selectedBossAttack } from './boss-attacks.ts';
 
 export const MAX_SCENE_PHASES = 8;
 export const MAX_SCENE_BOSSES = 3;
@@ -68,6 +70,8 @@ export type SceneBossPatch = {
   shield?: number;
   skillValues?: BossSkillValues;
   skillOverrides?: BossSkillOverrides;
+  attacks?: BossAttack[];
+  selectedAttackId?: string;
 };
 
 export type SceneBossDirective = {
@@ -329,7 +333,8 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
   const numericRanges: Array<[
     Exclude<
       keyof SceneBossPatch,
-      'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues' | 'skillOverrides'
+      'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues' | 'skillOverrides' |
+      'attacks' | 'selectedAttackId'
     >,
     number,
     number,
@@ -366,6 +371,14 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
       normalized.skillOverrides,
     );
   }
+  if (patch.attacks !== undefined) {
+    const attacks = normalizeBossAttacks(patch.attacks, 'scene-boss');
+    normalized.attacks = attacks;
+    normalized.selectedAttackId = selectedBossAttack(
+      attacks,
+      patch.selectedAttackId,
+    )?.id ?? attacks[0].id;
+  }
   return normalized;
 };
 
@@ -397,5 +410,7 @@ export const applySceneBossPatch = (
     shield: normalized.shield ?? boss.shield,
     skillValues: normalized.skillValues ?? boss.skillValues,
     skillOverrides: normalized.skillOverrides ?? boss.skillOverrides,
+    attacks: normalized.attacks ?? boss.attacks,
+    selectedAttackId: normalized.selectedAttackId ?? boss.selectedAttackId,
   };
 };

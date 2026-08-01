@@ -20,6 +20,7 @@ import type {
   HealthEffect,
   HealthSequenceRequest,
   HealthSequenceResult,
+  MusicDuckEvent,
   MusicPlaybackState,
   MusicControlCommand,
   MusicState,
@@ -56,6 +57,11 @@ import type {
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './shared/multiplayer';
+import type {
+  EncounterDebugOverrideRequest,
+  EncounterDebugResult,
+  EncounterDebugSnapshot,
+} from './shared/encounter-debugger';
 import type {
   AreaDamageRequest,
   AreaDamageResult,
@@ -231,8 +237,13 @@ const bossAPI = {
     ipcRenderer.invoke('multiplayer:advance-turn', expectedParticipantId),
   rollEncounterInitiative: (
     participantId?: string | null,
+    extremeAdvantage = false,
   ): Promise<EncounterTurnActionResult> =>
-    ipcRenderer.invoke('multiplayer:roll-initiative', participantId),
+    ipcRenderer.invoke(
+      'multiplayer:roll-initiative',
+      participantId,
+      extremeAdvantage,
+    ),
   rollEncounterFormula: (
     request: EncounterFormulaRollRequest,
   ): Promise<EncounterFormulaRollResult> =>
@@ -348,6 +359,14 @@ const bossAPI = {
   },
   openBossLibrary: (): Promise<boolean> =>
     ipcRenderer.invoke('library:open-window'),
+  openEncounterDebugger: (): Promise<boolean> =>
+    ipcRenderer.invoke('encounter-debugger:open-window'),
+  getEncounterDebugSnapshot: (): Promise<EncounterDebugSnapshot> =>
+    ipcRenderer.invoke('encounter-debugger:get-snapshot'),
+  overwriteEncounterDebugCreature: (
+    request: EncounterDebugOverrideRequest,
+  ): Promise<EncounterDebugResult> =>
+    ipcRenderer.invoke('encounter-debugger:overwrite-creature', request),
   hasEncounterLibraryEntries: (): Promise<boolean> =>
     ipcRenderer.invoke('library:has-entries'),
   startNewEncounter: (): Promise<boolean> =>
@@ -643,6 +662,13 @@ const bossAPI = {
     };
     ipcRenderer.on('music:fade-out', listener);
     return () => ipcRenderer.removeListener('music:fade-out', listener);
+  },
+  subscribeMusicDuck: (callback: (event: MusicDuckEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: MusicDuckEvent) => {
+      callback(event);
+    };
+    ipcRenderer.on('music:duck', listener);
+    return () => ipcRenderer.removeListener('music:duck', listener);
   },
   subscribeSoundboard: (callback: (state: SoundboardState) => void) => {
     soundboardSubscribers.add(callback);

@@ -1,4 +1,10 @@
 import type { CharacterSheetSummary } from './character-sheet';
+import { resolveD20Check } from './d20-rules.ts';
+import {
+  historyEntriesForTurn,
+  type EncounterHistoryEntry,
+} from './encounter-history.ts';
+import { applyPlayerDamage } from './player-survival.ts';
 import {
   normalizeDamageFormula,
   parseDamageFormula,
@@ -33,6 +39,12 @@ export type PlayerEncounterState = {
   protectionExpiresAtRound: number | null;
   /** Changes only when this character receives a critical combat impact. */
   criticalImpactId: number | null;
+  /** Changes before a hostile critical lands, driving its warning animation. */
+  criticalThreatId: number | null;
+  /** True after bleeding was stopped while the character remains at 0 PV or less. */
+  stabilized: boolean;
+  /** Death is permanent for the encounter unless a future resurrection rule says otherwise. */
+  dead: boolean;
   revision: number;
 };
 
@@ -67,6 +79,10 @@ export type PlayerHudState = {
   unarmedStrikeEnabled: boolean;
   temporaryDefenseBonus: number | null;
   criticalImpactId: number | null;
+  criticalThreatId: number | null;
+  stabilized: boolean;
+  dead: boolean;
+  deathThreshold: number | null;
   summary: CharacterSheetSummary | null;
   actions: PlayerHudActionState;
   revision: number;
@@ -91,7 +107,11 @@ export type EncounterTurnParticipant = {
 
 export type EncounterRollOutcome = 'success' | 'failure' | 'neutral';
 
-export type EncounterRollVisibility = 'full' | 'dice-only' | 'hidden';
+export type EncounterRollVisibility =
+  | 'full'
+  | 'dice-only'
+  | 'dice-and-total'
+  | 'hidden';
 
 export type EncounterRollResult = {
   id: string;
@@ -116,6 +136,40 @@ export type EncounterRollResult = {
   correlationId?: string;
   critical?: boolean;
   criticalMultiplier?: number;
+  /** Natural result of the effective d20 used by this test, when applicable. */
+  natural?: 1 | 20 | null;
+};
+
+/**
+ * Finds the effective natural d20 represented by a serialized roll result.
+ * Dice are consumed in expression order, matching the shared formula roller.
+ * Extreme Advantage (`sum-capped`) treats its two d20s as one capped die.
+ */
+export const getEncounterRollNatural = (
+  expression: string,
+  rolls: readonly number[],
+  rollMode?: EncounterRollResult['rollMode'],
+): 1 | 20 | null => {
+  const d20Rolls: number[] = [];
+  let rollOffset = 0;
+  const dicePattern = /(\d*)d(\d+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = dicePattern.exec(expression)) !== null) {
+    const count = Math.max(1, Math.min(100, Number(match[1] || 1)));
+    const sides = Number(match[2]);
+    const termRolls = rolls.slice(rollOffset, rollOffset + count);
+    if (sides === 20) d20Rolls.push(...termRolls);
+    rollOffset += count;
+  }
+  if (d20Rolls.length === 0) return null;
+  if (rollMode === 'sum-capped' && d20Rolls.length >= 2) {
+    return Math.min(20, d20Rolls.reduce((total, die) => total + die, 0)) === 20
+      ? 20
+      : null;
+  }
+  if (d20Rolls.some((die) => die === 20)) return 20;
+  if (d20Rolls.length === 1 && d20Rolls[0] === 1) return 1;
+  return null;
 };
 
 export type EncounterTurnState = {
@@ -123,6 +177,8 @@ export type EncounterTurnState = {
   activeParticipantId: string | null;
   participants: EncounterTurnParticipant[];
   rollResults: EncounterRollResult[];
+  /** Authoritative, append-only combat history for the current battle. */
+  history: EncounterHistoryEntry[];
   initiativeReady: boolean;
   started: boolean;
   revision: number;
@@ -139,6 +195,7 @@ export type EncounterFormulaRollRequest = {
   label: string;
   formula: string;
   category: EncounterRollResult['category'];
+  rollMode?: 'sum' | 'sum-capped';
   /** Links this roll to an opposed or otherwise related action. */
   correlationId?: string;
 };
@@ -158,6 +215,13 @@ export type PlayerSkillTestRequest = {
   kind: 'skill';
   skillId: string;
   resource: PlayerResourceUse;
+  actionId?: string;
+  correlationId?: string;
+};
+
+export type PlayerStabilizeRequest = {
+  kind: 'stabilize';
+  targetPlayerId: string;
   actionId?: string;
   correlationId?: string;
 };
@@ -248,6 +312,7 @@ export type PlayerStandaloneResourceRequest =
 
 export type PlayerCombatActionRequest =
   | PlayerSkillTestRequest
+  | PlayerStabilizeRequest
   | PlayerAttackRequest
   | PlayerStandaloneResourceRequest;
 
@@ -265,12 +330,14 @@ export type PendingActionPointRequest = {
   label: string;
   requestedAt: number;
   actionId?: string;
+  kind?: 'action-point' | 'skill-without-standard-action';
 };
 
 export type PlayerResourceNotice = {
   id: string;
   tone: 'info' | 'approved' | 'rejected' | 'heroic';
   message: string;
+  persistent?: boolean;
 };
 
 export type PlayerAttackAgainstBossResolution = {
@@ -306,6 +373,7 @@ export const emptyEncounterTurnState = (): EncounterTurnState => ({
   activeParticipantId: null,
   participants: [],
   rollResults: [],
+  history: [],
   initiativeReady: true,
   started: false,
   revision: 0,
@@ -408,13 +476,17 @@ export const rollManualInitiative = (
   participantId: string,
   rollD20: () => number,
 ): ManualInitiativeRoll | null => {
-  if (state.started || !state.participants.length) return null;
+  if (!state.participants.length) return null;
   const participantIndex = state.participants.findIndex(
     ({ id }) => id === participantId,
   );
   if (
     participantIndex < 0 ||
-    state.participants[participantIndex].initiativeRolled !== false
+    state.participants[participantIndex].initiativeRolled !== false ||
+    (
+      state.started &&
+      state.participants[participantIndex].eligibleRound <= state.round
+    )
   ) {
     return null;
   }
@@ -432,7 +504,10 @@ export const rollManualInitiative = (
     ({ initiativeRolled }) => initiativeRolled !== false,
   );
   const tiedParticipantIds: string[] = [];
-  if (allRolled) {
+  // The opening initiative resolves ties exactly as the manual describes.
+  // A late entrant is inserted for the next round without invalidating rolls
+  // that the rest of the table already completed.
+  if (allRolled && !state.started) {
     const groups = new Map<string, EncounterTurnParticipant[]>();
     for (const participant of participants) {
       const key = `${participant.initiativeTotal}:${participant.initiativeModifier}`;
@@ -481,13 +556,23 @@ export const beginEncounterTurns = (
   ) return state;
   const first = state.participants.find(({ eligibleRound }) => eligibleRound <= 1);
   if (!first) return state;
+  const round = 1;
   return {
     ...state,
-    round: 1,
+    round,
     activeParticipantId: first.id,
     rollResults: (state.rollResults ?? []).filter(
       ({ category }) => category !== 'initiative',
     ),
+    history: [
+      ...(state.history ?? []),
+      ...historyEntriesForTurn(
+        round,
+        first.id,
+        state.participants,
+        state.round,
+      ),
+    ],
     started: true,
     revision: state.revision + 1,
   };
@@ -546,6 +631,9 @@ export const normalizeEncounterFormulaRequest = (
     !['initiative', 'test', 'attack', 'damage', 'status'].includes(
       candidate.category ?? '',
     ) ||
+    (candidate.rollMode !== undefined &&
+      candidate.rollMode !== 'sum' &&
+      candidate.rollMode !== 'sum-capped') ||
     !isSafeActionIdentity(candidate.correlationId)
   ) return null;
   return {
@@ -553,6 +641,9 @@ export const normalizeEncounterFormulaRequest = (
     label: candidate.label.trim(),
     formula: normalizeDamageFormula(candidate.formula)!,
     category: candidate.category!,
+    ...(candidate.rollMode === 'sum-capped'
+      ? { rollMode: 'sum-capped' as const }
+      : {}),
     ...(candidate.correlationId === undefined
       ? {}
       : { correlationId: candidate.correlationId }),
@@ -606,6 +697,15 @@ export const advanceEncounterTurns = (
       round: Math.max(state.round, nextParticipant.eligibleRound),
       activeParticipantId: nextParticipant.id,
       rollResults: remainingRollResults,
+      history: [
+        ...(state.history ?? []),
+        ...historyEntriesForTurn(
+          Math.max(state.round, nextParticipant.eligibleRound),
+          nextParticipant.id,
+          state.participants,
+          state.round,
+        ),
+      ],
       revision: state.revision + 1,
     };
   }
@@ -620,6 +720,15 @@ export const advanceEncounterTurns = (
         round: candidateRound,
         activeParticipantId: candidate.id,
         rollResults: remainingRollResults,
+        history: [
+          ...(state.history ?? []),
+          ...historyEntriesForTurn(
+            candidateRound,
+            candidate.id,
+            state.participants,
+            state.round,
+          ),
+        ],
         revision: state.revision + 1,
       };
     }
@@ -658,15 +767,48 @@ export const personalizeEncounterTurnState = (
         ? 'full'
         : hiddenParticipantIds.has(result.participantId) ||
             participantKindById.get(result.participantId) === 'boss'
-          ? 'dice-only'
+          ? result.category === 'damage' ? 'dice-and-total' : 'dice-only'
           : 'full';
       if (visibility === 'full') return { ...result, visibility };
       return {
         ...result,
         expression: diceTermsOnly(result.expression),
         modifier: 0,
-        total: 0,
+        total: visibility === 'dice-and-total' ? result.total : 0,
         outcome: 'neutral',
+        visibility,
+      };
+    }),
+    history: (state.history ?? []).map((entry) => {
+      if (entry.kind === 'damage') return entry;
+      if (entry.kind === 'heal') {
+        const targetHidden = Boolean(
+          entry.targetParticipantId && hiddenParticipantIds.has(entry.targetParticipantId),
+        );
+        if (!revealAll && targetHidden) {
+          return {
+            ...entry,
+            detail: entry.detail.replace(/[-+−]?\d+\s*PV/u, '??? PV'),
+          };
+        }
+        return entry;
+      }
+      if (entry.kind !== 'roll' && entry.kind !== 'status') return entry;
+      const visibility: EncounterRollVisibility = revealAll
+        ? 'full'
+        : entry.actorParticipantId && (
+          hiddenParticipantIds.has(entry.actorParticipantId) ||
+          participantKindById.get(entry.actorParticipantId) === 'boss'
+        )
+          ? entry.rollCategory === 'damage' ? 'dice-and-total' : 'dice-only'
+          : 'full';
+      if (visibility === 'full') return { ...entry, visibility };
+      return {
+        ...entry,
+        expression: diceTermsOnly(entry.expression ?? ''),
+        modifier: 0,
+        total: visibility === 'dice-and-total' ? entry.total ?? 0 : 0,
+        outcome: 'neutral' as const,
         visibility,
       };
     }),
@@ -679,7 +821,12 @@ export type AreaDamageRequest = {
   /** Splits the resolved total into this many consecutive impacts. */
   hits?: number;
   reflexDc: number;
-  successRule: AreaDamageSuccessRule;
+  /**
+   * Compatibility fallback until class powers are represented explicitly.
+   * New callers must not choose this per attack; the affected character's
+   * abilities will own this rule.
+   */
+  successRule?: AreaDamageSuccessRule;
   playerIds?: string[];
   attackerParticipantId?: string;
   actionId?: string;
@@ -702,6 +849,10 @@ export type DirectPlayerDamageRequest = {
   hits?: number;
   attackType?: AttackType;
   attackBonus?: number;
+  attackName?: string;
+  criticalThreat?: number;
+  criticalMultiplier?: number;
+  extremeAdvantage?: boolean;
   attackerParticipantId?: string;
   actionId?: string;
   correlationId?: string;
@@ -777,7 +928,11 @@ export const isAreaDamageRequest = (value: unknown): value is AreaDamageRequest 
     ) &&
     Number.isInteger(candidate.reflexDc) && (candidate.reflexDc ?? 0) >= 0 &&
     (candidate.reflexDc ?? 0) <= 999 &&
-    (candidate.successRule === 'half' || candidate.successRule === 'none') &&
+    (
+      candidate.successRule === undefined ||
+      candidate.successRule === 'half' ||
+      candidate.successRule === 'none'
+    ) &&
     (
       candidate.playerIds === undefined ||
       (
@@ -847,7 +1002,19 @@ export const isDirectPlayerDamageRequest = (
       (candidate.attackBonus ?? 0) <= 999 &&
       typeof candidate.attackerParticipantId === 'string' &&
       candidate.attackerParticipantId.length > 0 &&
-      candidate.attackerParticipantId.length <= 160
+      candidate.attackerParticipantId.length <= 160 &&
+      (candidate.attackName === undefined ||
+        (typeof candidate.attackName === 'string' && candidate.attackName.length <= 60)) &&
+      (candidate.criticalThreat === undefined ||
+        (Number.isInteger(candidate.criticalThreat) &&
+          (candidate.criticalThreat ?? 0) >= 2 &&
+          (candidate.criticalThreat ?? 0) <= 20)) &&
+      (candidate.criticalMultiplier === undefined ||
+        (Number.isInteger(candidate.criticalMultiplier) &&
+          (candidate.criticalMultiplier ?? 0) >= 2 &&
+          (candidate.criticalMultiplier ?? 0) <= 10)) &&
+      (candidate.extremeAdvantage === undefined ||
+        typeof candidate.extremeAdvantage === 'boolean')
     )) &&
     isSafeActionIdentity(candidate.actionId) &&
     isSafeActionIdentity(candidate.correlationId);
@@ -858,23 +1025,25 @@ export const resolveAttackCheck = (
   defense: number,
   die: number,
 ) => {
-  const normalizedDie = Math.max(1, Math.min(20, Math.trunc(die)));
-  const normalizedBonus = Math.max(-999, Math.min(999, Math.trunc(attackBonus)));
-  const normalizedDefense = Math.max(0, Math.min(999, Math.trunc(defense)));
-  const total = normalizedDie + normalizedBonus;
+  const check = resolveD20Check(die, attackBonus, defense);
   return {
-    die: normalizedDie,
-    attackBonus: normalizedBonus,
-    defense: normalizedDefense,
-    total,
-    success:
-      normalizedDie === 20 ||
-      (normalizedDie !== 1 && total >= normalizedDefense),
-    natural: normalizedDie === 1 || normalizedDie === 20
-      ? normalizedDie
-      : null,
+    die: check.die,
+    attackBonus: check.modifier,
+    defense: check.difficulty,
+    total: check.total,
+    success: check.success,
+    natural: check.natural,
   };
 };
+
+/** A threat-range result is critical only after the attack itself succeeds. */
+export const isCriticalAttack = (
+  attackSucceeded: boolean,
+  effectiveDie: number,
+  criticalThreat: number,
+) => attackSucceeded &&
+  Math.max(1, Math.min(20, Math.trunc(effectiveDie))) >=
+    Math.max(2, Math.min(20, Math.trunc(criticalThreat)));
 
 /**
  * Extrema Vantagem treats two d20 results as one effective natural result.
@@ -1133,6 +1302,14 @@ export const isPlayerCombatActionRequest = (
       isSafeActionIdentity(skill.actionId) &&
       isSafeActionIdentity(skill.correlationId);
   }
+  if (candidate.kind === 'stabilize') {
+    const stabilize = candidate as Partial<PlayerStabilizeRequest>;
+    return typeof stabilize.targetPlayerId === 'string' &&
+      stabilize.targetPlayerId.length > 0 &&
+      stabilize.targetPlayerId.length <= 128 &&
+      isSafeActionIdentity(stabilize.actionId) &&
+      isSafeActionIdentity(stabilize.correlationId);
+  }
   if (candidate.kind === 'attack') {
     const attack = candidate as Partial<PlayerAttackRequest>;
     const source = attack.attackSource ??
@@ -1213,18 +1390,24 @@ export const resolveAreaDamage = (
 ): PlayerAreaDamageImpact => {
   if (!isAreaDamageRequest(request)) throw new Error('O dano em área é inválido.');
   if (!Number.isInteger(die) || die < 1 || die > 20) throw new Error('A rolagem de Reflexos é inválida.');
-  const total = die + state.reflex;
-  const success = die === 20 || (die !== 1 && total >= request.reflexDc);
+  const helpless = state.dead || state.currentHealth <= 0 ||
+    state.statuses.some(({ statusId }) => statusId === 'indefeso');
+  const check = resolveD20Check(die, state.reflex, request.reflexDc);
+  const total = check.total;
+  const success = helpless ? false : check.success;
+  // Until class powers are modeled, Reflexos uses the system fallback. The
+  // attack itself no longer decides between half and zero damage.
+  const successRule = request.successRule ?? 'half';
   const applied = success
-    ? request.successRule === 'none' ? 0 : Math.ceil(request.damage / 2)
+    ? successRule === 'none' ? 0 : Math.ceil(request.damage / 2)
     : request.damage;
   const healthBefore = Math.min(state.maxHealth, state.currentHealth);
-  const healthAfter = healthBefore - applied;
-  const playerState: PlayerEncounterState = {
-    ...state,
-    currentHealth: healthAfter,
-    revision: state.revision + 1,
-  };
+  const transition = applyPlayerDamage(
+    { ...state, currentHealth: healthBefore },
+    applied,
+  );
+  const playerState = transition.state;
+  const healthAfter = playerState.currentHealth;
   return {
     id,
     playerState,
@@ -1241,7 +1424,7 @@ export const resolveAreaDamage = (
       applied,
       healthBefore,
       healthAfter,
-      successRule: request.successRule,
+      successRule,
     },
   };
 };

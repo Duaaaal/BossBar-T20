@@ -36,7 +36,7 @@ const bossNameFontSize = (name: string, bossCount: number) => {
 
 type NumericBossField = Exclude<
   keyof BossLibraryBossSummary,
-  'bossName' | 'skillValues'
+  'bossName' | 'skillValues' | 'skillOverrides' | 'attacks' | 'selectedAttackId'
 >;
 
 const ColoredValues = ({

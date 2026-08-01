@@ -567,6 +567,20 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   server.publishCombatImpact(impact);
   assert.deepEqual((await receivedImpact)[0], impact);
 
+  const musicDuck = {
+    id: 3,
+    phase: 'duck',
+    duration: 1_000,
+    targetVolume: 0.2,
+    soundEffect: null,
+    targetPlayerIds: [],
+  };
+  const firstDuck = once(first, 'presentation:music-duck');
+  const secondDuck = once(second, 'presentation:music-duck');
+  server.publishMusicDuck(musicDuck);
+  assert.deepEqual((await firstDuck)[0], musicDuck);
+  assert.deepEqual((await secondDuck)[0], musicDuck);
+
   const closedNotice = once(first, 'session:closed');
   await server.close('host-ended-session');
   assert.deepEqual((await closedNotice)[0], { reason: 'host-ended-session' });
@@ -575,6 +589,9 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
 test('aplica dano em área de forma privada e preserva PV na reconexão', async (t) => {
   const profileStore = await createTestPlayerProfileStore();
   let combatRandomMode = 'ten';
+  const rolledCallbacks = [];
+  const playerDamageCallbacks = [];
+  const bossCriticalThreats = [];
   const server = await MultiplayerSessionServer.start({
     playerProfileStore: profileStore,
     initialSnapshot: publicSnapshot(),
@@ -582,6 +599,14 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
     maxPlayers: 3,
     networkMode: 'loopback',
     combatRollDelayMs: 25,
+    dramaticCombatRollDelayMs: 75,
+    onDiceRolled: (result) => rolledCallbacks.push(result),
+    onBossCriticalThreat: (context) => {
+      bossCriticalThreats.push({ context, createdAt: Date.now() });
+    },
+    onPlayerDamaged: (context) => {
+      playerDamageCallbacks.push({ ...context, createdAt: Date.now() });
+    },
     randomInteger: (minimum, maximum) =>
       combatRandomMode === 'maximum'
         ? maximum - 1
@@ -670,6 +695,11 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
     skippedPlayers: ['Carla'],
     rolledDamage: 20,
   });
+  assert.deepEqual(
+    playerDamageCallbacks.at(-1)?.targetPlayerIds,
+    [server.getPlayerHuds().find(({ characterName }) => characterName === 'Valora')?.id],
+  );
+  assert.equal(playerDamageCallbacks.at(-1)?.critical, false);
 
   await waitFor(() => aliceImpacts.length === 2 && brunoImpacts.length === 2);
   await new Promise((resolveWait) => setTimeout(resolveWait, 50));
@@ -748,7 +778,9 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   assert.equal(missResult.impacts?.[0]?.healthAfter, hitState.currentHealth);
 
   combatRandomMode = 'maximum';
-  const criticalStateEvent = once(alice, 'player:state');
+  const criticalStates = [];
+  const captureCriticalState = (state) => criticalStates.push(state);
+  alice.on('player:state', captureCriticalState);
   const criticalResult = await server.applyDirectPlayerDamage({
     playerIds: [aliceHud.id],
     damage: 1,
@@ -768,7 +800,38 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   assert.equal(criticalDamageResult?.label, 'Dano crítico');
   assert.equal(criticalDamageResult?.expression, '2d6 + 2');
   assert.deepEqual(criticalDamageResult?.rolls, [6, 6]);
-  const [criticalState] = await criticalStateEvent;
+  const criticalAttackResult = server.getTurnState().rollResults.find(
+    ({ actionId, category }) =>
+      actionId === 'boss-direct-critical-0001' && category === 'attack',
+  );
+  assert.equal(criticalAttackResult?.natural, 20);
+  assert.ok(
+    (criticalDamageResult?.createdAt ?? 0) -
+      (criticalAttackResult?.createdAt ?? 0) >= 70,
+  );
+  assert.ok(rolledCallbacks.some(
+    ({ id, natural }) => id === criticalAttackResult?.id && natural === 20,
+  ));
+  assert.equal(playerDamageCallbacks.at(-1)?.critical, true);
+  assert.deepEqual(playerDamageCallbacks.at(-1)?.targetPlayerIds, [aliceHud.id]);
+  assert.equal(bossCriticalThreats.length, 1);
+  assert.deepEqual(bossCriticalThreats[0].context.targetPlayerIds, [aliceHud.id]);
+  assert.ok(
+    playerDamageCallbacks.at(-1).createdAt - bossCriticalThreats[0].createdAt >= 70,
+  );
+  assert.equal(
+    typeof server.getPlayerHuds().find(
+      ({ characterName }) => characterName === 'Valora',
+    )?.criticalThreatId,
+    'number',
+  );
+  await waitFor(() => criticalStates.some(
+    ({ criticalImpactId }) => typeof criticalImpactId === 'number',
+  ));
+  const criticalState = criticalStates.find(
+    ({ criticalImpactId }) => typeof criticalImpactId === 'number',
+  );
+  alice.off('player:state', captureCriticalState);
   assert.equal(typeof criticalState.criticalImpactId, 'number');
   combatRandomMode = 'ten';
 
@@ -788,6 +851,29 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   const [statusState] = await statusStateEvent;
   assert.equal(statusState.statuses[0].statusId, 'abalado');
 
+  const unconsciousStateEvent = once(alice, 'player:state');
+  const unconsciousResult = await server.applyDirectPlayerDamage({
+    playerIds: [aliceHud.id],
+    damage: statusState.currentHealth,
+  });
+  assert.equal(unconsciousResult.ok, true);
+  const [unconsciousState] = await unconsciousStateEvent;
+  assert.equal(unconsciousState.currentHealth, 0);
+  assert.equal(unconsciousState.dead, false);
+  assert.equal(unconsciousState.stabilized, false);
+  assert.ok(unconsciousState.statuses.some(({ statusId }) => statusId === 'inconsciente'));
+  assert.ok(unconsciousState.statuses.some(({ statusId }) => statusId === 'indefeso'));
+  assert.ok(unconsciousState.statuses.some(({ statusId }) => statusId === 'sangrando'));
+  const unconsciousHud = server.getPlayerHuds().find(({ id }) => id === aliceHud.id);
+  assert.equal(unconsciousHud?.actions.standard, false);
+  assert.equal(unconsciousHud?.defenseMelee, 8);
+  assert.ok(server.getTurnState().history.some(
+    ({ kind, targetParticipantId, detail }) =>
+      kind === 'damage' &&
+      targetParticipantId === `player:${aliceHud.id}` &&
+      detail.includes('PV'),
+  ));
+
   const overkillStateEvent = once(alice, 'player:state');
   const overkillResult = await server.applyDirectPlayerDamage({
     playerIds: [aliceHud.id],
@@ -795,8 +881,9 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   });
   assert.equal(overkillResult.ok, true);
   const [overkillState] = await overkillStateEvent;
-  assert.equal(overkillState.currentHealth, statusState.currentHealth - 1_000);
+  assert.equal(overkillState.currentHealth, unconsciousState.currentHealth - 1_000);
   assert.ok(overkillState.currentHealth < 0);
+  assert.equal(overkillState.dead, true);
 
   const aliceHealthAfterImpact = overkillState.currentHealth;
   const aliceRevisionAfterImpact = overkillState.revision;
@@ -849,10 +936,13 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   assert.equal(server.getPresence().connectedPlayers, 1);
 
   player.disconnect();
+  const reconnectedPending = once(player, 'session:join-pending');
   const reconnectedSnapshot = once(player, 'session:snapshot');
   const reconnected = once(player, 'connect');
   player.connect();
   await reconnected;
+  const [reconnectRequest] = await reconnectedPending;
+  assert.equal(server.approveJoinRequest(reconnectRequest.id), true);
   assert.equal((await reconnectedSnapshot)[0].battle.battleStarted, true);
 
   const rejected = await connectPlayer(server, {
@@ -871,6 +961,114 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   assert.equal(requests.at(-1).length, 0);
 });
 
+test('insere jogador aprovado em um turno exclusivo de iniciativa antes da próxima rodada', async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const snapshot = publicSnapshot();
+  const server = await MultiplayerSessionServer.start({
+    playerProfileStore: profileStore,
+    initialSnapshot: snapshot,
+    port: 0,
+    networkMode: 'loopback',
+    randomInteger: (minimum, maximum) =>
+      Math.min(maximum - 1, Math.max(minimum, 10)),
+  });
+  t.after(async () => server.close('server-shutdown'));
+
+  const alice = await connectPlayer(server, {
+    clientId: 'late-turn-alice',
+    playerName: 'Alice',
+  });
+  t.after(() => alice.close());
+  await once(alice, 'connect');
+  const aliceProfile = profileStore.profileByUsername('Alice');
+  assert.ok(aliceProfile);
+  await profileStore.saveSheet(
+    aliceProfile.id,
+    'alice-late-turn.pdf',
+    new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    createValidCharacterSheetValidation({
+      characterName: 'Valora',
+      currentHealth: 60,
+      maxHealth: 60,
+      currentMana: 10,
+      maxMana: 10,
+      defense: 18,
+      reflex: 7,
+      initiative: 20,
+    }),
+  );
+  server.refreshCharacterSheet('late-turn-alice', true);
+  server.publishBattleState({ ...snapshot.battle, battleStarted: true });
+  for (const participant of server.getTurnState().participants) {
+    if (participant.kind === 'boss') {
+      assert.equal(server.rollInitiativeAsHost(participant.id).ok, true);
+    } else {
+      const rolled = await new Promise((resolve) => {
+        alice.emit('encounter:roll-initiative', false, resolve);
+      });
+      assert.equal(rolled.ok, true);
+    }
+  }
+  assert.equal(server.advanceTurnAsHost().ok, true);
+  const interruptedParticipantId = server.getTurnState().activeParticipantId;
+  const interruptedRound = server.getTurnState().round;
+
+  const bruno = await connectPlayer(server, {
+    clientId: 'late-turn-bruno',
+    playerName: 'Bruno',
+  });
+  t.after(() => bruno.close());
+  const pending = once(bruno, 'session:join-pending');
+  await once(bruno, 'connect');
+  const [request] = await pending;
+  const brunoProfile = profileStore.profileByUsername('Bruno');
+  assert.ok(brunoProfile);
+  await profileStore.saveSheet(
+    brunoProfile.id,
+    'bruno-late-turn.pdf',
+    new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    createValidCharacterSheetValidation({
+      characterName: 'Arton',
+      currentHealth: 55,
+      maxHealth: 55,
+      currentMana: 8,
+      maxMana: 8,
+      defense: 16,
+      reflex: 5,
+      initiative: 5,
+    }),
+  );
+  assert.equal(server.approveJoinRequest(request.id), true);
+  assert.equal(
+    server.getTurnState().participants.some(({ name }) => name === 'Arton'),
+    false,
+  );
+
+  assert.equal(server.advanceTurnAsHost(interruptedParticipantId).ok, true);
+  const initiativeTurn = server.getTurnState();
+  const lateParticipant = initiativeTurn.participants.find(
+    ({ name }) => name === 'Arton',
+  );
+  assert.ok(lateParticipant);
+  assert.equal(initiativeTurn.activeParticipantId, lateParticipant.id);
+  assert.equal(lateParticipant.initiativeRolled, false);
+  const forbiddenAction = await new Promise((resolve) => {
+    bruno.emit('player:use-action', 'standard', resolve);
+  });
+  assert.equal(forbiddenAction.ok, false);
+  assert.match(forbiddenAction.error, /apenas a Iniciativa/i);
+
+  const lateRoll = await new Promise((resolve) => {
+    bruno.emit('encounter:roll-initiative', false, resolve);
+  });
+  assert.equal(lateRoll.ok, true);
+  const resumed = server.getTurnState();
+  const inserted = resumed.participants.find(({ id }) => id === lateParticipant.id);
+  assert.equal(inserted.initiativeRolled, true);
+  assert.equal(inserted.eligibleRound, interruptedRound + 1);
+  assert.notEqual(resumed.activeParticipantId, lateParticipant.id);
+});
+
 test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', async (t) => {
   const profileStore = await createTestPlayerProfileStore();
   const rejectedBossDamageContexts = [];
@@ -882,6 +1080,7 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
     port: 0,
     networkMode: 'loopback',
     combatRollDelayMs: 25,
+    dramaticCombatRollDelayMs: 25,
     randomInteger: (minimum, maximum) =>
       randomMode === 'minimum' ? minimum : maximum - 1,
     getBossDefense: () => 10,
@@ -941,8 +1140,10 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
 
   const aliceHuds = [];
   const brunoHuds = [];
+  const aliceResourceNotices = [];
   alice.on('players:hud-state', (state) => aliceHuds.push(state));
   bruno.on('players:hud-state', (state) => brunoHuds.push(state));
+  alice.on('player:resource-notice', (notice) => aliceResourceNotices.push(notice));
   server.refreshCharacterSheet('hud-client-alice', true);
   await waitFor(() => aliceHuds.at(-1)?.length === 2 && brunoHuds.at(-1)?.length === 2);
   assert.equal(
@@ -1007,7 +1208,7 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
       } else {
         const socket = participant.name === 'Valora' ? alice : bruno;
         const result = await new Promise((resolve) => {
-          socket.emit('encounter:roll-initiative', resolve);
+          socket.emit('encounter:roll-initiative', false, resolve);
         });
         assert.equal(result.ok, true);
       }
@@ -1024,6 +1225,11 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
     server.getTurnState().rollResults
       .filter(({ category }) => category === 'initiative')
       .every(({ visibility }) => visibility === 'full'),
+  );
+  assert.ok(
+    server.getTurnState().rollResults
+      .filter(({ category }) => category === 'initiative')
+      .every(({ natural }) => natural === undefined || natural === null),
   );
   const privateInitiativeParticipant = server.getTurnState().participants.find(
     ({ name }) => name === 'Valora',
@@ -1169,11 +1375,28 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
   });
   assert.equal(actionPointRequest.ok, true);
   assert.equal(actionPointRequest.pendingApproval, true);
+  await waitFor(() => aliceResourceNotices.some(
+    ({ id }) => id === actionPointRequest.requestId,
+  ));
+  assert.equal(
+    aliceResourceNotices.find(({ id }) => id === actionPointRequest.requestId)
+      ?.persistent,
+    true,
+  );
   assert.equal(server.getTurnState().rollResults.length, rollCountBeforeApproval);
   assert.equal(server.getPendingActionPointRequests().length, 1);
   assert.equal(
     (await server.approveActionPointRequest(actionPointRequest.requestId)).ok,
     true,
+  );
+  await waitFor(() => aliceResourceNotices.filter(
+    ({ id }) => id === actionPointRequest.requestId,
+  ).length === 2);
+  assert.equal(
+    aliceResourceNotices.filter(
+      ({ id }) => id === actionPointRequest.requestId,
+    ).at(-1)?.persistent,
+    undefined,
   );
   assert.equal(server.getPendingActionPointRequests().length, 0);
   await waitFor(() => aliceHuds.at(-1)
@@ -1275,7 +1498,12 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
       resource: { kind: 'hero-point', ability: 'extreme-advantage' },
     }, resolve);
   });
-  assert.deepEqual(heroicResult, { ok: true });
+  assert.equal(heroicResult.ok, true);
+  assert.equal(heroicResult.pendingApproval, true);
+  assert.equal(
+    (await server.approveActionPointRequest(heroicResult.requestId)).ok,
+    true,
+  );
   const heroicRoll = server.getTurnState().rollResults.at(-1);
   assert.equal(heroicRoll.resourceEffect, 'hero-point');
   assert.equal(heroicRoll.rollMode, 'sum-capped');

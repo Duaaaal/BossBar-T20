@@ -23,6 +23,7 @@ import type {
 } from './shared/multiplayer';
 import type { PlayerHudState } from './shared/player-combat';
 import type { ScenePlan } from './shared/scene';
+import { formatMemoryBytes } from './shared/media-cache';
 import {
   createPlayerNotesDocument,
   nextPlayerNoteTab,
@@ -30,6 +31,7 @@ import {
   serializePlayerNotesDocument,
   type PlayerNotesDocument,
 } from './shared/player-notes';
+import { sanitizeNotesHtml } from './notes-html';
 import './master.css';
 import './scrollbars.css';
 
@@ -89,6 +91,9 @@ const encounterSoundCategories: Array<{
   { kind: 'shield-impact', label: 'Dano do escudo' },
   { kind: 'shield-break', label: 'Escudo quebrando' },
   { kind: 'dice-roll', label: 'Rolagem de dados' },
+  { kind: 'natural-failure', label: 'Fracasso natural' },
+  { kind: 'natural-success-player', label: 'Sucesso natural do jogador' },
+  { kind: 'natural-success-enemy', label: 'Sucesso natural do inimigo' },
 ];
 
 const connectionQualityLabels: Record<ConnectionQuality, string> = {
@@ -97,36 +102,6 @@ const connectionQualityLabels: Record<ConnectionQuality, string> = {
   good: 'Boa',
   unstable: 'Instável',
   poor: 'Ruim',
-};
-
-const allowedNoteTags = new Set([
-  'B', 'BR', 'DIV', 'EM', 'FONT', 'I', 'LI', 'OL', 'P', 'SPAN', 'STRONG', 'U',
-]);
-
-const sanitizeNotesHtml = (value: string) => {
-  const template = document.createElement('template');
-  template.innerHTML = value.slice(0, 90_000);
-  const sanitizeNode = (node: Node) => {
-    for (const child of [...node.childNodes]) sanitizeNode(child);
-    if (!(node instanceof Element)) return;
-    if (!(node instanceof HTMLElement)) {
-      node.remove();
-      return;
-    }
-    if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') {
-      node.remove();
-      return;
-    }
-    if (!allowedNoteTags.has(node.tagName)) {
-      node.replaceWith(...node.childNodes);
-      return;
-    }
-    const fontSize = node.tagName === 'FONT' ? node.getAttribute('size') : null;
-    for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
-    if (fontSize && /^[2-5]$/.test(fontSize)) node.setAttribute('size', fontSize);
-  };
-  sanitizeNode(template.content);
-  return template.innerHTML;
 };
 
 type SoundCategoryMenuPosition = {
@@ -1009,12 +984,24 @@ const MasterApp = () => {
   return (
     <main className="master-shell">
       <button
+        className="debugger-button"
+        type="button"
+        title="Depurador do encontro"
+        aria-label="Abrir depurador do encontro"
+        onClick={() => void window.bossAPI.openEncounterDebugger()}
+      >
+        🛠
+      </button>
+      <button
         className="settings-button"
         type="button"
         title="Configurações"
         aria-label="Abrir configurações"
         aria-haspopup="dialog"
-        onClick={() => setSettingsOpen(true)}
+        onClick={() => {
+          void window.bossAPI.getEncounterEffectsState().then(setEncounterEffects);
+          setSettingsOpen(true);
+        }}
       >
         <img src={bundledAssetUrl('cog.png')} alt="" />
       </button>
@@ -1720,6 +1707,16 @@ const MasterApp = () => {
                   label="Marcadores de mudança na barra de vida"
                   onChange={(checked) => setEncounterGeneralEnabled('phaseMarkers', checked)}
                 />
+              </div>
+              <div className="settings-cache-usage" aria-label="Uso estimado do cache de mídia da sessão">
+                <span>Cache de mídia</span>
+                <strong>
+                  {formatMemoryBytes(encounterEffects.mediaCache.usedBytes)} /{' '}
+                  {formatMemoryBytes(encounterEffects.mediaCache.globalLimitBytes)}
+                </strong>
+                <small>
+                  Arquivos de até {formatMemoryBytes(encounterEffects.mediaCache.itemLimitBytes)} permanecem em memória.
+                </small>
               </div>
             </section>
             <section className="settings-category" aria-labelledby="sound-settings-title">
