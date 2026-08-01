@@ -127,6 +127,8 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
     await expect(firstPage.locator('#web-player-character-private')).toBeChecked();
     await firstPage.locator('#web-player-character-private').uncheck();
     await expect(auroraOnSecond).toContainText('21/21');
+    await expect(auroraOnSecond.locator('.party-player-defense')).toContainText('Defesa:');
+    await expect(auroraOnSecond.locator('.party-player-defense img')).toHaveCount(2);
     await expect(brasaOnFirst).toContainText('???');
     await firstPage.locator('#web-player-character-private').check();
     await expect(auroraOnSecond).toContainText('???');

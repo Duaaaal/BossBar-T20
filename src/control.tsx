@@ -29,8 +29,6 @@ import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import {
   emptyEncounterTurnState,
-  type AttackType,
-  type AreaDamageSuccessRule,
   type EncounterFaction,
   type EncounterTurnState,
   type PlayerHudState,
@@ -47,6 +45,13 @@ import {
   updateInheritedBossSkillDrafts,
   type BossSkillId,
 } from './shared/boss-skills';
+import {
+  createInitialBossAttack,
+  MAX_BOSS_ATTACKS,
+  normalizeBossAttacks,
+  selectedBossAttack,
+  type BossAttack,
+} from './shared/boss-attacks';
 import {
   getActiveStatusDescription,
   getActiveStatusName,
@@ -72,7 +77,6 @@ installDisabledControlTooltips();
 installUndoShortcut(() => window.bossAPI.undoLastChange());
 
 // Mantém a implementação pronta para a etapa em que o dano em área voltar ao painel.
-const AREA_DAMAGE_CONTROLS_VISIBLE = false;
 
 const parseHealthExpression = (value: string) => {
   const normalized = value.trim().replace(',', '.');
@@ -120,15 +124,15 @@ type EncounterTarget = {
   faction: EncounterFaction;
 };
 
-type TargetSelectionGroup = 'all' | 'allies' | 'enemies';
+type TargetSelectionGroup = 'all' | 'characters' | 'bosses';
 
 const targetBelongsToGroup = (
   target: EncounterTarget,
   group: TargetSelectionGroup,
 ) => group === 'all' ||
-  (group === 'allies'
-    ? target.faction === 'bosses'
-    : target.faction === 'players');
+  (group === 'bosses'
+    ? target.kind === 'boss'
+    : target.kind !== 'boss');
 
 const TargetPickerModal = ({
   title,
@@ -142,6 +146,7 @@ const TargetPickerModal = ({
   applyLabel,
   error,
   children,
+  headerActions,
 }: {
   title: string;
   subtitle?: string;
@@ -154,6 +159,7 @@ const TargetPickerModal = ({
   applyLabel: string;
   error?: string;
   children?: ReactNode;
+  headerActions?: ReactNode;
 }) => {
   const toggleGroup = (group: TargetSelectionGroup) => {
     const groupIds = targets
@@ -182,13 +188,16 @@ const TargetPickerModal = ({
             <h2 id="control-target-picker-title">{title}</h2>
             {subtitle && <span>{subtitle}</span>}
           </div>
-          <button
-            type="button"
-            aria-label="Fechar seleção de alvos"
-            onClick={onCancel}
-          >
-            ×
-          </button>
+          <div className="control-target-header-actions">
+            {headerActions}
+            <button
+              type="button"
+              aria-label="Fechar seleção de alvos"
+              onClick={onCancel}
+            >
+              ×
+            </button>
+          </div>
         </header>
         {children}
         <div className="control-status-target-toolbar">
@@ -200,8 +209,8 @@ const TargetPickerModal = ({
           >
             {([
               ['all', 'Todos'],
-              ['allies', 'Aliados'],
-              ['enemies', 'Inimigos'],
+              ['characters', 'Personagens'],
+              ['bosses', 'Chefões'],
             ] as const).map(([group, label]) => {
               const groupTargets = targets.filter((target) =>
                 targetBelongsToGroup(target, group));
@@ -215,9 +224,9 @@ const TargetPickerModal = ({
                   aria-pressed={selected}
                   disabled={groupTargets.length === 0}
                   data-disabled-reason={`Nenhum ${
-                    group === 'allies'
-                      ? 'aliado'
-                      : group === 'enemies' ? 'inimigo' : 'alvo'
+                    group === 'characters'
+                      ? 'personagem'
+                      : group === 'bosses' ? 'chefão' : 'alvo'
                   } disponível`}
                   key={group}
                   onClick={() => toggleGroup(group)}
@@ -288,6 +297,15 @@ type PendingTargetAction = {
   status?: ActiveBossStatus;
 };
 
+type ExtremeAdvantageWarning =
+  | { kind: 'skill'; skillId: BossSkillId; label: string }
+  | { kind: 'damage' };
+
+type OffTurnWarning = {
+  actionLabel: string;
+  bossName: string;
+};
+
 const ControlApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState>(
@@ -297,8 +315,6 @@ const ControlApp = () => {
   const [music, setMusic] = useState<MusicState | null>(null);
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
-  const [areaReflexDc, setAreaReflexDc] = useState('20');
-  const [areaSuccessRule, setAreaSuccessRule] = useState<AreaDamageSuccessRule>('half');
   const [applyDamageReduction, setApplyDamageReduction] = useState(true);
   const [maxHealth, setMaxHealth] = useState('500');
   const [currentHealth, setCurrentHealth] = useState('500');
@@ -348,15 +364,21 @@ const ControlApp = () => {
   const [turnConfirmationOpen, setTurnConfirmationOpen] = useState(false);
   const [turnError, setTurnError] = useState('');
   const [playerHuds, setPlayerHuds] = useState<PlayerHudState[]>([]);
-  const [targetValue, setTargetValue] = useState('50');
   const [targetReflexDc, setTargetReflexDc] = useState('20');
   const [targetDamagePicker, setTargetDamagePicker] =
-    useState<'damage' | 'area-damage' | null>(null);
+    useState<'damage' | null>(null);
+  const [targetAreaDamage, setTargetAreaDamage] = useState(false);
   const [targetActionError, setTargetActionError] = useState('');
-  const [attackType, setAttackType] = useState<AttackType>(() =>
-    window.localStorage.getItem('bossbar.control.attack-type') === 'ranged'
-      ? 'ranged'
-      : 'melee');
+  const [bossAttacks, setBossAttacks] = useState<BossAttack[]>([]);
+  const [selectedBossAttackId, setSelectedBossAttackId] = useState('');
+  const [bossArsenalOpen, setBossArsenalOpen] = useState(false);
+  const [bossArsenalSelectedId, setBossArsenalSelectedId] = useState('');
+  const [bossExtremeAdvantage, setBossExtremeAdvantage] = useState(false);
+  const [extremeAdvantageWarning, setExtremeAdvantageWarning] =
+    useState<ExtremeAdvantageWarning | null>(null);
+  const [offTurnWarning, setOffTurnWarning] =
+    useState<OffTurnWarning | null>(null);
+  const offTurnResolver = useRef<((approved: boolean) => void) | null>(null);
   const [bossSkillPickerOpen, setBossSkillPickerOpen] = useState(false);
   const [linkBossSkillToPrevious, setLinkBossSkillToPrevious] = useState(false);
   const [statusTargetSelectionOpen, setStatusTargetSelectionOpen] =
@@ -511,6 +533,8 @@ const ControlApp = () => {
         activeBoss.rangedDefense,
         activeBoss.damageReduction,
         activeBoss.shield,
+        JSON.stringify(activeBoss.attacks),
+        activeBoss.selectedAttackId,
         activeBoss.nextAction,
       ].join('\u0000')
     : '';
@@ -544,6 +568,14 @@ const ControlApp = () => {
     setRangedDefense(String(activeBoss.rangedDefense));
     setDamageReduction(String(activeBoss.damageReduction));
     setShield(String(activeBoss.shield));
+    const nextAttacks = normalizeBossAttacks(activeBoss.attacks, activeBoss.id);
+    const nextSelectedAttack = selectedBossAttack(
+      nextAttacks,
+      activeBoss.selectedAttackId,
+    );
+    setBossAttacks(nextAttacks);
+    setSelectedBossAttackId(nextSelectedAttack?.id ?? '');
+    setBossArsenalSelectedId(nextSelectedAttack?.id ?? '');
     setActionDraft(activeBoss.nextAction);
     setFormError('');
   }, [activeBoss, bossSource]);
@@ -563,11 +595,10 @@ const ControlApp = () => {
     setTargetDamagePicker(null);
     setBossSkillPickerOpen(false);
     setLinkBossSkillToPrevious(false);
+    setBossArsenalOpen(false);
+    setBossExtremeAdvantage(false);
+    setExtremeAdvantageWarning(null);
   }, [activeBoss?.id]);
-
-  useEffect(() => {
-    window.localStorage.setItem('bossbar.control.attack-type', attackType);
-  }, [attackType]);
 
   const selectedStatusDefinition = selectedStatusId
     ? getStatusDefinition(selectedStatusId)
@@ -587,6 +618,14 @@ const ControlApp = () => {
     state?.battleStarted &&
     !turnState.started &&
     activeBossInitiativeParticipant?.initiativeRolled === false,
+  );
+  const activeSelectedAttack = selectedBossAttack(
+    bossAttacks,
+    selectedBossAttackId,
+  );
+  const arsenalDraftAttack = selectedBossAttack(
+    bossAttacks,
+    bossArsenalSelectedId,
   );
   const canAdvanceTurn = Boolean(
     state?.battleStarted &&
@@ -634,6 +673,23 @@ const ControlApp = () => {
     }
     return targets;
   }, [playerHuds, state?.bosses, turnState.participants]);
+
+  useEffect(() => {
+    if (!state || !turnState.started || !turnState.activeParticipantId) return;
+    if (!turnState.activeParticipantId.startsWith('boss:')) return;
+    const bossId = turnState.activeParticipantId.slice('boss:'.length);
+    if (
+      bossId !== state.activeBossId &&
+      state.bosses.some(({ id }) => id === bossId)
+    ) {
+      window.bossAPI.dispatch({ type: 'select-boss', bossId });
+    }
+  }, [state, turnState.activeParticipantId, turnState.started]);
+
+  useEffect(() => () => {
+    offTurnResolver.current?.(false);
+    offTurnResolver.current = null;
+  }, []);
 
   useEffect(() => {
     const validIds = new Set(encounterTargets.map(({ id }) => id));
@@ -892,6 +948,14 @@ const ControlApp = () => {
     setRangedDefense(String(activeBoss.rangedDefense));
     setDamageReduction(String(activeBoss.damageReduction));
     setShield(String(activeBoss.shield));
+    const nextAttacks = normalizeBossAttacks(activeBoss.attacks, activeBoss.id);
+    const nextSelectedAttack = selectedBossAttack(
+      nextAttacks,
+      activeBoss.selectedAttackId,
+    );
+    setBossAttacks(nextAttacks);
+    setSelectedBossAttackId(nextSelectedAttack?.id ?? '');
+    setBossArsenalSelectedId(nextSelectedAttack?.id ?? '');
     setSkillValues(
       Object.fromEntries(
         BOSS_SKILL_DEFINITIONS.map(([id]) => [
@@ -1051,37 +1115,6 @@ const ControlApp = () => {
     if (!result.ok) setFormError(result.error ?? 'Não foi possível aplicar o valor.');
   };
 
-  const applyAreaDamage = async () => {
-    const reflexDc = Number(areaReflexDc);
-    if (!parsedAmount || !Number.isInteger(reflexDc) || reflexDc < 0) {
-      setFormError('Informe um dano válido e uma CD de Reflexos inteira.');
-      return;
-    }
-    const resolved = await resolvePanelValue(parsedAmount, 'Dano em área');
-    if (!resolved || resolved.total <= 0) return;
-    setFormError('');
-    const result = await window.bossAPI.applyAreaDamage({
-      damage: Math.ceil(resolved.total),
-      hits: resolved.hits,
-      reflexDc,
-      successRule: areaSuccessRule,
-    });
-    if (!result.ok) {
-      setFormError(result.error ?? 'Não foi possível aplicar o dano em área.');
-      return;
-    }
-    if (result.appliedPlayers === 0 || result.skippedPlayers.length > 0) {
-      const skipped = result.skippedPlayers.length > 0
-        ? ` Sem ficha válida: ${result.skippedPlayers.join(', ')}.`
-        : '';
-      setFormError(
-        result.appliedPlayers === 0
-          ? `Nenhum jogador recebeu o dano em área.${skipped}`
-          : `Dano aplicado a ${result.appliedPlayers} jogador(es).${skipped}`,
-      );
-    }
-  };
-
   const selectedStatusForTarget = (): ActiveBossStatus | null => {
     if (!selectedStatusId || !selectedStatusDefinition) return null;
     const customizable = selectedStatusDefinition.customizable;
@@ -1127,9 +1160,100 @@ const ControlApp = () => {
   const selectedEncounterTargets = () => encounterTargets.filter(({ id }) =>
     selectedTargetIds.has(id));
 
+  const requestBossTurnPermission = (actionLabel: string) => {
+    if (
+      !activeBoss ||
+      !state?.battleStarted ||
+      !turnState.started ||
+      turnState.activeParticipantId === `boss:${activeBoss.id}`
+    ) {
+      return Promise.resolve(true);
+    }
+    offTurnResolver.current?.(false);
+    setOffTurnWarning({ actionLabel, bossName: activeBoss.bossName });
+    return new Promise<boolean>((resolve) => {
+      offTurnResolver.current = resolve;
+    });
+  };
+
+  const resolveOffTurnWarning = (approved: boolean) => {
+    const resolve = offTurnResolver.current;
+    offTurnResolver.current = null;
+    setOffTurnWarning(null);
+    resolve?.(approved);
+  };
+
   const nextPaint = () => new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+
+  const persistBossArsenal = (attacks = bossAttacks, selectedId = selectedBossAttackId) => {
+    if (!activeBoss) return false;
+    const normalized = normalizeBossAttacks(attacks, activeBoss.id);
+    if (normalized.length !== attacks.length) {
+      setFormError('Revise o nome, o dano e os valores do arsenal antes de aplicar.');
+      return false;
+    }
+    const selected = selectedBossAttack(normalized, selectedId);
+    window.bossAPI.dispatch({
+      type: 'configure',
+      bossId: activeBoss.id,
+      bossName: activeBoss.bossName,
+      controlAmount: activeBoss.controlAmount,
+      applyDamageReduction: activeBoss.applyDamageReduction,
+      maxHealth: activeBoss.maxHealth,
+      currentHealth: activeBoss.currentHealth,
+      attack: activeBoss.attack,
+      rangedAttack: activeBoss.rangedAttack,
+      skills: activeBoss.skills,
+      skillValues: activeBoss.skillValues,
+      skillOverrides: activeBoss.skillOverrides,
+      defense: activeBoss.defense,
+      rangedDefense: activeBoss.rangedDefense,
+      damageReduction: activeBoss.damageReduction,
+      shield: activeBoss.shield,
+      attacks: normalized,
+      selectedAttackId: selected?.id,
+    });
+    setBossAttacks(normalized);
+    setSelectedBossAttackId(selected?.id ?? '');
+    setBossArsenalSelectedId(selected?.id ?? '');
+    setFormError('');
+    return true;
+  };
+
+  const updateArsenalAttack = <K extends keyof BossAttack,>(
+    key: K,
+    value: BossAttack[K],
+  ) => {
+    if (!arsenalDraftAttack) return;
+    setBossAttacks((current) => current.map((attackEntry) =>
+      attackEntry.id === arsenalDraftAttack.id
+        ? { ...attackEntry, [key]: value }
+        : attackEntry));
+  };
+
+  const addArsenalAttack = () => {
+    if (!activeBoss || bossAttacks.length >= MAX_BOSS_ATTACKS) return;
+    const nextIndex = bossAttacks.length + 1;
+    const next = {
+      ...createInitialBossAttack(activeBoss.id),
+      id: `boss-attack:${activeBoss.id}:${crypto.randomUUID()}`,
+      name: `Ataque ${nextIndex}`,
+    };
+    setBossAttacks((current) => [...current, next]);
+    setBossArsenalSelectedId(next.id);
+  };
+
+  const removeArsenalAttack = () => {
+    if (!arsenalDraftAttack || bossAttacks.length <= 1) return;
+    const next = bossAttacks.filter(({ id }) => id !== arsenalDraftAttack.id);
+    setBossAttacks(next);
+    setBossArsenalSelectedId(next[0]?.id ?? '');
+    if (selectedBossAttackId === arsenalDraftAttack.id) {
+      setSelectedBossAttackId(next[0]?.id ?? '');
+    }
+  };
 
   const executeDamageTargetAction = async (
     kind: 'damage' | 'area-damage',
@@ -1138,7 +1262,12 @@ const ControlApp = () => {
       setTargetActionError('Selecione ao menos um alvo.');
       return;
     }
-    const valueDraft = parseHealthExpression(targetValue);
+    const selectedAttack = activeSelectedAttack;
+    if (!selectedAttack) {
+      setTargetActionError('Configure e selecione uma arma ou ataque primeiro.');
+      return;
+    }
+    const valueDraft = parseHealthExpression(selectedAttack.damageFormula);
     if (!valueDraft) {
       setTargetActionError('Use um valor, divisão ou fórmula de dados válida.');
       return;
@@ -1151,6 +1280,9 @@ const ControlApp = () => {
       setTargetActionError('Informe uma CD de Reflexos entre 0 e 999.');
       return;
     }
+    if (!await requestBossTurnPermission(
+      kind === 'area-damage' ? 'causar dano em área' : 'realizar um ataque',
+    )) return;
 
     const targets = selectedEncounterTargets();
     setTargetDamagePicker(null);
@@ -1188,10 +1320,15 @@ const ControlApp = () => {
           damage: fixedValue,
           hits: requestedHits,
           ...(damageFormula ? { damageFormula } : {}),
-          attackType,
-          attackBonus: attackType === 'melee'
+          attackType: selectedAttack.attackType,
+          attackBonus: (selectedAttack.attackType === 'melee'
             ? authoritativeAttributes?.values.attack ?? activeBoss.attack
-            : authoritativeAttributes?.values.rangedAttack ?? activeBoss.rangedAttack,
+            : authoritativeAttributes?.values.rangedAttack ?? activeBoss.rangedAttack) +
+            selectedAttack.attackModifier,
+          attackName: selectedAttack.name,
+          criticalThreat: selectedAttack.criticalThreat,
+          criticalMultiplier: selectedAttack.criticalMultiplier,
+          extremeAdvantage: bossExtremeAdvantage,
           attackerParticipantId: `boss:${activeBoss.id}`,
           actionId,
           correlationId: actionId,
@@ -1215,7 +1352,6 @@ const ControlApp = () => {
           hits: requestedHits,
           ...(damageFormula ? { damageFormula } : {}),
           reflexDc,
-          successRule: areaSuccessRule,
           attackerParticipantId: `boss:${activeBoss.id}`,
           actionId,
           correlationId: actionId,
@@ -1266,6 +1402,7 @@ const ControlApp = () => {
 
   const executeStatusTargetAction = async () => {
     if (!pendingTargetAction?.status) return;
+    if (!await requestBossTurnPermission('aplicar uma condição')) return;
     const targets = selectedEncounterTargets();
     const playerIds = targets
       .filter(({ kind }) => kind === 'player')
@@ -1371,8 +1508,17 @@ const ControlApp = () => {
     return numericSkillValues;
   };
 
-  const rollBossSkill = async (skillId: BossSkillId, label: string) => {
+  const rollBossSkill = async (
+    skillId: BossSkillId,
+    label: string,
+    extremeAdvantageConfirmed = false,
+  ) => {
     if (!activeBoss) return;
+    if (bossExtremeAdvantage && !extremeAdvantageConfirmed) {
+      setExtremeAdvantageWarning({ kind: 'skill', skillId, label });
+      return;
+    }
+    if (!await requestBossTurnPermission(`realizar o teste de ${label}`)) return;
     const exactSkills = commitExactSkillValues();
     if (!exactSkills) return;
     const generalSkillDelta =
@@ -1389,6 +1535,7 @@ const ControlApp = () => {
     ) {
       const initiativeResult = await window.bossAPI.rollEncounterInitiative(
         activeBossInitiativeParticipant.id,
+        bossExtremeAdvantage,
       );
       if (!initiativeResult.ok) {
         setFormError(
@@ -1402,6 +1549,7 @@ const ControlApp = () => {
       participantId: `boss:${activeBoss.id}`,
       label,
       formula: `1d20 ${value >= 0 ? '+' : '-'} ${Math.abs(value)}`,
+      ...(bossExtremeAdvantage ? { rollMode: 'sum-capped' as const } : {}),
       category: 'test',
       ...(linkBossSkillToPrevious && previousRollCorrelationId
         ? { correlationId: previousRollCorrelationId }
@@ -1463,9 +1611,15 @@ const ControlApp = () => {
     if (panelTransitioning) return;
     const nextMinimized = !panelMinimized;
     setPanelTransitioning(true);
-    const changed = await window.bossAPI.setControlPanelMinimized(nextMinimized);
-    if (changed) setPanelMinimized(nextMinimized);
-    setPanelTransitioning(false);
+    setPanelMinimized(nextMinimized);
+    try {
+      const changed = await window.bossAPI.setControlPanelMinimized(nextMinimized);
+      if (!changed) setPanelMinimized(!nextMinimized);
+    } catch {
+      setPanelMinimized(!nextMinimized);
+    } finally {
+      setPanelTransitioning(false);
+    }
   };
 
   if (!state || !activeBoss) {
@@ -1565,34 +1719,6 @@ const ControlApp = () => {
             }} />
           </label>
           <button className="control-damage" type="button" onClick={() => void applyHealthChange('damage')}><span style={{ fontSize: healthButtonFontSize('Dano', displayedFormulaValue ?? displayedDamage) }}>Dano <small>({displayedFormulaValue ?? displayedDamage})</small></span></button>
-          {AREA_DAMAGE_CONTROLS_VISIBLE && (
-            <>
-              <button className="control-area-damage" type="button" onClick={() => void applyAreaDamage()}><span style={{ fontSize: healthButtonFontSize('Dano em área', rawAmount) }}>Dano em área <small>({rawAmount})</small></span></button>
-              <label className="control-reflex-dc">
-                <span>CD Ref.</span>
-                <input
-                  aria-label="CD do teste de Reflexos"
-                  inputMode="numeric"
-                  min={0}
-                  max={999}
-                  type="number"
-                  value={areaReflexDc}
-                  onChange={(event) => setAreaReflexDc(event.target.value)}
-                />
-              </label>
-              <label className="control-area-result">
-                <span>Sucesso</span>
-                <select
-                  aria-label="Dano sofrido ao passar no teste de Reflexos"
-                  value={areaSuccessRule}
-                  onChange={(event) => setAreaSuccessRule(event.target.value as AreaDamageSuccessRule)}
-                >
-                  <option value="half">Metade</option>
-                  <option value="none">Nenhum</option>
-                </select>
-              </label>
-            </>
-          )}
           <button className="control-heal" type="button" onClick={() => void applyHealthChange('heal')}><span style={{ fontSize: healthButtonFontSize('Cura', displayedFormulaValue ?? rawAmount) }}>Cura <small>({displayedFormulaValue ?? rawAmount})</small></span></button>
           <button className="control-full-heal" type="button" onClick={() => window.bossAPI.dispatch({ type: 'reset-health', bossId: activeBoss.id })}><span style={{ fontSize: healthButtonFontSize('Full Heal', activeBoss.maxHealth) }}>Full Heal <small>({activeBoss.maxHealth})</small></span></button>
         </div>
@@ -1631,58 +1757,36 @@ const ControlApp = () => {
               <button type="button" onClick={saveShieldValue}>OK</button>
             </div>
           </div>
-          <label className="control-target-value">
-            <span>Valor</span>
-            <input
-              type="text"
-              inputMode="text"
-              value={targetValue}
-              onChange={(event) => {
-                if (/^[0-9dD+\-.,/\s]*$/.test(event.target.value)) {
-                  setTargetValue(event.target.value);
-                }
-              }}
-            />
-          </label>
+          <button
+            className="control-boss-arsenal-button"
+            type="button"
+            onClick={() => {
+              setFormError('');
+              setBossArsenalSelectedId(activeSelectedAttack?.id ?? bossAttacks[0]?.id ?? '');
+              setBossArsenalOpen(true);
+            }}
+          >
+            Armas/Ataques
+          </button>
           <button
             className="control-target-damage"
             type="button"
             onClick={() => {
               setSelectedTargetIds(new Set());
               setTargetActionError('');
+              setTargetAreaDamage(false);
               setTargetDamagePicker('damage');
             }}
           >
             Dano em jogador
           </button>
-          <div className="control-target-area-group">
-            <button
-              className="control-target-area"
-              type="button"
-              onClick={() => {
-                setSelectedTargetIds(new Set());
-                setTargetActionError('');
-                setTargetDamagePicker('area-damage');
-              }}
-            >
-              Dano em área
-            </button>
-            <label className="control-target-dc">
-              <span>CD</span>
-              <input
-                aria-label="CD do dano em área"
-                type="number"
-                min={0}
-                max={999}
-                value={targetReflexDc}
-                onChange={(event) => {
-                  if (/^\d{0,3}$/.test(event.target.value)) {
-                    setTargetReflexDc(event.target.value);
-                  }
-                }}
-              />
-            </label>
-          </div>
+          <span
+            className="control-selected-attack"
+            data-app-tooltip="Ataque pré-selecionado"
+          >
+            <i aria-hidden="true">→</i>
+            {activeSelectedAttack?.name ?? 'Sem ataque'}
+          </span>
           <button
             className={`control-skill-test-button ${
               bossInitiativePending ? 'is-initiative-pending' : ''
@@ -1833,19 +1937,30 @@ const ControlApp = () => {
               max="100"
               aria-label="Volume da música"
               value={Math.round((music?.volume ?? 0.8) * 100)}
-              onChange={(event) => window.bossAPI.dispatchMusicControl({
-                type: 'set-volume',
-                volume: Number(event.target.value) / 100,
-              })}
+              onChange={(event) => {
+                const volume = Number(event.target.value) / 100;
+                setMusic((current) => current ? {
+                  ...current,
+                  volume,
+                } : current);
+                window.bossAPI.dispatchMusicControl({
+                  type: 'set-volume',
+                  volume,
+                });
+              }}
             />
             <button
               type="button"
               className={music?.muted ? 'is-active' : ''}
               title={music?.muted ? 'Ativar música' : 'Mutar música'}
-              onClick={() => window.bossAPI.dispatchMusicControl({
-                type: 'set-muted',
-                muted: !(music?.muted ?? false),
-              })}
+              onClick={() => {
+                const muted = !(music?.muted ?? false);
+                setMusic((current) => current ? { ...current, muted } : current);
+                window.bossAPI.dispatchMusicControl({
+                  type: 'set-muted',
+                  muted,
+                });
+              }}
             >{music?.muted ? '🔇' : '🔊'}</button>
             <button
               type="button"
@@ -1909,48 +2024,64 @@ const ControlApp = () => {
       </form>
       {targetDamagePicker && (
         <TargetPickerModal
-          title={targetDamagePicker === 'area-damage'
-            ? 'Dano em área'
-            : 'Dano em jogador'}
-          subtitle={`Valor: ${targetValue || '—'}`}
+          title="Dano em jogador"
+          subtitle={activeSelectedAttack
+            ? `${activeSelectedAttack.name} · ${activeSelectedAttack.damageFormula}`
+            : 'Nenhum ataque selecionado'}
           instruction="Selecione quem receberá o ataque."
           targets={encounterTargets}
           selectedIds={selectedTargetIds}
           onSelectionChange={setSelectedTargetIds}
           onCancel={() => setTargetDamagePicker(null)}
-          onApply={() => void executeDamageTargetAction(targetDamagePicker)}
-          applyLabel="Aplicar dano"
+          onApply={() => {
+            if (!targetAreaDamage && bossExtremeAdvantage) {
+              setExtremeAdvantageWarning({ kind: 'damage' });
+              return;
+            }
+            void executeDamageTargetAction(
+              targetAreaDamage ? 'area-damage' : 'damage',
+            );
+          }}
+          applyLabel={targetAreaDamage ? 'Aplicar dano em área' : 'Aplicar dano'}
           error={targetActionError}
+          headerActions={!targetAreaDamage ? (
+            <label className="control-extreme-advantage-choice is-inline">
+              <input
+                type="checkbox"
+                checked={bossExtremeAdvantage}
+                onChange={(event) => setBossExtremeAdvantage(event.target.checked)}
+              />
+              Extrema vantagem
+            </label>
+          ) : undefined}
         >
-            {targetDamagePicker === 'damage' && (
-              <fieldset className="control-attack-type">
-                <legend>Tipo de ataque</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="control-attack-type"
-                    checked={attackType === 'melee'}
-                    onChange={() => setAttackType('melee')}
-                  />
-                  Corpo a corpo
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="control-attack-type"
-                    checked={attackType === 'ranged'}
-                    onChange={() => setAttackType('ranged')}
-                  />
-                  À distância
-                </label>
-              </fieldset>
-            )}
-            {targetDamagePicker === 'area-damage' && (
-              <p className="control-area-damage-summary">
-                Reflexos CD <strong>{targetReflexDc || '—'}</strong> · Sucesso:{' '}
-                <strong>{areaSuccessRule === 'half' ? 'metade' : 'nenhum dano'}</strong>
-              </p>
-            )}
+          <div className="control-area-damage-options">
+            <label>
+              <input
+                type="checkbox"
+                checked={targetAreaDamage}
+                onChange={(event) => setTargetAreaDamage(event.target.checked)}
+              />
+              Dano em área
+            </label>
+            <label className={!targetAreaDamage ? 'is-disabled' : ''}>
+              <span>CD</span>
+              <input
+                aria-label="CD do dano em área"
+                type="text"
+                inputMode="numeric"
+                maxLength={3}
+                disabled={!targetAreaDamage}
+                data-disabled-reason="Ative o dano em área"
+                value={targetReflexDc}
+                onChange={(event) => {
+                  if (/^\d{0,3}$/.test(event.target.value)) {
+                    setTargetReflexDc(event.target.value);
+                  }
+                }}
+              />
+            </label>
+          </div>
         </TargetPickerModal>
       )}
       {bossSkillPickerOpen && (
@@ -1967,6 +2098,14 @@ const ControlApp = () => {
                 <span>{activeBoss.bossName}</span>
               </div>
               <div className="control-skill-picker-actions">
+                <label className="control-extreme-advantage-choice is-inline">
+                  <input
+                    type="checkbox"
+                    checked={bossExtremeAdvantage}
+                    onChange={(event) => setBossExtremeAdvantage(event.target.checked)}
+                  />
+                  Extrema vantagem
+                </label>
                 <button
                   className="is-apply"
                   type="button"
@@ -2046,6 +2185,253 @@ const ControlApp = () => {
                 );
               })}
             </div>
+          </section>
+        </div>
+      )}
+      {bossArsenalOpen && arsenalDraftAttack && (
+        <div className="control-modal-backdrop" role="presentation">
+          <section
+            className="control-status-modal control-boss-arsenal-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="control-boss-arsenal-title"
+          >
+            <header className="control-status-target-header">
+              <div>
+                <h2 id="control-boss-arsenal-title">Armas e ataques</h2>
+                <span>{activeBoss.bossName}</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar arsenal"
+                onClick={() => {
+                  const restored = normalizeBossAttacks(activeBoss.attacks, activeBoss.id);
+                  setBossAttacks(restored);
+                  setBossArsenalSelectedId(
+                    selectedBossAttack(restored, activeBoss.selectedAttackId)?.id ?? '',
+                  );
+                  setBossArsenalOpen(false);
+                }}
+              >
+                ×
+              </button>
+            </header>
+            <div className="control-boss-arsenal-layout">
+              <aside className="control-boss-attack-list">
+                {bossAttacks.map((attackEntry) => (
+                  <button
+                    className={attackEntry.id === arsenalDraftAttack.id ? 'is-selected' : ''}
+                    type="button"
+                    key={attackEntry.id}
+                    onClick={() => setBossArsenalSelectedId(attackEntry.id)}
+                  >
+                    {attackEntry.name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  disabled={bossAttacks.length >= MAX_BOSS_ATTACKS}
+                  data-disabled-reason="Limite de 20 ataques alcançado"
+                  onClick={addArsenalAttack}
+                >
+                  + Novo ataque
+                </button>
+              </aside>
+              <div className="control-boss-attack-editor">
+                <label>
+                  <span>Nome</span>
+                  <input
+                    type="text"
+                    maxLength={60}
+                    value={arsenalDraftAttack.name}
+                    onChange={(event) => updateArsenalAttack('name', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Tipo</span>
+                  <select
+                    value={arsenalDraftAttack.attackType}
+                    onChange={(event) => updateArsenalAttack(
+                      'attackType',
+                      event.target.value as BossAttack['attackType'],
+                    )}
+                  >
+                    <option value="melee">Corpo a corpo (Luta)</option>
+                    <option value="ranged">À distância (Pontaria)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Modificador adicional</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={3}
+                    value={arsenalDraftAttack.attackModifier}
+                    onChange={(event) => {
+                      if (/^-?\d{0,2}$/.test(event.target.value)) {
+                        updateArsenalAttack('attackModifier', Number(event.target.value || 0));
+                      }
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Dano</span>
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={arsenalDraftAttack.damageFormula}
+                    placeholder="Ex.: 2d8 + 6"
+                    onChange={(event) => updateArsenalAttack('damageFormula', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Margem de crítico</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={arsenalDraftAttack.criticalThreat}
+                    onChange={(event) => {
+                      if (/^\d{0,2}$/.test(event.target.value)) {
+                        updateArsenalAttack('criticalThreat', Number(event.target.value || 0));
+                      }
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Multiplicador</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={arsenalDraftAttack.criticalMultiplier}
+                    onChange={(event) => {
+                      if (/^\d{0,2}$/.test(event.target.value)) {
+                        updateArsenalAttack('criticalMultiplier', Number(event.target.value || 0));
+                      }
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Tipo de dano</span>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={arsenalDraftAttack.damageType}
+                    onChange={(event) => updateArsenalAttack('damageType', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Alcance</span>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={arsenalDraftAttack.range}
+                    onChange={(event) => updateArsenalAttack('range', event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+            {formError && (
+              <p className="control-status-modal-error" role="alert">{formError}</p>
+            )}
+            <footer className="control-boss-arsenal-actions">
+              <button
+                className="is-remove"
+                type="button"
+                disabled={bossAttacks.length <= 1}
+                data-disabled-reason="O chefão precisa ter ao menos um ataque"
+                onClick={removeArsenalAttack}
+              >
+                Remover
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedBossAttackId(arsenalDraftAttack.id)}
+              >
+                {selectedBossAttackId === arsenalDraftAttack.id
+                  ? 'Pré-selecionado'
+                  : 'Pré-selecionar'}
+              </button>
+              <button
+                className="is-apply"
+                type="button"
+                onClick={() => {
+                  if (!persistBossArsenal()) return;
+                  setBossArsenalOpen(false);
+                }}
+              >
+                Aplicar
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {extremeAdvantageWarning && (
+        <div className="control-modal-backdrop control-extreme-warning-layer" role="presentation">
+          <section
+            className="control-status-modal control-extreme-warning-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="control-extreme-warning-title"
+          >
+            <header className="control-status-target-header">
+              <h2 id="control-extreme-warning-title">Confirmar extrema vantagem</h2>
+            </header>
+            <p>
+              Chefões geralmente não possuem Extrema Vantagem. Use-a apenas
+              quando fizer sentido narrativamente e estiver claro para a mesa.
+            </p>
+            <footer className="control-target-modal-actions">
+              <button type="button" onClick={() => setExtremeAdvantageWarning(null)}>
+                Voltar
+              </button>
+              <button
+                className="control-status-modal-apply"
+                type="button"
+                onClick={() => {
+                  const warning = extremeAdvantageWarning;
+                  setExtremeAdvantageWarning(null);
+                  if (warning.kind === 'skill') {
+                    void rollBossSkill(warning.skillId, warning.label, true);
+                  } else {
+                    void executeDamageTargetAction('damage');
+                  }
+                }}
+              >
+                Confirmar
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {offTurnWarning && (
+        <div className="control-modal-backdrop control-off-turn-warning-layer" role="presentation">
+          <section
+            className="control-status-modal control-off-turn-warning-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="control-off-turn-warning-title"
+          >
+            <header className="control-status-target-header">
+              <h2 id="control-off-turn-warning-title">Ação fora do turno</h2>
+            </header>
+            <p>
+              {offTurnWarning.bossName} não está no próprio turno. Deseja mesmo{' '}
+              {offTurnWarning.actionLabel} agora?
+            </p>
+            <footer className="control-target-modal-actions">
+              <button type="button" onClick={() => resolveOffTurnWarning(false)}>
+                Voltar
+              </button>
+              <button
+                className="control-status-modal-apply"
+                type="button"
+                onClick={() => resolveOffTurnWarning(true)}
+              >
+                Prosseguir
+              </button>
+            </footer>
           </section>
         </div>
       )}

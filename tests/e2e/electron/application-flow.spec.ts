@@ -26,7 +26,9 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
   // chegar ao Electron, o processo inicia como Node.js em vez do aplicativo.
   delete testEnvironment.ELECTRON_RUN_AS_NODE;
   const application = await electron.launch({
-    args: ['.'],
+    // O perfil descartável roda dentro do sandbox do CI/Codex, que não permite
+    // criar os subprocessos GPU/sandbox do Chromium. Isso afeta apenas o teste.
+    args: ['.', '--no-sandbox', '--disable-gpu', '--in-process-gpu'],
     cwd: projectRoot,
     env: {
       ...testEnvironment,
@@ -53,6 +55,70 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     const player = await windowByTitle(application, 'Apresentação do Chefão - BossBar T20');
     const control = await windowByTitle(application, 'Painel Privado do Encontro - BossBar T20');
 
+    await player.evaluate(() => {
+      Object.assign(window, {
+        __bossCriticalCueAnimations: 0,
+        __bossCriticalCueAudio: 0,
+      });
+      HTMLMediaElement.prototype.play = function patchedPlay() {
+        const current = (
+          window as typeof window & { __bossCriticalCueAudio?: number }
+        ).__bossCriticalCueAudio ?? 0;
+        Object.assign(window, { __bossCriticalCueAudio: current + 1 });
+        queueMicrotask(() => this.dispatchEvent(new Event('playing')));
+        return Promise.resolve();
+      };
+      const originalAnimate = Element.prototype.animate;
+      Element.prototype.animate = function patchedAnimate(keyframes, options) {
+        if (this instanceof HTMLElement && this.classList.contains('player-stage')) {
+          const current = (
+            window as typeof window & { __bossCriticalCueAnimations?: number }
+          ).__bossCriticalCueAnimations ?? 0;
+          Object.assign(window, { __bossCriticalCueAnimations: current + 1 });
+        }
+        return originalAnimate.call(this, keyframes, options);
+      };
+    });
+    await application.evaluate(({ BrowserWindow }) => {
+      const presentation = BrowserWindow.getAllWindows().find(
+        (window) => window.getTitle() === 'Apresentação do Chefão - BossBar T20',
+      );
+      presentation?.webContents.send('music:duck', {
+        id: 1,
+        phase: 'duck',
+        duration: 1_000,
+        targetVolume: 0.2,
+        soundEffect: {
+          id: 1,
+          kind: 'natural-success-enemy',
+          url: 'data:audio/mpeg;base64,//uQxAA=',
+        },
+      });
+    });
+    await expect.poll(() => player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAnimations?: number }
+    ).__bossCriticalCueAnimations ?? 0)).toBeGreaterThan(0);
+    await expect.poll(() => player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAudio?: number }
+    ).__bossCriticalCueAudio ?? 0)).toBeGreaterThan(0);
+    const threatAnimationCount = await player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAnimations?: number }
+    ).__bossCriticalCueAnimations ?? 0);
+    await application.evaluate(({ BrowserWindow }) => {
+      const presentation = BrowserWindow.getAllWindows().find(
+        (window) => window.getTitle() === 'Apresentação do Chefão - BossBar T20',
+      );
+      presentation?.webContents.send('music:duck', {
+        id: 1,
+        phase: 'impact',
+        duration: 1_100,
+        soundEffect: null,
+      });
+    });
+    await expect.poll(() => player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAnimations?: number }
+    ).__bossCriticalCueAnimations ?? 0)).toBeGreaterThan(threatAnimationCount);
+
     await expect(master.getByRole('button', { name: 'Abrir bloco de notas' })).toHaveText('📝');
     await expect(master.locator('.master-header')).toHaveCSS('text-align', 'left');
     await master.getByRole('button', { name: 'Abrir bloco de notas' }).click();
@@ -60,8 +126,16 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await master.getByLabel('Título da nota').fill('Sessão automatizada');
     await expect(master.getByRole('tab', { name: 'Sessão automatizada' })).toBeVisible();
     await master.getByRole('button', { name: 'Fechar' }).click();
-    await expect(control.getByRole('button', { name: 'Dano em área' })).toBeVisible();
+    await expect(control.getByRole('button', { name: 'Dano em área' })).toHaveCount(0);
     await expect(control.getByLabel('CD do teste de Reflexos')).toHaveCount(0);
+    const musicVolume = control.getByLabel('Volume da música');
+    await expect(musicVolume).toHaveValue('80');
+    await musicVolume.fill('35');
+    await expect(musicVolume).toHaveValue('35');
+    await control.getByTitle('Mutar música').click();
+    await expect(control.getByTitle('Ativar música')).toBeVisible();
+    await control.getByTitle('Ativar música').click();
+    await expect(control.getByTitle('Mutar música')).toBeVisible();
 
     await control.locator('.control-name-field input').fill('Titã Automatizado');
     await control.getByRole('button', { name: /Alterar Perícias/ }).click();
@@ -87,10 +161,10 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
       targetFilters.getByRole('button', { name: 'Todos' }),
     ).toBeVisible();
     await expect(
-      targetFilters.getByRole('button', { name: 'Aliados' }),
+      targetFilters.getByRole('button', { name: 'Chefões' }),
     ).toBeVisible();
     await expect(
-      targetFilters.getByRole('button', { name: 'Inimigos' }),
+      targetFilters.getByRole('button', { name: 'Personagens' }),
     ).toBeDisabled();
     await expect(
       damageTargets.locator('[data-target-faction="bosses"]'),
@@ -101,11 +175,15 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(
       damageTargets.getByRole('button', { name: 'Aplicar dano' }),
     ).toHaveClass(/control-status-modal-apply/);
-    await targetFilters.getByRole('button', { name: 'Aliados' }).click();
+    await expect(
+      damageTargets.getByRole('checkbox', { name: 'Dano em área' }),
+    ).not.toBeChecked();
+    await expect(damageTargets.getByLabel('CD do dano em área')).toBeDisabled();
+    await targetFilters.getByRole('button', { name: 'Chefões' }).click();
     await expect(
       damageTargets.getByLabel(/Titã Automatizado.*Chefão/),
     ).toBeChecked();
-    await targetFilters.getByRole('button', { name: 'Aliados' }).click();
+    await targetFilters.getByRole('button', { name: 'Chefões' }).click();
     await expect(
       damageTargets.getByLabel(/Titã Automatizado.*Chefão/),
     ).not.toBeChecked();
@@ -114,7 +192,31 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     ).toBeDisabled();
     await damageTargets.getByRole('button', { name: 'Cancelar' }).click();
 
+    await master.getByRole('button', { name: 'Abrir depurador do encontro' }).click();
+    const encounterDebugger = await windowByTitle(
+      application,
+      'Depurador do Encontro - BossBar T20',
+    );
+    await encounterDebugger.getByRole('button', { name: /Chefão Titã Automatizado/ }).click();
+    const debugEditor = encounterDebugger.getByLabel('Valores da criatura em JSON');
+    const debugBoss = JSON.parse(await debugEditor.inputValue());
+    debugBoss.currentHealth = 590;
+    await debugEditor.fill(JSON.stringify(debugBoss, null, 2));
+    await encounterDebugger.getByRole('button', { name: 'Aplicar sobrescrita' }).click();
+    await expect(encounterDebugger.getByRole('status')).toContainText('sincronizados');
+    await expect(control.locator('.health-difference strong')).toHaveText('590/600');
+    await control.getByRole('button', { name: /^Full Heal/ }).click();
+    await expect(control.locator('.health-difference strong')).toHaveText('600/600');
+    await encounterDebugger.close();
     await master.getByRole('button', { name: 'Iniciar Batalha' }).click();
+    const preparationWarning = master.getByRole('dialog', {
+      name: 'O encontro ainda não está completamente preparado',
+    });
+    if (await preparationWarning.isVisible().catch(() => false)) {
+      await preparationWarning.getByRole('button', {
+        name: 'Continuar mesmo assim',
+      }).click();
+    }
     await expect(player.getByRole('heading', { name: 'Titã Automatizado' })).toBeVisible();
     await expect(control.locator('.health-difference strong')).toHaveText('600/600');
     const skillButton = control.getByRole('button', {
@@ -131,7 +233,7 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(
       skillDialog.locator('.control-skill-picker-item.is-initiative-required'),
     ).toContainText('Iniciativa');
-    await skillDialog.getByLabel('Iniciativa').fill('14');
+    await skillDialog.getByRole('textbox', { name: 'Iniciativa' }).fill('14');
     const skillLayout = await skillDialog.evaluate((dialog) => {
       const bounds = dialog.getBoundingClientRect();
       const list = dialog.querySelector<HTMLElement>('.control-skill-picker-list');
@@ -155,17 +257,21 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     );
     await skillDialog.getByRole('button', { name: 'Rolar Iniciativa' }).click();
     await expect(control.getByRole('button', { name: 'Iniciar turno' })).toBeEnabled();
-    await expect(
-      control.locator('.control-target-area-group').getByLabel('CD do dano em área'),
-    ).toBeVisible();
-    await control.locator('.control-target-value input').fill('1d2 + 3');
+    await expect(control.locator('.control-selected-attack')).toContainText('→');
+    await control.getByRole('button', { name: 'Armas/Ataques' }).click();
+    const arsenalDialog = control.getByRole('dialog', {
+      name: 'Armas e ataques',
+    });
+    await arsenalDialog.getByLabel('Dano', { exact: true }).fill('1d2 + 3');
+    await arsenalDialog.getByRole('button', { name: 'Aplicar' }).click();
+    await expect(control.locator('.control-selected-attack')).toContainText('Golpe');
     await control.getByRole('button', { name: 'Dano em jogador' }).click();
     const activeDamageTargets = control.getByRole('dialog', {
       name: 'Dano em jogador',
     });
     await activeDamageTargets
       .getByRole('group', { name: 'Filtros de alvos' })
-      .getByRole('button', { name: 'Aliados' })
+      .getByRole('button', { name: 'Chefões' })
       .click();
     await activeDamageTargets.getByRole('button', { name: 'Aplicar dano' }).click();
     await expect(
@@ -178,8 +284,8 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
 
     await control.locator('.control-amount-field input').fill('50');
     await control.getByRole('button', { name: /^Dano \(/ }).click();
-    await expect(control.locator('.health-difference strong')).toHaveText('560/600');
-    await expect(player.locator('.health-bar-fill')).toHaveAttribute('style', /93\.333/);
+    await expect(control.locator('.health-difference strong')).toHaveText('550/600');
+    await expect(player.locator('.health-bar-fill')).toHaveAttribute('style', /91\.666/);
 
     const panelToggle = control.getByRole('button', { name: 'Minimizar painel' });
     await panelToggle.click();

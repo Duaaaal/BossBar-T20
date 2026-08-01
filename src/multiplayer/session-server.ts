@@ -17,13 +17,15 @@ import {
   MAX_CHARACTER_SHEET_BYTES,
   type PlayerAuthenticationRequest,
 } from '../shared/character-sheet.ts';
-import type {
-  BackgroundState,
-  EncounterEffectsState,
-  EncounterSoundEffect,
-  HealthEffect,
-  SoundEffect,
-  SoundboardStop,
+import {
+  BOSS_CRITICAL_THREAT_DURATION_MS,
+  type BackgroundState,
+  type EncounterEffectsState,
+  type EncounterSoundEffect,
+  type HealthEffect,
+  type MusicDuckEvent,
+  type SoundEffect,
+  type SoundboardStop,
 } from '../shared/battle.ts';
 import {
   MAX_MULTIPLAYER_PLAYERS,
@@ -48,12 +50,26 @@ import {
 } from '../shared/multiplayer.ts';
 import { resolveByteRange } from '../shared/media.ts';
 import type { SceneTransitionEvent } from '../shared/scene.ts';
+import { resolveD20Check } from '../shared/d20-rules.ts';
+import {
+  historyEntriesForRolls,
+  historyEntryForVitalChange,
+  type EncounterHistoryEntry,
+} from '../shared/encounter-history.ts';
+import {
+  normalizeDebugNpc,
+  normalizeDebugPlayer,
+  type EncounterDebugCreature,
+  type EncounterDebugOverrideRequest,
+} from '../shared/encounter-debugger.ts';
 import {
   advanceEncounterTurns,
   beginEncounterTurns,
   criticalDamageExpression,
   emptyEncounterTurnState,
+  getEncounterRollNatural,
   isAreaDamageRequest,
+  isCriticalAttack,
   isDirectPlayerDamageRequest,
   linkEncounterRollCorrelation,
   personalizeEncounterTurnState,
@@ -70,7 +86,6 @@ import {
   rollCriticalDamageFormulaDetailed,
   createUnarmedAttack,
   splitDamageIntoHits,
-  rollInitiativeOrder,
   rollManualInitiative,
   actionPointRecoveryFormulas,
   isPlayerCombatActionRequest,
@@ -98,7 +113,19 @@ import {
   parseDamageFormula,
   rollDamageFormulaDetailed,
 } from '../shared/status.ts';
-import { applyStatusRules } from '../shared/status-rules.ts';
+import {
+  applyStatusRules,
+  deriveStatusAttributes,
+} from '../shared/status-rules.ts';
+import {
+  applyPlayerDamage,
+  applyPlayerHealing,
+  BLEEDING_CONSTITUTION_DC,
+  FIRST_AID_CURE_DC,
+  isPlayerIncapacitated,
+  playerDeathThreshold,
+  stabilizePlayer,
+} from '../shared/player-survival.ts';
 import { inspectCharacterSheetPdf } from './character-sheet-pdf.ts';
 import { PlayerProfileStore } from './player-profile-store.ts';
 import { SessionRoster, normalizePlayerName } from './session-roster.ts';
@@ -111,6 +138,22 @@ import {
 
 export const DEFAULT_MULTIPLAYER_PORT = 43_120;
 const DEFAULT_PROBE_INTERVAL_MS = 5_000;
+
+const effectivePlayerDefenses = (state: PlayerEncounterState) => {
+  const derived = deriveStatusAttributes({
+    attack: 0,
+    rangedAttack: 0,
+    skills: 0,
+    meleeDefense: state.defenseMelee,
+    rangedDefense: state.defenseRanged,
+    damageReduction: 0,
+    shield: 0,
+  }, state.statuses);
+  return {
+    melee: derived.values.meleeDefense + state.temporaryDefenseBonus,
+    ranged: derived.values.rangedDefense + state.temporaryDefenseBonus,
+  };
+};
 const DEFAULT_PROBE_TIMEOUT_MS = 4_000;
 
 type MultiplayerSocketServer = SocketIOServer<
@@ -147,6 +190,10 @@ export type MultiplayerSessionServerOptions = {
   latencyProbeTimeoutMs?: number;
   /** Test seam; production keeps a one-second pause between attack and damage. */
   combatRollDelayMs?: number;
+  /** Test seam; natural and enemy-critical rolls pause for three seconds. */
+  dramaticCombatRollDelayMs?: number;
+  /** Player natural 20s pause for two seconds before a following damage roll. */
+  playerNaturalCombatRollDelayMs?: number;
   /** Test seam; production uses node:crypto.randomInt. */
   randomInteger?: (
     minimumInclusive: number,
@@ -161,7 +208,12 @@ export type MultiplayerSessionServerOptions = {
   onPlayerHudsChanged?: (huds: PlayerHudState[]) => void;
   onTurnStateChanged?: (state: EncounterTurnState) => void;
   onTurnStarted?: (participant: EncounterTurnParticipant) => void;
-  onDiceRolled?: () => void;
+  onDiceRolled?: (result: EncounterRollResult) => void;
+  onBossCriticalThreat?: (context: { targetPlayerIds: string[] }) => void;
+  onPlayerDamaged?: (context: {
+    critical: boolean;
+    targetPlayerIds: string[];
+  }) => void;
   getBossDefense?: (
     bossId: string,
     attackType: 'melee' | 'ranged',
@@ -229,6 +281,8 @@ type PendingActionPointRequestInternal = {
   clientId: string;
   profileId: string;
   combatAction: PlayerCombatActionRequest;
+  approvesActionPoint: boolean;
+  approvesMissingStandardAction: boolean;
 };
 
 type SnapshotReference = {
@@ -462,7 +516,15 @@ export class MultiplayerSessionServer {
     PendingActionPointRequestInternal
   >();
 
-  private readonly approvedClientIds = new Set<string>();
+  /** Late entrants become eligible to roll only after the current actor ends. */
+  private readonly deferredInitiativeActors = new Map<
+    string,
+    { blockedBy: string; eligibleRound: number }
+  >();
+
+  private lateInitiativeQueue: string[] = [];
+
+  private interruptedTurnParticipantId: string | null = null;
 
   private readonly probeInterval: ReturnType<typeof setInterval>;
 
@@ -1225,6 +1287,45 @@ export class MultiplayerSessionServer {
         error: 'Aguarde todos os testes de Iniciativa terminarem.',
       };
     }
+    if (this.lateInitiativeQueue.length > 0) {
+      return {
+        ok: false,
+        error: 'O participante recém-chegado deve rolar Iniciativa primeiro.',
+      };
+    }
+    const currentActiveId = this.encounterTurnState.activeParticipantId;
+    const releasedLateActors = currentActiveId
+      ? [...this.deferredInitiativeActors.entries()]
+        .filter(([, deferred]) => deferred.blockedBy === currentActiveId)
+        .map(([participantId]) => participantId)
+      : [];
+    if (releasedLateActors.length > 0 && currentActiveId) {
+      for (const participantId of releasedLateActors) {
+        const deferred = this.deferredInitiativeActors.get(participantId);
+        if (deferred) {
+          this.deferredInitiativeActors.set(participantId, {
+            ...deferred,
+            blockedBy: '',
+          });
+        }
+      }
+      this.syncTurnParticipants();
+      this.lateInitiativeQueue = releasedLateActors.filter((participantId) =>
+        this.encounterTurnState.participants.some(
+          ({ id, initiativeRolled }) =>
+            id === participantId && initiativeRolled === false,
+        ));
+      if (this.lateInitiativeQueue.length > 0) {
+        this.interruptedTurnParticipantId = currentActiveId;
+        this.encounterTurnState = {
+          ...this.encounterTurnState,
+          activeParticipantId: this.lateInitiativeQueue[0],
+          revision: this.encounterTurnState.revision + 1,
+        };
+        this.publishTurnState(currentActiveId);
+        return { ok: true, state: this.getTurnState() };
+      }
+    }
     const previousActiveId = this.encounterTurnState.activeParticipantId;
     const nextState = this.encounterTurnState.started
       ? advanceEncounterTurns(this.encounterTurnState)
@@ -1234,12 +1335,14 @@ export class MultiplayerSessionServer {
     }
     this.encounterRollSequence = 0;
     this.encounterTurnState = nextState;
+    this.syncTurnParticipants();
     this.publishTurnState(previousActiveId);
     return { ok: true, state: this.getTurnState() };
   }
 
   rollInitiativeAsHost(
     participantId: string,
+    extremeAdvantage = false,
   ): EncounterTurnActionResult {
     const participant = this.encounterTurnState.participants.find(
       ({ id }) => id === participantId,
@@ -1247,11 +1350,12 @@ export class MultiplayerSessionServer {
     if (!participant || !['boss', 'npc'].includes(participant.kind)) {
       return { ok: false, error: 'Selecione um chefão ou NPC pendente.' };
     }
-    return this.rollInitiativeParticipant(participantId);
+    return this.rollInitiativeParticipant(participantId, extremeAdvantage);
   }
 
   private rollInitiativeAsPlayer(
     playerId: string,
+    extremeAdvantage = false,
   ): EncounterTurnActionResult {
     const participant = this.encounterTurnState.participants.find(
       ({ kind, sourceId }) => kind === 'player' && sourceId === playerId,
@@ -1259,24 +1363,75 @@ export class MultiplayerSessionServer {
     if (!participant) {
       return { ok: false, error: 'Seu personagem não participa desta iniciativa.' };
     }
-    return this.rollInitiativeParticipant(participant.id);
+    const socket = [...this.io.sockets.sockets.values()].find(
+      (candidate) => candidate.data.playerId === playerId,
+    );
+    const combatState = socket
+      ? this.playerCombatStates.get(socket.data.clientId)
+      : null;
+    if (
+      extremeAdvantage &&
+      (!combatState || normalizeHeroPointCount(
+        combatState.heroPoints,
+        combatState.heroPointAvailable,
+      ) <= 0)
+    ) {
+      return { ok: false, error: 'Nenhum Ponto Heróico está disponível.' };
+    }
+    const result = this.rollInitiativeParticipant(
+      participant.id,
+      extremeAdvantage,
+    );
+    if (result.ok && extremeAdvantage && socket && combatState) {
+      const nextState = {
+        ...combatState,
+        heroPoints: 0,
+        heroPointAvailable: false,
+        revision: combatState.revision + 1,
+      };
+      this.playerCombatStates.set(socket.data.clientId, nextState);
+      this.publishPlayerState(socket.data.clientId);
+      this.publishPlayerHuds();
+    }
+    return result;
   }
 
   private rollInitiativeParticipant(
     participantId: string,
+    extremeAdvantage = false,
   ): EncounterTurnActionResult {
     if (!this.currentSnapshot.battle.battleStarted) {
       return { ok: false, error: 'Inicie a batalha primeiro.' };
     }
+    let initiativeDice: number[] = [];
     const rolled = rollManualInitiative(
       this.encounterTurnState,
       participantId,
-      () => this.randomInteger(1, 21),
+      () => {
+        initiativeDice = extremeAdvantage
+          ? [this.randomInteger(1, 21), this.randomInteger(1, 21)]
+          : [this.randomInteger(1, 21)];
+        return extremeAdvantage
+          ? resolveExtremeAdvantage(initiativeDice[0], initiativeDice[1]).chosenDie
+          : initiativeDice[0];
+      },
     );
     if (!rolled) {
       return { ok: false, error: 'Esta iniciativa já foi rolada ou não está disponível.' };
     }
-    const rawResult = this.createInitiativeRollResult(rolled.participant, null);
+    const baseResult: EncounterRollResult = {
+      ...this.createInitiativeRollResult(rolled.participant, null),
+      ...(extremeAdvantage ? { resourceEffect: 'hero-point' as const } : {}),
+    };
+    const rawResult: EncounterRollResult = extremeAdvantage
+      ? {
+        ...baseResult,
+        expression: `2d20 ${rolled.participant.initiativeModifier >= 0 ? '+' : '-'} ${Math.abs(rolled.participant.initiativeModifier)}`,
+        rolls: initiativeDice,
+        rollMode: 'sum-capped',
+        natural: null,
+      }
+      : baseResult;
     const result = this.orderRollResults([rawResult])[0] ?? rawResult;
     const rerollIds = new Set(rolled.tiedParticipantIds);
     this.encounterTurnState = {
@@ -1289,9 +1444,40 @@ export class MultiplayerSessionServer {
         ),
         result,
       ],
+      history: [
+        ...(rolled.state.history ?? []),
+        ...historyEntriesForRolls(
+          [result],
+          rolled.state.round,
+          rolled.state.activeParticipantId,
+          rolled.state.participants,
+        ),
+      ],
     };
-    this.options.onDiceRolled?.();
-    this.publishTurnState();
+    this.options.onDiceRolled?.(result);
+    if (this.lateInitiativeQueue[0] === participantId) {
+      const previousActiveId = participantId;
+      this.lateInitiativeQueue.shift();
+      if (this.lateInitiativeQueue.length > 0) {
+        this.encounterTurnState = {
+          ...this.encounterTurnState,
+          activeParticipantId: this.lateInitiativeQueue[0],
+          revision: this.encounterTurnState.revision + 1,
+        };
+      } else {
+        const interrupted = this.interruptedTurnParticipantId;
+        this.interruptedTurnParticipantId = null;
+        const resumableState = {
+          ...this.encounterTurnState,
+          activeParticipantId: interrupted,
+        };
+        this.encounterTurnState = advanceEncounterTurns(resumableState);
+        this.encounterRollSequence = 0;
+      }
+      this.publishTurnState(previousActiveId);
+    } else {
+      this.publishTurnState();
+    }
     return {
       ok: true,
       state: this.getTurnState(),
@@ -1311,6 +1497,77 @@ export class MultiplayerSessionServer {
     return [...this.pendingActionPointRequests.values()]
       .map(({ request }) => ({ ...request }))
       .sort((first, second) => first.requestedAt - second.requestedAt);
+  }
+
+  getEncounterDebugCreatures(): EncounterDebugCreature[] {
+    const creatures: EncounterDebugCreature[] = [];
+    const seenClients = new Set<string>();
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (
+        !socket.data.playerId ||
+        seenClients.has(socket.data.clientId)
+      ) continue;
+      const state = this.playerCombatStates.get(socket.data.clientId);
+      if (!state) continue;
+      seenClients.add(socket.data.clientId);
+      creatures.push({
+        id: socket.data.playerId,
+        kind: 'player',
+        name: state.characterName,
+        data: structuredClone(state),
+      });
+    }
+    for (const participant of this.encounterTurnState.participants) {
+      if (participant.kind !== 'npc') continue;
+      creatures.push({
+        id: participant.id,
+        kind: 'npc',
+        name: participant.name,
+        data: structuredClone(participant),
+      });
+    }
+    return creatures;
+  }
+
+  overwriteEncounterDebugCreature(
+    request: EncounterDebugOverrideRequest,
+  ): { ok: boolean; error?: string } {
+    if (request.kind === 'player') {
+      const socket = [...this.io.sockets.sockets.values()].find(
+        (candidate) => candidate.data.playerId === request.id,
+      );
+      const current = socket
+        ? this.playerCombatStates.get(socket.data.clientId)
+        : null;
+      if (!socket || !current) {
+        return { ok: false, error: 'O jogador não está mais conectado.' };
+      }
+      const next = normalizeDebugPlayer(request.data, current);
+      if (!next) return { ok: false, error: 'Os valores do jogador são inválidos.' };
+      this.playerCombatStates.set(socket.data.clientId, next);
+      this.publishPlayerState(socket.data.clientId);
+      this.publishPlayerHuds();
+      return { ok: true };
+    }
+    if (request.kind === 'npc') {
+      const index = this.encounterTurnState.participants.findIndex(
+        ({ id, kind }) => id === request.id && kind === 'npc',
+      );
+      const current = this.encounterTurnState.participants[index];
+      if (!current) return { ok: false, error: 'O NPC não está mais no encontro.' };
+      const next = normalizeDebugNpc(request.data, current);
+      if (!next) return { ok: false, error: 'Os valores do NPC são inválidos.' };
+      const participants = [...this.encounterTurnState.participants];
+      participants[index] = next;
+      this.encounterTurnState = {
+        ...this.encounterTurnState,
+        participants,
+        revision: this.encounterTurnState.revision + 1,
+      };
+      this.publishTurnState();
+      return { ok: true };
+    }
+    return { ok: false, error: 'Este tipo de criatura não pertence à sessão.' };
   }
 
   refreshCharacterSheet(clientId: string, hasCharacterSheet: boolean) {
@@ -1341,6 +1598,7 @@ export class MultiplayerSessionServer {
     const skippedPlayers: string[] = [];
     let appliedPlayers = 0;
     const rollResults: EncounterRollResult[] = [];
+    const vitalHistory = [] as ReturnType<typeof historyEntryForVitalChange>[];
     const targets: Array<{
       socket: MultiplayerPlayerSocket;
       state: PlayerEncounterState;
@@ -1378,6 +1636,7 @@ export class MultiplayerSessionServer {
       resolvedRequest.damage,
       request.hits ?? 1,
     ).filter((damage) => damage > 0);
+    let playerDamageSoundPublished = false;
     if (
       damageRoll &&
       request.attackerParticipantId &&
@@ -1416,6 +1675,13 @@ export class MultiplayerSessionServer {
         );
         currentState = impact.playerState;
         impacted = true;
+        if (!playerDamageSoundPublished && impact.damage.applied > 0) {
+          playerDamageSoundPublished = true;
+          this.options.onPlayerDamaged?.({
+            critical: false,
+            targetPlayerIds: [socket.data.playerId],
+          });
+        }
         socket.emit('player:combat-impact', impact);
         rollResults.push({
           id: `reflex:${socket.data.playerId}:${impact.id}`,
@@ -1432,10 +1698,25 @@ export class MultiplayerSessionServer {
             this.encounterTurnState.activeParticipantId,
           actionId: request.actionId,
           correlationId: request.correlationId,
+          natural: impact.check.natural,
         });
       }
       if (!impacted) continue;
       this.playerCombatStates.set(socket.data.clientId, currentState);
+      vitalHistory.push(historyEntryForVitalChange({
+        id: `history:area-damage:${socket.data.playerId}:${randomUUID()}`,
+        kind: 'damage',
+        round: this.encounterTurnState.round,
+        activeParticipantId: this.encounterTurnState.activeParticipantId,
+        actorParticipantId: request.attackerParticipantId ?? null,
+        actorName: this.encounterTurnState.participants.find(
+          ({ id }) => id === request.attackerParticipantId,
+        )?.name ?? 'Mestre',
+        targetParticipantId: `player:${socket.data.playerId}`,
+        targetName: currentState.characterName,
+        amount: state.currentHealth - currentState.currentHealth,
+        detail: 'dano em área',
+      }));
       appliedPlayers += 1;
     }
     if (appliedPlayers > 0) {
@@ -1447,9 +1728,19 @@ export class MultiplayerSessionServer {
           ...(this.encounterTurnState.rollResults ?? []),
           ...orderedResults,
         ],
+        history: [
+          ...(this.encounterTurnState.history ?? []),
+          ...historyEntriesForRolls(
+            orderedResults,
+            this.encounterTurnState.round,
+            this.encounterTurnState.activeParticipantId,
+            this.encounterTurnState.participants,
+          ),
+          ...vitalHistory,
+        ],
         revision: this.encounterTurnState.revision + 1,
       };
-      orderedResults.forEach(() => this.options.onDiceRolled?.());
+      orderedResults.forEach((result) => this.options.onDiceRolled?.(result));
       this.publishTurnState();
       this.publishPlayerHuds();
     }
@@ -1477,6 +1768,7 @@ export class MultiplayerSessionServer {
     const skippedPlayers: string[] = [];
     const missedPlayers: string[] = [];
     const rollResults: EncounterRollResult[] = [];
+    const vitalHistory = [] as ReturnType<typeof historyEntryForVitalChange>[];
     const impacts: NonNullable<PlayerTargetActionResult['impacts']> = [];
     const targets: Array<{
       socket: MultiplayerPlayerSocket;
@@ -1516,19 +1808,32 @@ export class MultiplayerSessionServer {
           request.attackBonus !== undefined &&
           request.attackerParticipantId
         ) {
+          const baseDice = request.extremeAdvantage
+            ? [this.randomInteger(1, 21), this.randomInteger(1, 21)]
+            : [this.randomInteger(1, 21)];
+          const effectiveDie = request.extremeAdvantage
+            ? resolveExtremeAdvantage(baseDice[0], baseDice[1]).chosenDie
+            : baseDice[0];
+          const targetDefenses = effectivePlayerDefenses(state);
           const check = resolveAttackCheck(
             request.attackBonus,
             request.attackType === 'melee'
-              ? state.defenseMelee + state.temporaryDefenseBonus
-              : state.defenseRanged + state.temporaryDefenseBonus,
-            this.randomInteger(1, 21),
+              ? targetDefenses.melee
+              : targetDefenses.ranged,
+            effectiveDie,
+          );
+          const critical = isCriticalAttack(
+            check.success,
+            check.die,
+            request.criticalThreat ?? 20,
           );
           rollResults.push({
             id: `attack:${request.attackerParticipantId}:${randomUUID()}`,
             participantId: request.attackerParticipantId,
-            label: request.attackType === 'melee' ? 'Luta' : 'Pontaria',
-            expression: `1d20 ${check.attackBonus >= 0 ? '+' : '-'} ${Math.abs(check.attackBonus)}`,
-            rolls: [check.die],
+            label: request.attackName?.trim() ||
+              (request.attackType === 'melee' ? 'Luta' : 'Pontaria'),
+            expression: `${baseDice.length}d20 ${check.attackBonus >= 0 ? '+' : '-'} ${Math.abs(check.attackBonus)}`,
+            rolls: baseDice,
             modifier: check.attackBonus,
             total: check.total,
             outcome: check.success ? 'success' : 'failure',
@@ -1537,14 +1842,18 @@ export class MultiplayerSessionServer {
             retainedByParticipantId: this.encounterTurnState.activeParticipantId,
             actionId: request.actionId,
             correlationId: request.correlationId,
-            critical: check.success && check.die === 20,
-            criticalMultiplier: check.success && check.die === 20
-              ? 2
+            critical,
+            criticalMultiplier: critical
+              ? request.criticalMultiplier ?? 2
               : undefined,
+            rollMode: request.extremeAdvantage ? 'sum-capped' : 'sum',
+            // Threat range never changes the natural d20. It only upgrades an
+            // attack that already hit; only a real/effective 20 auto-hits.
+            natural: check.natural,
           });
           hitResults.push({
             hit: check.success,
-            critical: check.success && check.die === 20,
+            critical,
           });
         } else {
           hitResults.push({ hit: true, critical: false });
@@ -1558,8 +1867,31 @@ export class MultiplayerSessionServer {
       targetOutcomes.push({ socket, state, hits: hitResults });
     }
     if (rollResults.length > 0) this.appendRollResults(rollResults);
+    if (hasCriticalHit) {
+      let warned = false;
+      for (const outcome of targetOutcomes) {
+        if (!outcome.hits.some(({ critical }) => critical)) continue;
+        const warningState: PlayerEncounterState = {
+          ...outcome.state,
+          criticalThreatId: ++this.playerImpactSequence,
+          revision: outcome.state.revision + 1,
+        };
+        outcome.state = warningState;
+        this.playerCombatStates.set(outcome.socket.data.clientId, warningState);
+        this.publishPlayerState(outcome.socket.data.clientId);
+        warned = true;
+      }
+      if (warned) {
+        this.publishPlayerHuds();
+        this.options.onBossCriticalThreat?.({
+          targetPlayerIds: targetOutcomes
+            .filter(({ hits }) => hits.some(({ critical }) => critical))
+            .map(({ socket }) => socket.data.playerId),
+        });
+      }
+    }
     if (hasSuccessfulHit && rollResults.length > 0) {
-      await this.waitForCombatRollDelay();
+      await this.waitForCombatRollDelay(hasCriticalHit ? 'dramatic' : 'normal');
     }
 
     const parsedDamage = request.damageFormula
@@ -1574,7 +1906,7 @@ export class MultiplayerSessionServer {
     const criticalDamageRoll = hasCriticalHit && parsedDamage
       ? rollCriticalDamageFormulaDetailed(
         parsedDamage,
-        2,
+        request.criticalMultiplier ?? 2,
         (minimum, maximum) => this.randomInteger(minimum, maximum),
       )
       : null;
@@ -1612,7 +1944,7 @@ export class MultiplayerSessionServer {
         participantId: request.attackerParticipantId,
         label: 'Dano crítico',
         expression: parsedDamage
-          ? criticalDamageExpression(parsedDamage, 2)
+          ? criticalDamageExpression(parsedDamage, request.criticalMultiplier ?? 2)
           : request.damageFormula ?? String(request.damage),
         rolls: criticalDamageRoll.rolls,
         modifier: criticalDamageRoll.modifier,
@@ -1624,7 +1956,17 @@ export class MultiplayerSessionServer {
         actionId: request.actionId,
         correlationId: request.correlationId,
         critical: true,
-        criticalMultiplier: 2,
+        criticalMultiplier: request.criticalMultiplier ?? 2,
+      });
+    }
+    if (hasSuccessfulHit) {
+      this.options.onPlayerDamaged?.({
+        critical: hasCriticalHit,
+        targetPlayerIds: targetOutcomes
+          .filter(({ hits }) => hits.some(({ hit, critical }) => (
+            hasCriticalHit ? critical : hit
+          )))
+          .map(({ socket }) => socket.data.playerId),
       });
     }
     for (const { socket, state, hits } of targetOutcomes) {
@@ -1635,12 +1977,10 @@ export class MultiplayerSessionServer {
           ? criticalDamageParcels[index] ?? 0
           : normalDamageParcels[index] ?? 0;
         currentState = {
-          ...currentState,
-          currentHealth: currentState.currentHealth - parcel,
+          ...applyPlayerDamage(currentState, parcel).state,
           criticalImpactId: critical
             ? ++this.playerImpactSequence
             : currentState.criticalImpactId,
-          revision: currentState.revision + 1,
         };
       });
       const targetWasHit = hits.some(({ hit }) => hit);
@@ -1648,6 +1988,20 @@ export class MultiplayerSessionServer {
       if (targetWasHit) {
         this.playerCombatStates.set(socket.data.clientId, currentState);
         this.publishPlayerState(socket.data.clientId);
+        vitalHistory.push(historyEntryForVitalChange({
+          id: `history:direct-damage:${socket.data.playerId}:${randomUUID()}`,
+          kind: 'damage',
+          round: this.encounterTurnState.round,
+          activeParticipantId: this.encounterTurnState.activeParticipantId,
+          actorParticipantId: request.attackerParticipantId ?? null,
+          actorName: this.encounterTurnState.participants.find(
+            ({ id }) => id === request.attackerParticipantId,
+          )?.name ?? 'Mestre',
+          targetParticipantId: `player:${socket.data.playerId}`,
+          targetName: currentState.characterName,
+          amount: state.currentHealth - currentState.currentHealth,
+          detail: request.attackType === 'ranged' ? 'à distância' : 'corpo a corpo',
+        }));
       }
       impacts.push({
         playerId: socket.data.playerId,
@@ -1659,8 +2013,23 @@ export class MultiplayerSessionServer {
       });
       if (targetWasHit) appliedPlayers += 1;
     }
-    if (damageRollResults.length > 0) this.appendRollResults(damageRollResults);
-    if (appliedPlayers > 0) this.publishPlayerHuds();
+    if (damageRollResults.length > 0) {
+      this.appendRollResults(damageRollResults);
+    }
+    if (vitalHistory.length > 0) {
+      this.encounterTurnState = {
+        ...this.encounterTurnState,
+        history: [...(this.encounterTurnState.history ?? []), ...vitalHistory],
+        revision: this.encounterTurnState.revision + 1,
+      };
+      this.publishTurnState();
+    }
+    if (appliedPlayers > 0) {
+      if (this.currentSnapshot.battle.battleStarted) {
+        this.syncTurnParticipants();
+      }
+      this.publishPlayerHuds();
+    }
     return {
       ok: true,
       appliedPlayers,
@@ -1746,16 +2115,49 @@ export class MultiplayerSessionServer {
         error: 'Você só pode realizar este teste durante o próprio turno.',
       };
     }
+    if (this.lateInitiativeQueue.includes(active.id)) {
+      return {
+        ok: false,
+        error: 'Neste turno de entrada, apenas a Iniciativa está disponível.',
+      };
+    }
     const state = this.playerCombatStates.get(socket.data.clientId);
     if (!state) {
       return { ok: false, error: 'Vincule uma ficha válida antes de agir.' };
     }
+    if (state.dead) {
+      return { ok: false, error: 'Este personagem morreu e não pode agir.' };
+    }
+    if (isPlayerIncapacitated(state) && request.kind !== 'skill') {
+      return {
+        ok: false,
+        error: 'Um personagem inconsciente não pode realizar ações ou reações.',
+      };
+    }
+    if (
+      isPlayerIncapacitated(state) &&
+      request.kind === 'skill' &&
+      request.resource !== null
+    ) {
+      return {
+        ok: false,
+        error: 'Um personagem inconsciente só pode realizar o teste, sem usar recursos.',
+      };
+    }
     const actionId = request.actionId ?? randomUUID();
     const combatAction = { ...request, actionId } as PlayerCombatActionRequest;
+    const currentActions = this.playerActions.get(socket.data.profileId) ?? {
+      free: true,
+      movement: true,
+      standard: true,
+    };
+    const needsSkillApproval =
+      request.kind === 'skill' && !currentActions.standard;
 
     const usesActionPoint =
       (request.kind === 'resource' && request.resource === 'action-point') ||
-      (request.kind !== 'resource' && request.resource?.kind === 'action-point');
+      ((request.kind === 'skill' || request.kind === 'attack') &&
+        request.resource?.kind === 'action-point');
     if (usesActionPoint) {
       if (
         normalizeActionPointCount(
@@ -1796,25 +2198,71 @@ export class MultiplayerSessionServer {
           label,
           requestedAt: Date.now(),
           actionId,
+          kind: 'action-point',
         },
         socketId: socket.id,
         clientId: socket.data.clientId,
         profileId: socket.data.profileId,
         combatAction,
+        approvesActionPoint: true,
+        approvesMissingStandardAction: needsSkillApproval,
       };
       this.pendingActionPointRequests.set(id, pending);
       this.notifyActionPointRequestsChanged();
       this.emitResourceNotice(socket.data.clientId, {
-        id: randomUUID(),
+        id,
         tone: 'info',
         message: 'Ponto de Ação enviado para aprovação do mestre.',
+        persistent: true,
+      });
+      return { ok: true, pendingApproval: true, requestId: id };
+    }
+
+    if (needsSkillApproval) {
+      const existing = [...this.pendingActionPointRequests.values()].find(
+        ({ clientId }) => clientId === socket.data.clientId,
+      );
+      if (existing) {
+        return {
+          ok: false,
+          pendingApproval: true,
+          requestId: existing.request.id,
+          error: 'Aguarde o mestre avaliar sua solicitação.',
+        };
+      }
+      const id = randomUUID();
+      const pending: PendingActionPointRequestInternal = {
+        request: {
+          id,
+          playerId: socket.data.playerId,
+          playerName: state.characterName || socket.data.playerName,
+          label: `Teste sem ação padrão: ${this.combatActionLabel(socket, request)}`,
+          requestedAt: Date.now(),
+          actionId,
+          kind: 'skill-without-standard-action',
+        },
+        socketId: socket.id,
+        clientId: socket.data.clientId,
+        profileId: socket.data.profileId,
+        combatAction,
+        approvesActionPoint: false,
+        approvesMissingStandardAction: true,
+      };
+      this.pendingActionPointRequests.set(id, pending);
+      this.notifyActionPointRequestsChanged();
+      this.emitResourceNotice(socket.data.clientId, {
+        id,
+        tone: 'info',
+        message: 'Teste enviado para autorização do mestre.',
+        persistent: true,
       });
       return { ok: true, pendingApproval: true, requestId: id };
     }
 
     const usesHeroPoint = request.kind === 'resource'
       ? request.resource === 'hero-point'
-      : request.resource?.kind === 'hero-point';
+      : (request.kind === 'skill' || request.kind === 'attack') &&
+        request.resource?.kind === 'hero-point';
     if (
       usesHeroPoint &&
       normalizeHeroPointCount(state.heroPoints, state.heroPointAvailable) <= 0
@@ -1857,14 +2305,17 @@ export class MultiplayerSessionServer {
     const result = await this.executePlayerCombatAction(
       socket,
       pending.combatAction,
-      true,
+      pending.approvesActionPoint,
+      pending.approvesMissingStandardAction,
     );
     this.emitResourceNotice(pending.clientId, {
-      id: randomUUID(),
+      id: requestId,
       tone: result.ok ? 'approved' : 'rejected',
       message: result.ok
-        ? 'O mestre aprovou seu Ponto de Ação.'
-        : result.error ?? 'O Ponto de Ação não pôde ser concluído.',
+        ? pending.approvesMissingStandardAction && !pending.approvesActionPoint
+          ? 'O mestre autorizou seu teste de perícia.'
+          : 'O mestre aprovou seu Ponto de Ação.'
+        : result.error ?? 'A solicitação não pôde ser concluída.',
     });
     return result;
   }
@@ -1877,9 +2328,11 @@ export class MultiplayerSessionServer {
     this.pendingActionPointRequests.delete(requestId);
     this.notifyActionPointRequestsChanged();
     this.emitResourceNotice(pending.clientId, {
-      id: randomUUID(),
+      id: requestId,
       tone: 'rejected',
-      message: 'O mestre não aprovou este Ponto de Ação.',
+      message: pending.approvesMissingStandardAction && !pending.approvesActionPoint
+        ? 'O mestre não autorizou este teste de perícia.'
+        : 'O mestre não aprovou este Ponto de Ação.',
     });
     return { ok: true };
   }
@@ -1907,7 +2360,7 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(socket.data.clientId, {
       id: randomUUID(),
       tone: 'heroic',
-      message: 'O mestre concedeu a você um Ponto Heróico!',
+      message: 'O mestre concedeu a você um ponto heróico.',
     });
     return { ok: true };
   }
@@ -1935,7 +2388,7 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(socket.data.clientId, {
       id: randomUUID(),
       tone: 'info',
-      message: 'O mestre retirou seu Ponto Heróico.',
+      message: 'O mestre retirou de você um ponto heróico.',
     });
     return { ok: true };
   }
@@ -1972,9 +2425,7 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(socket.data.clientId, {
       id: randomUUID(),
       tone: 'approved',
-      message: actionPoints === 1
-        ? 'O mestre concedeu a você um Ponto de Ação.'
-        : `Você agora possui ${actionPoints} Pontos de Ação.`,
+      message: 'O mestre concedeu a você um ponto de ação.',
     });
     return { ok: true };
   }
@@ -2011,9 +2462,7 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(socket.data.clientId, {
       id: randomUUID(),
       tone: 'info',
-      message: actionPoints === 0
-        ? 'O mestre retirou seu último Ponto de Ação.'
-        : `Você agora possui ${actionPoints} Pontos de Ação.`,
+      message: 'O mestre retirou de você um ponto de ação.',
     });
     return { ok: true };
   }
@@ -2051,6 +2500,7 @@ export class MultiplayerSessionServer {
       return summary?.skills.find(({ id }) => id === request.skillId)?.name ??
         'teste de perícia';
     }
+    if (request.kind === 'stabilize') return 'Primeiros socorros';
     if (request.kind === 'attack') {
       if (request.attackSource?.kind === 'unarmed') return 'Punhos';
       const index = request.attackSource?.kind === 'sheet'
@@ -2067,6 +2517,7 @@ export class MultiplayerSessionServer {
     socket: MultiplayerPlayerSocket,
     request: PlayerCombatActionRequest,
     actionPointApproved = false,
+    missingStandardActionApproved = false,
   ): Promise<PlayerCombatActionResult> {
     const state = this.playerCombatStates.get(socket.data.clientId);
     const summary = this.options.playerProfileStore.profileById(
@@ -2076,12 +2527,83 @@ export class MultiplayerSessionServer {
       return { ok: false, error: 'A ficha do jogador não está disponível.' };
     }
 
+    const actionId = request.actionId ?? randomUUID();
+    const correlationId = request.correlationId;
+
+    if (request.kind === 'stabilize') {
+      if (isPlayerIncapacitated(state)) {
+        return { ok: false, error: 'Você precisa estar consciente para prestar primeiros socorros.' };
+      }
+      const actions = this.playerActions.get(socket.data.profileId) ?? {
+        free: true,
+        movement: true,
+        standard: true,
+      };
+      if (!actions.standard) {
+        return { ok: false, error: 'A ação padrão deste turno já foi usada.' };
+      }
+      if (request.targetPlayerId === socket.data.playerId) {
+        return { ok: false, error: 'Primeiros socorros devem ser usados em outro personagem.' };
+      }
+      const targetSocket = [...this.io.sockets.sockets.values()].find(
+        (candidate) => candidate.data.playerId === request.targetPlayerId,
+      );
+      const targetState = targetSocket
+        ? this.playerCombatStates.get(targetSocket.data.clientId)
+        : null;
+      if (
+        !targetSocket ||
+        !targetState ||
+        targetState.dead ||
+        targetState.currentHealth > 0 ||
+        !targetState.statuses.some(({ statusId }) => statusId === 'sangrando')
+      ) {
+        return { ok: false, error: 'O alvo não está sangrando ou não pode ser estabilizado.' };
+      }
+      const cure = summary.skills.find(
+        ({ id, name }) => id === '070' || name.toLocaleLowerCase('pt-BR') === 'cura',
+      );
+      if (!cure || cure.total === null) {
+        return { ok: false, error: 'A perícia Cura não está disponível na ficha.' };
+      }
+      const die = this.randomInteger(1, 21);
+      const check = resolveD20Check(die, cure.total, FIRST_AID_CURE_DC);
+      this.playerActions.set(socket.data.profileId, {
+        ...actions,
+        standard: false,
+      });
+      if (check.success) {
+        this.updatePlayerCombatState(
+          targetSocket.data.clientId,
+          stabilizePlayer(targetState).state,
+        );
+      }
+      this.publishPlayerHuds();
+      this.appendRollResult({
+        id: `first-aid:${socket.data.playerId}:${randomUUID()}`,
+        participantId: `player:${socket.data.playerId}`,
+        label: `Cura CD ${FIRST_AID_CURE_DC}: ${targetState.characterName}`,
+        expression: `1d20 ${cure.total >= 0 ? '+' : '-'} ${Math.abs(cure.total)}`,
+        rolls: [die],
+        modifier: cure.total,
+        total: check.total,
+        outcome: check.success ? 'success' : 'failure',
+        category: 'test',
+        createdAt: Date.now(),
+        retainedByParticipantId: this.encounterTurnState.activeParticipantId,
+        actionId,
+        correlationId,
+      });
+      return { ok: true };
+    }
+
     const actionPointUse =
       actionPointApproved ||
       (request.kind === 'resource' && request.resource === 'action-point');
     const heroPointUse =
       (request.kind === 'resource' && request.resource === 'hero-point') ||
-      (request.kind !== 'resource' && request.resource?.kind === 'hero-point');
+      ((request.kind === 'skill' || request.kind === 'attack') &&
+        request.resource?.kind === 'hero-point');
     if (
       actionPointUse &&
       normalizeActionPointCount(
@@ -2097,8 +2619,6 @@ export class MultiplayerSessionServer {
     ) {
       return { ok: false, error: 'Nenhum Ponto Heróico está disponível.' };
     }
-    const actionId = request.actionId ?? randomUUID();
-    const correlationId = request.correlationId;
     if (
       actionPointUse &&
       this.actionPointActionIds.get(socket.data.profileId)?.has(actionId)
@@ -2172,9 +2692,9 @@ export class MultiplayerSessionServer {
         manaFormula,
         (minimum, maximum) => this.randomInteger(minimum, maximum),
       );
+      const healedState = applyPlayerHealing(state, health.total).state;
       const nextState: PlayerEncounterState = {
-        ...state,
-        currentHealth: Math.min(state.maxHealth, state.currentHealth + health.total),
+        ...healedState,
         currentMana: Math.min(state.maxMana, state.currentMana + mana.total),
         actionPoints: normalizeActionPointCount(
           state.actionPoints,
@@ -2185,7 +2705,7 @@ export class MultiplayerSessionServer {
             state.actionPoints,
             state.actionPointAvailable,
           ) - 1 > 0,
-        revision: state.revision + 1,
+        revision: healedState.revision + 1,
       };
       this.updatePlayerCombatState(socket.data.clientId, nextState);
       const retainedBy = this.encounterTurnState.activeParticipantId;
@@ -2223,6 +2743,29 @@ export class MultiplayerSessionServer {
           correlationId,
         },
       ]);
+      const appliedHealing = nextState.currentHealth - state.currentHealth;
+      if (appliedHealing > 0) {
+        this.encounterTurnState = {
+          ...this.encounterTurnState,
+          history: [
+            ...(this.encounterTurnState.history ?? []),
+            historyEntryForVitalChange({
+              id: `history:recovery:${socket.data.playerId}:${randomUUID()}`,
+              kind: 'heal',
+              round: this.encounterTurnState.round,
+              activeParticipantId: this.encounterTurnState.activeParticipantId,
+              actorParticipantId: `player:${socket.data.playerId}`,
+              actorName: nextState.characterName,
+              targetParticipantId: `player:${socket.data.playerId}`,
+              targetName: nextState.characterName,
+              amount: appliedHealing,
+              detail: 'Recuperação',
+            }),
+          ],
+          revision: this.encounterTurnState.revision + 1,
+        };
+        this.publishTurnState();
+      }
       this.markActionPointUsed(socket.data.profileId, actionId);
       return { ok: true };
     }
@@ -2263,14 +2806,30 @@ export class MultiplayerSessionServer {
       if (!skill || skill.total === null) {
         return { ok: false, error: 'Esta perícia não está disponível na ficha.' };
       }
+      const actions = this.playerActions.get(socket.data.profileId) ?? {
+        free: true,
+        movement: true,
+        standard: true,
+      };
+      if (!actions.standard && !missingStandardActionApproved) {
+        return {
+          ok: false,
+          error: 'A ação padrão deste turno já foi usada.',
+        };
+      }
       const { baseDice, chosenDie, interventionDie, rollMode } = rollTestDice();
       const total = chosenDie + skill.total + interventionDie;
+      this.playerActions.set(socket.data.profileId, {
+        ...actions,
+        standard: false,
+      });
       this.consumePlayerResource(
         socket,
         state,
         resourceEffect,
         actionId,
       );
+      if (!resourceEffect) this.publishPlayerHuds();
       this.appendRollResult({
         id: `skill:${socket.data.playerId}:${randomUUID()}`,
         participantId: `player:${socket.data.playerId}`,
@@ -2285,6 +2844,7 @@ export class MultiplayerSessionServer {
         retainedByParticipantId: this.encounterTurnState.activeParticipantId,
         resourceEffect,
         rollMode,
+        natural: chosenDie === 1 || chosenDie === 20 ? chosenDie : null,
         actionId,
         correlationId,
       });
@@ -2357,7 +2917,11 @@ export class MultiplayerSessionServer {
         multiplier: unarmed.criticalMultiplier,
       }
       : parseCriticalProfile(sheetAttack?.critical);
-    const critical = success && chosenDie >= criticalProfile.threat;
+    const critical = isCriticalAttack(
+      success,
+      chosenDie,
+      criticalProfile.threat,
+    );
     const retainedBy = this.encounterTurnState.activeParticipantId;
     const attackResult: EncounterRollResult = {
       id: `attack:${socket.data.playerId}:${randomUUID()}`,
@@ -2386,6 +2950,7 @@ export class MultiplayerSessionServer {
       correlationId,
       critical,
       criticalMultiplier: critical ? criticalProfile.multiplier : undefined,
+      natural: chosenDie === 1 || chosenDie === 20 ? chosenDie : null,
     };
     if (!success) {
       this.commitPlayerAttackCosts(
@@ -2402,7 +2967,9 @@ export class MultiplayerSessionServer {
     this.pendingPlayerAttacks.add(socket.data.profileId);
     try {
       this.appendRollResult(attackResult);
-      await this.waitForCombatRollDelay();
+      await this.waitForCombatRollDelay(
+        attackResult.natural === 20 ? 'player-natural' : 'normal',
+      );
     } finally {
       this.pendingPlayerAttacks.delete(socket.data.profileId);
     }
@@ -2462,10 +3029,22 @@ export class MultiplayerSessionServer {
     return { ok: true };
   }
 
-  private waitForCombatRollDelay() {
+  private waitForCombatRollDelay(
+    mode: 'normal' | 'dramatic' | 'player-natural' = 'normal',
+  ) {
     const delayMs = Math.max(
       0,
-      Math.min(10_000, Math.trunc(this.options.combatRollDelayMs ?? 1_000)),
+      Math.min(
+        10_000,
+        Math.trunc(
+          mode === 'dramatic'
+            ? this.options.dramaticCombatRollDelayMs ??
+              BOSS_CRITICAL_THREAT_DURATION_MS
+            : mode === 'player-natural'
+              ? this.options.playerNaturalCombatRollDelayMs ?? 2_000
+              : this.options.combatRollDelayMs ?? 1_000,
+        ),
+      ),
     );
     if (delayMs === 0) return Promise.resolve();
     return new Promise<void>((resolveDelay) => {
@@ -2561,15 +3140,31 @@ export class MultiplayerSessionServer {
         ...linkedExistingResults,
         ...orderedResults,
       ],
+      history: [
+        ...(this.encounterTurnState.history ?? []),
+        ...historyEntriesForRolls(
+          orderedResults,
+          this.encounterTurnState.round,
+          this.encounterTurnState.activeParticipantId,
+          this.encounterTurnState.participants,
+        ),
+      ],
       revision: this.encounterTurnState.revision + 1,
     };
-    orderedResults.forEach(() => this.options.onDiceRolled?.());
+    orderedResults.forEach((result) => this.options.onDiceRolled?.(result));
     this.publishTurnState();
   }
 
   private orderRollResults(results: EncounterRollResult[]) {
     return results.map((result) => ({
       ...result,
+      natural: result.category === 'initiative'
+        ? null
+        : result.natural ?? getEncounterRollNatural(
+          result.expression,
+          result.rolls,
+          result.rollMode,
+        ),
       sequence: result.sequence ?? ++this.encounterRollSequence,
     }));
   }
@@ -2658,7 +3253,6 @@ export class MultiplayerSessionServer {
       );
       return false;
     }
-    this.approvedClientIds.add(pending.clientId);
     this.completePlayerRegistration(socket);
     return true;
   }
@@ -2747,6 +3341,26 @@ export class MultiplayerSessionServer {
         ...linkedExistingResults,
         orderedResult,
       ],
+      history: [
+        ...(this.encounterTurnState.history ?? []),
+        ...historyEntriesForRolls(
+          [orderedResult],
+          this.encounterTurnState.round,
+          this.encounterTurnState.activeParticipantId,
+          this.encounterTurnState.participants,
+        ),
+      ],
+      revision: this.encounterTurnState.revision + 1,
+    };
+    this.options.onDiceRolled?.(orderedResult);
+    this.publishTurnState();
+  }
+
+  publishHistoryEntry(entry: EncounterHistoryEntry) {
+    if (this.encounterTurnState.history.some(({ id }) => id === entry.id)) return;
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      history: [...(this.encounterTurnState.history ?? []), entry],
       revision: this.encounterTurnState.revision + 1,
     };
     this.publishTurnState();
@@ -2782,6 +3396,10 @@ export class MultiplayerSessionServer {
 
   publishMusicFadeOut(duration: number) {
     this.io.emit('presentation:music-fade-out', duration);
+  }
+
+  publishMusicDuck(event: MusicDuckEvent) {
+    this.io.emit('presentation:music-duck', event);
   }
 
   publishSoundboard(soundboard: PublicSoundboardPresentationState) {
@@ -2828,7 +3446,6 @@ export class MultiplayerSessionServer {
     this.io.disconnectSockets(true);
     this.pendingJoinRequests.clear();
     this.pendingActionPointRequests.clear();
-    this.approvedClientIds.clear();
     this.accountSessions.clear();
     this.playerCombatStates.clear();
     this.playerPrivacy.clear();
@@ -2858,7 +3475,7 @@ export class MultiplayerSessionServer {
       !summary || summary.currentHealth === null || summary.maxHealth === null ||
       summary.currentMana === null || summary.maxMana === null || reflex === null || reflex === undefined
     ) return null;
-    return {
+    const state = {
       clientId,
       characterName: summary.characterName || 'Personagem',
       currentHealth: Math.min(summary.maxHealth, summary.currentHealth),
@@ -2877,8 +3494,17 @@ export class MultiplayerSessionServer {
       temporaryDefenseBonus: 0,
       protectionExpiresAtRound: null,
       criticalImpactId: null,
+      criticalThreatId: null,
+      stabilized: false,
+      dead: false,
       revision: 0,
     } satisfies PlayerEncounterState;
+    return state.currentHealth <= 0
+      ? applyPlayerDamage(
+        { ...state, currentHealth: 1 },
+        1 - state.currentHealth,
+      ).state
+      : state;
   }
 
   private attachSocketHandlers() {
@@ -2912,10 +3538,13 @@ export class MultiplayerSessionServer {
       }
     });
 
+    const replacingConnectedClient = this.roster.members().some(
+      ({ clientId }) => clientId === socket.data.clientId,
+    );
     if (
       this.currentSnapshot.battle.battleStarted &&
       !socket.data.isHost &&
-      !this.approvedClientIds.has(socket.data.clientId)
+      !replacingConnectedClient
     ) {
       this.queueJoinRequest(socket);
       return;
@@ -2947,7 +3576,22 @@ export class MultiplayerSessionServer {
       return;
     }
     socket.data.playerId = result.player.id;
-    this.approvedClientIds.add(socket.data.clientId);
+    const alreadyInTurnOrder = this.encounterTurnState.participants.some(
+      ({ kind, sourceId }) => kind === 'player' && sourceId === result.player.id,
+    );
+    if (
+      !alreadyInTurnOrder &&
+      this.encounterTurnState.started &&
+      this.encounterTurnState.activeParticipantId
+    ) {
+      this.deferredInitiativeActors.set(
+        `player:${result.player.id}`,
+        {
+          blockedBy: this.encounterTurnState.activeParticipantId,
+          eligibleRound: this.encounterTurnState.round + 1,
+        },
+      );
+    }
     if (result.replacedSocketId && result.replacedSocketId !== socket.id) {
       this.io.sockets.sockets.get(result.replacedSocketId)?.disconnect(true);
     }
@@ -2992,6 +3636,21 @@ export class MultiplayerSessionServer {
         });
         return;
       }
+      if (this.lateInitiativeQueue.includes(active.id)) {
+        acknowledge({
+          ok: false,
+          error: 'Neste turno de entrada, role apenas a Iniciativa.',
+        });
+        return;
+      }
+      const combatState = this.playerCombatStates.get(socket.data.clientId);
+      if (combatState && isPlayerIncapacitated(combatState)) {
+        acknowledge({
+          ok: false,
+          error: 'Um personagem inconsciente não pode realizar ações ou reações.',
+        });
+        return;
+      }
       const current = this.playerActions.get(socket.data.profileId) ?? {
         free: true,
         movement: true,
@@ -3024,14 +3683,24 @@ export class MultiplayerSessionServer {
         });
         return;
       }
+      if (this.lateInitiativeQueue.includes(active.id)) {
+        acknowledge({
+          ok: false,
+          error: 'Role a Iniciativa antes de continuar o encontro.',
+        });
+        return;
+      }
       const result = this.advanceTurnAsHost(active.id);
       acknowledge({
         ...result,
         state: result.state ? this.getTurnState(socket.data.clientId) : undefined,
       });
     });
-    socket.on('encounter:roll-initiative', (acknowledge) => {
-      const result = this.rollInitiativeAsPlayer(socket.data.playerId);
+    socket.on('encounter:roll-initiative', (extremeAdvantage, acknowledge) => {
+      const result = this.rollInitiativeAsPlayer(
+        socket.data.playerId,
+        extremeAdvantage === true,
+      );
       acknowledge({
         ...result,
         state: result.state ? this.getTurnState(socket.data.clientId) : undefined,
@@ -3146,7 +3815,7 @@ export class MultiplayerSessionServer {
       const privateMode = profile
         ? this.playerPrivacy.get(profile.data.profileId) ?? true
         : true;
-      const actions = profile
+      const storedActions = profile
         ? this.playerActions.get(profile.data.profileId) ?? {
           free: true,
           movement: true,
@@ -3157,6 +3826,9 @@ export class MultiplayerSessionServer {
           movement: true,
           standard: true,
         };
+      const actions = encounter && isPlayerIncapacitated(encounter)
+        ? { free: false, movement: false, standard: false }
+        : storedActions;
       const redacted = !revealAll && privateMode && !isSelf;
       const actionPoints = normalizeActionPointCount(
         encounter?.actionPoints,
@@ -3166,6 +3838,9 @@ export class MultiplayerSessionServer {
         encounter?.heroPoints,
         encounter?.heroPointAvailable,
       );
+      const effectiveDefenses = encounter
+        ? effectivePlayerDefenses(encounter)
+        : null;
       return {
         id: player.id,
         faction: 'players',
@@ -3180,16 +3855,10 @@ export class MultiplayerSessionServer {
         maxMana: redacted ? null : encounter?.maxMana ?? summary?.maxMana ?? null,
         defenseMelee: redacted
           ? null
-          : (encounter?.defenseMelee ?? summary?.defenses.melee ?? summary?.defense ?? null) === null
-            ? null
-            : (encounter?.defenseMelee ?? summary?.defenses.melee ?? summary?.defense ?? 0) +
-              (encounter?.temporaryDefenseBonus ?? 0),
+          : effectiveDefenses?.melee ?? summary?.defenses.melee ?? summary?.defense ?? null,
         defenseRanged: redacted
           ? null
-          : (encounter?.defenseRanged ?? summary?.defenses.ranged ?? summary?.defense ?? null) === null
-            ? null
-            : (encounter?.defenseRanged ?? summary?.defenses.ranged ?? summary?.defense ?? 0) +
-              (encounter?.temporaryDefenseBonus ?? 0),
+          : effectiveDefenses?.ranged ?? summary?.defenses.ranged ?? summary?.defense ?? null,
         statuses: encounter?.statuses ?? [],
         actionPoints: redacted ? null : actionPoints,
         heroPoints: redacted ? null : heroPoints,
@@ -3206,6 +3875,12 @@ export class MultiplayerSessionServer {
           ? null
           : encounter?.temporaryDefenseBonus ?? 0,
         criticalImpactId: encounter?.criticalImpactId ?? null,
+        criticalThreatId: encounter?.criticalThreatId ?? null,
+        stabilized: encounter?.stabilized ?? false,
+        dead: encounter?.dead ?? false,
+        deathThreshold: redacted || !encounter
+          ? null
+          : playerDeathThreshold(encounter.maxHealth),
         summary: redacted ? null : summary,
         actions,
         revision: encounter?.revision ?? 0,
@@ -3223,6 +3898,9 @@ export class MultiplayerSessionServer {
 
   private syncTurnParticipants() {
     if (!this.currentSnapshot.battle.battleStarted) {
+      this.deferredInitiativeActors.clear();
+      this.lateInitiativeQueue = [];
+      this.interruptedTurnParticipantId = null;
       this.encounterTurnState = emptyEncounterTurnState();
       return;
     }
@@ -3247,7 +3925,7 @@ export class MultiplayerSessionServer {
         // A connected account without a valid character sheet is a spectator,
         // not an encounter participant. Including it here would make round zero
         // wait for an initiative roll that the client cannot perform.
-        if (!encounter || encounter.currentHealth <= 0) return [];
+        if (!encounter || encounter.dead) return [];
         const socket = [...this.io.sockets.sockets.values()]
           .find((candidate) => candidate.data.clientId === clientId);
         const summary = socket
@@ -3268,28 +3946,38 @@ export class MultiplayerSessionServer {
             player.name,
           faction: 'players' as const,
           initiativeModifier: initiative,
-          eligibleRound: this.encounterTurnState.started
+          eligibleRound: this.deferredInitiativeActors.get(
+            `player:${player.id}`,
+          )?.eligibleRound ?? (this.encounterTurnState.started
             ? this.encounterTurnState.round + 1
-            : 1,
+            : 1),
         }];
       }),
     ];
-    const actorIds = new Set(actors.map(({ id }) => id));
+    const readyActors = actors.filter((actor) => {
+      const deferred = this.deferredInitiativeActors.get(actor.id);
+      if (!deferred) return true;
+      if (deferred.blockedBy === this.encounterTurnState.activeParticipantId) {
+        return false;
+      }
+      this.deferredInitiativeActors.delete(actor.id);
+      return true;
+    });
+    const actorIds = new Set(readyActors.map(({ id }) => id));
     const previousParticipants = new Map(
       this.encounterTurnState.participants.map((participant) => [
         participant.id,
         participant,
       ]),
     );
-    const newlyRolledIds: string[] = [];
     let participants: EncounterTurnParticipant[];
     if (!this.encounterTurnState.started) {
       participants = prepareManualInitiative(
-        actors,
+        readyActors,
         this.encounterTurnState.participants,
       );
     } else {
-      participants = actors.map((actor) => {
+      participants = readyActors.map((actor) => {
         const existing = previousParticipants.get(actor.id);
         if (existing) {
           return {
@@ -3299,12 +3987,13 @@ export class MultiplayerSessionServer {
             initiativeTotal: existing.initiativeRoll + actor.initiativeModifier,
           };
         }
-        const participant = rollInitiativeOrder(
-          [actor],
-          () => this.randomInteger(1, 21),
-        )[0];
-        newlyRolledIds.push(participant.id);
-        return participant;
+        return {
+          ...actor,
+          initiativeRoll: 0,
+          initiativeTotal: 0,
+          initiativeRolled: false,
+          isSelf: false,
+        };
       }).sort((left, right) =>
         right.initiativeTotal - left.initiativeTotal ||
         right.initiativeModifier - left.initiativeModifier ||
@@ -3335,14 +4024,7 @@ export class MultiplayerSessionServer {
       participantsUnchanged &&
       nextActiveParticipantId === this.encounterTurnState.activeParticipantId
     ) return;
-    const addedRollResults = this.encounterTurnState.started
-      ? participants
-        .filter(({ id }) => newlyRolledIds.includes(id))
-        .map((participant) => this.createInitiativeRollResult(
-          participant,
-          this.encounterTurnState.activeParticipantId,
-        ))
-      : [];
+    const addedRollResults: EncounterRollResult[] = [];
     const orderedAddedRollResults = this.orderRollResults(addedRollResults);
     this.encounterTurnState = {
       ...this.encounterTurnState,
@@ -3356,11 +4038,20 @@ export class MultiplayerSessionServer {
         ...(this.encounterTurnState.rollResults ?? []),
         ...orderedAddedRollResults,
       ],
+      history: [
+        ...(this.encounterTurnState.history ?? []),
+        ...historyEntriesForRolls(
+          orderedAddedRollResults,
+          this.encounterTurnState.round,
+          nextActiveParticipantId,
+          participants,
+        ),
+      ],
       revision: this.encounterTurnState.revision + 1,
     };
     this.publishTurnState(previousActiveId);
     if (orderedAddedRollResults.length > 0) {
-      orderedAddedRollResults.forEach(() => this.options.onDiceRolled?.());
+      orderedAddedRollResults.forEach((result) => this.options.onDiceRolled?.(result));
     }
   }
 
@@ -3383,6 +4074,102 @@ export class MultiplayerSessionServer {
     };
   }
 
+  private processBleedingAtTurnStart(
+    participant: EncounterTurnParticipant,
+    socket: MultiplayerPlayerSocket,
+  ) {
+    const state = this.playerCombatStates.get(socket.data.clientId);
+    if (
+      !state ||
+      state.dead ||
+      state.currentHealth > 0 ||
+      state.stabilized ||
+      !state.statuses.some(({ statusId }) => statusId === 'sangrando')
+    ) return;
+
+    const summary = this.options.playerProfileStore.profileById(
+      socket.data.profileId,
+    )?.sheet.validation?.summary;
+    const constitution = Math.trunc(summary?.attributes.con ?? 0);
+    const die = this.randomInteger(1, 21);
+    const check = resolveD20Check(
+      die,
+      constitution,
+      BLEEDING_CONSTITUTION_DC,
+    );
+    const results: EncounterRollResult[] = [{
+      id: `bleeding-save:${participant.sourceId}:${randomUUID()}`,
+      participantId: participant.id,
+      label: `Sangramento — Constituição CD ${BLEEDING_CONSTITUTION_DC}`,
+      expression: `1d20 ${constitution >= 0 ? '+' : '-'} ${Math.abs(constitution)}`,
+      rolls: [die],
+      modifier: constitution,
+      total: check.total,
+      outcome: check.success ? 'success' : 'failure',
+      category: 'status',
+      createdAt: Date.now(),
+      retainedByParticipantId: participant.id,
+    }];
+
+    let nextState = state;
+    if (check.success) {
+      nextState = stabilizePlayer(state).state;
+    } else {
+      const bleedingDamage = this.randomInteger(1, 7);
+      const transition = applyPlayerDamage(state, bleedingDamage);
+      nextState = transition.state;
+      results.push({
+        id: `bleeding-damage:${participant.sourceId}:${randomUUID()}`,
+        participantId: participant.id,
+        label: 'Sangramento',
+        expression: '1d6',
+        rolls: [bleedingDamage],
+        modifier: 0,
+        total: bleedingDamage,
+        outcome: 'failure',
+        category: 'status',
+        createdAt: Date.now(),
+        retainedByParticipantId: participant.id,
+      });
+    }
+
+    this.playerCombatStates.set(socket.data.clientId, nextState);
+    this.publishPlayerState(socket.data.clientId);
+    const orderedResults = this.orderRollResults(results);
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      rollResults: [
+        ...(this.encounterTurnState.rollResults ?? []),
+        ...orderedResults,
+      ],
+      history: [
+        ...(this.encounterTurnState.history ?? []),
+        ...historyEntriesForRolls(
+          orderedResults,
+          this.encounterTurnState.round,
+          participant.id,
+          this.encounterTurnState.participants,
+        ),
+        ...(!check.success
+          ? [historyEntryForVitalChange({
+            id: `history:bleeding:${participant.sourceId}:${randomUUID()}`,
+            kind: 'damage',
+            round: this.encounterTurnState.round,
+            activeParticipantId: participant.id,
+            actorParticipantId: participant.id,
+            actorName: 'Sangramento',
+            targetParticipantId: participant.id,
+            targetName: nextState.characterName,
+            amount: state.currentHealth - nextState.currentHealth,
+          })]
+          : []),
+      ],
+      revision: this.encounterTurnState.revision + 1,
+    };
+    orderedResults.forEach((result) => this.options.onDiceRolled?.(result));
+    this.publishPlayerHuds();
+  }
+
   private publishTurnState(previousActiveId?: string | null) {
     const activeId = this.encounterTurnState.activeParticipantId;
     if (
@@ -3394,12 +4181,15 @@ export class MultiplayerSessionServer {
         ({ id, kind }) => id === activeId && kind === 'player',
       );
       if (activePlayer) {
+        const initiativeOnly = this.lateInitiativeQueue.includes(activePlayer.id);
         const socket = [...this.io.sockets.sockets.values()].find(
           (candidate) => candidate.data.playerId === activePlayer.sourceId,
         );
         if (socket) {
+          if (!initiativeOnly) this.processBleedingAtTurnStart(activePlayer, socket);
           const combatState = this.playerCombatStates.get(socket.data.clientId);
           if (
+            !initiativeOnly &&
             combatState &&
             combatState.temporaryDefenseBonus > 0 &&
             combatState.protectionExpiresAtRound !== null &&
@@ -3413,11 +4203,12 @@ export class MultiplayerSessionServer {
             });
             this.publishPlayerState(socket.data.clientId);
           }
-          this.playerActions.set(socket.data.profileId, {
-            free: true,
-            movement: true,
-            standard: true,
-          });
+          this.playerActions.set(
+            socket.data.profileId,
+            initiativeOnly || (combatState && isPlayerIncapacitated(combatState))
+              ? { free: false, movement: false, standard: false }
+              : { free: true, movement: true, standard: true },
+          );
           this.actionPointActionIds.delete(socket.data.profileId);
           this.publishPlayerHuds();
         }

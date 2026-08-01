@@ -5,7 +5,6 @@ import {
   advanceBossTurn,
   calculateHealthSequence,
   clampDamageToHealthFloor,
-  chooseEncounterSoundIndex,
   chooseNonRepeatingIndex,
   createInitialBoss,
   getEncounterSoundEffectKind,
@@ -115,6 +114,53 @@ test('limita vida, atributos e texto aos intervalos aceitos', () => {
   assert.equal(boss.rangedAttack, -5);
   assert.equal(boss.rangedDefense, 20);
   assert.equal(boss.shield, 999);
+});
+
+test('persiste o arsenal e a arma pre-selecionada de cada chefão', () => {
+  const state = freshBattle();
+  const boss = state.bosses[0];
+  const attacks = [
+    {
+      id: 'boss-attack:boss-1:claw',
+      name: 'Garra Incandescente',
+      attackType: 'melee',
+      attackModifier: 3,
+      damageFormula: '2d8 + 6',
+      criticalThreat: 19,
+      criticalMultiplier: 3,
+      damageType: 'Fogo',
+      range: 'Adjacente',
+    },
+    {
+      id: 'boss-attack:boss-1:breath',
+      name: 'Sopro',
+      attackType: 'ranged',
+      attackModifier: 1,
+      damageFormula: '4d6',
+      criticalThreat: 20,
+      criticalMultiplier: 2,
+      damageType: 'Fogo',
+      range: 'Médio',
+    },
+  ];
+  const next = applyBattleCommand(state, {
+    type: 'configure',
+    bossId: boss.id,
+    bossName: boss.bossName,
+    maxHealth: boss.maxHealth,
+    currentHealth: boss.currentHealth,
+    attack: boss.attack,
+    rangedAttack: boss.rangedAttack,
+    defense: boss.defense,
+    rangedDefense: boss.rangedDefense,
+    shield: boss.shield,
+    skills: boss.skills,
+    damageReduction: boss.damageReduction,
+    attacks,
+    selectedAttackId: attacks[1].id,
+  });
+  assert.deepEqual(next.bosses[0].attacks, attacks);
+  assert.equal(next.bosses[0].selectedAttackId, attacks[1].id);
 });
 
 test('inicia novos chefões com RD zero', () => {
@@ -314,9 +360,9 @@ test('acompanha separadamente a preparação da identidade e da próxima ação'
 
 test('converte o controle de volume para ganho perceptual', () => {
   assert.equal(volumeToGain(0), 0);
-  assert.equal(volumeToGain(0.1), 0.1);
-  assert.equal(volumeToGain(0.2), 0.25);
-  assert.equal(volumeToGain(0.4), 0.5);
+  assert.equal(volumeToGain(0.1), 0.015625);
+  assert.equal(volumeToGain(0.2), 0.0625);
+  assert.equal(volumeToGain(0.4), 0.25);
   assert.equal(volumeToGain(0.8), 1);
   assert.ok(volumeToGain(0.79) < 1);
   assert.ok(volumeToGain(0.9) > 1.41 && volumeToGain(0.9) < 1.42);
@@ -461,25 +507,6 @@ test('alterna efeitos aleatórios sem repetir imediatamente o mesmo arquivo', ()
   assert.equal(chooseNonRepeatingIndex(0, null, () => 0), -1);
 });
 
-test('aplica cooldown de um segundo aos grupos com menos de três efeitos', () => {
-  assert.equal(
-    chooseEncounterSoundIndex(2, 0, 1200, 1500, () => 0),
-    -1,
-  );
-  assert.equal(
-    chooseEncounterSoundIndex(2, 0, 1000, 2000, () => 0),
-    0,
-  );
-  assert.equal(
-    chooseEncounterSoundIndex(2, 0, 1200, 2200, () => 1),
-    1,
-  );
-  assert.equal(
-    chooseEncounterSoundIndex(3, 1, 2199, 2200, () => 1),
-    2,
-  );
-});
-
 test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () => {
   assert.equal(initialEncounterEffectsState.general.automaticStatusEffects, true);
   assert.equal(initialEncounterEffectsState.general.phaseMarkers, false);
@@ -499,13 +526,16 @@ test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () =>
   assert.equal(getEncounterSoundSetting('shield-impact'), 'shield');
   assert.equal(getEncounterSoundSetting('shield-break'), 'shield');
   assert.equal(getEncounterSoundSetting('dice-roll'), 'dice');
+  assert.equal(getEncounterSoundSetting('natural-failure'), 'dice');
+  assert.equal(getEncounterSoundSetting('natural-success-player'), 'dice');
+  assert.equal(getEncounterSoundSetting('natural-success-enemy'), 'dice');
   assert.equal(
     isEncounterSoundEnabled(initialEncounterEffectsState, 'shield-break'),
     true,
   );
 });
 
-test('reconhece apenas as seis categorias configuráveis de efeitos sonoros', () => {
+test('reconhece as categorias configuráveis de efeitos sonoros e resultados naturais', () => {
   for (const kind of [
     'damage',
     'critical-damage',
@@ -513,6 +543,9 @@ test('reconhece apenas as seis categorias configuráveis de efeitos sonoros', ()
     'shield-impact',
     'shield-break',
     'dice-roll',
+    'natural-failure',
+    'natural-success-player',
+    'natural-success-enemy',
   ]) assert.equal(isEncounterSoundEffectKind(kind), true);
   assert.equal(isEncounterSoundEffectKind('music'), false);
   assert.equal(isEncounterSoundEffectKind(null), false);

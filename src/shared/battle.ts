@@ -10,6 +10,11 @@ import {
 } from './status.ts';
 import { applyStatusRules } from './status-rules.ts';
 import {
+  MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
+  MEDIA_CACHE_ITEM_LIMIT_BYTES,
+  type MediaCacheUsage,
+} from './media-cache.ts';
+import {
   isCustomStatusAffectedTarget,
   isCustomStatusInflictedStatusId,
   isCustomStatusPresetId,
@@ -24,6 +29,12 @@ import {
   type BossSkillOverrides,
   type BossSkillValues,
 } from './boss-skills.ts';
+import {
+  createInitialBossAttack,
+  normalizeBossAttacks,
+  selectedBossAttack,
+  type BossAttack,
+} from './boss-attacks.ts';
 
 export type BossState = {
   id: string;
@@ -44,6 +55,8 @@ export type BossState = {
   skillValues: BossSkillValues;
   skillOverrides: BossSkillOverrides;
   damageReduction: number;
+  attacks: BossAttack[];
+  selectedAttackId: string;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
   turnCount: number;
@@ -141,7 +154,10 @@ export type EncounterSoundEffectKind =
   | 'damage'
   | 'critical-damage'
   | 'heal'
-  | 'dice-roll';
+  | 'dice-roll'
+  | 'natural-failure'
+  | 'natural-success-player'
+  | 'natural-success-enemy';
 
 export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'damage',
@@ -150,6 +166,9 @@ export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'shield-impact',
   'shield-break',
   'dice-roll',
+  'natural-failure',
+  'natural-success-player',
+  'natural-success-enemy',
 ];
 
 export const isEncounterSoundEffectKind = (
@@ -196,26 +215,6 @@ export const chooseNonRepeatingIndex = (
   }
   const candidate = randomInteger(0, itemCount - 1);
   return candidate >= previousIndex ? candidate + 1 : candidate;
-};
-
-export const encounterSoundReplayDelayMs = 1000;
-
-export const chooseEncounterSoundIndex = (
-  itemCount: number,
-  previousIndex: number | null,
-  lastGroupPlayedAt: number | null,
-  now: number,
-  randomInteger: RandomIntGenerator,
-) => {
-  if (itemCount >= 3) {
-    return chooseNonRepeatingIndex(itemCount, previousIndex, randomInteger);
-  }
-  if (!Number.isInteger(itemCount) || itemCount <= 0) return -1;
-  if (
-    lastGroupPlayedAt !== null &&
-    now - lastGroupPlayedAt < encounterSoundReplayDelayMs
-  ) return -1;
-  return randomInteger(0, itemCount);
 };
 
 export type HealthSequenceRequest = {
@@ -308,11 +307,13 @@ export const isMusicControlCommand = (
 
 export const volumeToGain = (volume: number) => {
   const normalizedVolume = Math.max(0, Math.min(1, volume));
-  if (normalizedVolume <= 0.1) return normalizedVolume;
-  if (normalizedVolume <= 0.2) {
-    return 0.1 + ((normalizedVolume - 0.1) / 0.1) * 0.15;
+  if (normalizedVolume <= 0.8) {
+    // A amplitude linear soa quase igual em boa parte do controle. A curva
+    // quadrática preserva 80% como o volume original, mas separa claramente
+    // volumes baixos, médios e altos para música e áudio de transição.
+    const originalVolumeRatio = normalizedVolume / 0.8;
+    return originalVolumeRatio ** 2;
   }
-  if (normalizedVolume <= 0.8) return normalizedVolume / 0.8;
 
   const boostProgress = (normalizedVolume - 0.8) / 0.2;
   const boostDecibels = boostProgress * 6;
@@ -352,8 +353,24 @@ export type EncounterEffectsState = {
   general: EncounterGeneralSettings;
   sounds: EncounterSoundSettings;
   visuals: EncounterVisualEffectSettings;
+  mediaCache: MediaCacheUsage;
   revision: number;
 };
+
+/** Temporarily lowers the current soundtrack without pausing or replacing it. */
+export type MusicDuckEvent = {
+  id: number;
+  phase: 'duck' | 'impact' | 'restore';
+  duration: number;
+  targetVolume?: number;
+  soundEffect?: EncounterSoundEffect | null;
+  targetPlayerIds?: string[];
+};
+
+export const BOSS_CRITICAL_THREAT_DURATION_MS = 3_000;
+export const BOSS_CRITICAL_DUCK_FADE_MS = 1_000;
+export const BOSS_CRITICAL_IMPACT_MIN_DURATION_MS = 1_100;
+export const BOSS_CRITICAL_MUSIC_RESTORE_MS = 500;
 
 export type EncounterGeneralSetting =
   | 'automaticStatusEffects'
@@ -401,6 +418,11 @@ export const initialEncounterEffectsState: EncounterEffectsState = {
     floatingDamageNumbers: true,
     healthNumbers: false,
   },
+  mediaCache: {
+    usedBytes: 0,
+    itemLimitBytes: MEDIA_CACHE_ITEM_LIMIT_BYTES,
+    globalLimitBytes: MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
+  },
   revision: 0,
 };
 
@@ -408,7 +430,12 @@ export const getEncounterSoundSetting = (
   kind: EncounterSoundEffectKind,
 ): EncounterSoundSetting => {
   if (kind === 'heal') return 'heal';
-  if (kind === 'dice-roll') return 'dice';
+  if (
+    kind === 'dice-roll' ||
+    kind === 'natural-failure' ||
+    kind === 'natural-success-player' ||
+    kind === 'natural-success-enemy'
+  ) return 'dice';
   if (kind === 'shield-impact' || kind === 'shield-break') return 'shield';
   return 'damage';
 };
@@ -497,6 +524,8 @@ export type BattleCommand =
       skillValues?: BossSkillValues;
       skillOverrides?: BossSkillOverrides;
       damageReduction: number;
+      attacks?: BossAttack[];
+      selectedAttackId?: string;
       controlAmount?: string;
       applyDamageReduction?: boolean;
     }
@@ -553,6 +582,8 @@ export const createInitialBoss = (id: string, index = 0): BossState => ({
   skillValues: createBossSkillValues(10),
   skillOverrides: [],
   damageReduction: 0,
+  attacks: [createInitialBossAttack(id)],
+  selectedAttackId: `boss-attack:${id}:1`,
   nextAction: '',
   actionSeverity: 'normal',
   turnCount: 0,
@@ -607,7 +638,10 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
         (command.controlAmount === undefined ||
           typeof command.controlAmount === 'string') &&
         (command.applyDamageReduction === undefined ||
-          typeof command.applyDamageReduction === 'boolean')
+          typeof command.applyDamageReduction === 'boolean') &&
+        (command.attacks === undefined || Array.isArray(command.attacks)) &&
+        (command.selectedAttackId === undefined ||
+          typeof command.selectedAttackId === 'string')
       );
     case 'damage':
     case 'heal':
@@ -736,6 +770,11 @@ export const applyBattleCommand = (
           clampInteger(command.skills, -999, 999),
           normalizedSkillValues,
         );
+        const attacks = normalizeBossAttacks(command.attacks ?? boss.attacks, boss.id);
+        const attack = selectedBossAttack(
+          attacks,
+          command.selectedAttackId ?? boss.selectedAttackId,
+        );
         return {
           ...boss,
           setupStatus: 'ready',
@@ -764,6 +803,8 @@ export const applyBattleCommand = (
           ),
           skillOverrides,
           damageReduction: clampInteger(command.damageReduction, 0, 999),
+          attacks,
+          selectedAttackId: attack?.id ?? attacks[0].id,
         };
       });
     case 'damage':

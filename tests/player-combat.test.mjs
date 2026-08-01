@@ -8,7 +8,9 @@ import {
   criticalDamageExpression,
   emptyEncounterTurnState,
   formatEncounterDiceRolls,
+  getEncounterRollNatural,
   isAreaDamageRequest,
+  isCriticalAttack,
   isDirectPlayerDamageRequest,
   isPlayerCombatActionRequest,
   linkEncounterRollCorrelation,
@@ -52,6 +54,15 @@ const playerState = (overrides = {}) => ({
   criticalImpactId: null,
   revision: 3,
   ...overrides,
+});
+
+test('identifica resultados naturais em fórmulas simples e vantagem extrema', () => {
+  assert.equal(getEncounterRollNatural('1d20 + 7', [1]), 1);
+  assert.equal(getEncounterRollNatural('1d20 + 7', [20]), 20);
+  assert.equal(getEncounterRollNatural('2d6 + 1d20 + 3', [4, 5, 20]), 20);
+  assert.equal(getEncounterRollNatural('2d20 + 4', [8, 12], 'sum-capped'), 20);
+  assert.equal(getEncounterRollNatural('2d20 + 4', [1, 1], 'sum-capped'), null);
+  assert.equal(getEncounterRollNatural('3d6 + 4', [1, 1, 1]), null);
 });
 
 test('valida ações de perícia, ataque e recursos especiais sem aceitar fórmulas perigosas', () => {
@@ -184,6 +195,9 @@ test('seleciona a defesa correspondente ao ataque e respeita resultados naturais
   assert.equal(resolveAttackCheck(4, 15, 10).success, false);
   assert.equal(resolveAttackCheck(-999, 999, 20).success, true);
   assert.equal(resolveAttackCheck(999, 0, 1).success, false);
+  assert.equal(isCriticalAttack(false, 19, 19), false);
+  assert.equal(isCriticalAttack(true, 19, 19), true);
+  assert.equal(isCriticalAttack(true, 20, 20), true);
 });
 
 test('normaliza até cinco Pontos de Ação e um Ponto Heróico preservando estados legados', () => {
@@ -368,6 +382,7 @@ test('limita PV ao máximo antes do impacto e preserva dano excedente negativo',
 
 test('aceita somente requisiÃ§Ãµes de dano em Ã¡rea dentro dos limites', () => {
   assert.equal(isAreaDamageRequest(areaDamage()), true);
+  assert.equal(isAreaDamageRequest({ ...areaDamage(), successRule: undefined }), true);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 5 }), true);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 0 }), false);
   assert.equal(isAreaDamageRequest({ ...areaDamage(), hits: 1_001 }), false);
@@ -440,6 +455,23 @@ test('aguarda cada participante rolar a própria iniciativa', () => {
     second.state.participants.map(({ id }) => id),
     ['player:a', 'boss:b'],
   );
+});
+
+test('permite ao participante tardio rolar somente para a rodada seguinte', () => {
+  const state = {
+    ...emptyEncounterTurnState(),
+    round: 3,
+    started: true,
+    activeParticipantId: 'player:a',
+    participants: [
+      { id: 'player:a', kind: 'player', sourceId: 'a', name: 'A', initiativeModifier: 4, initiativeRoll: 12, initiativeTotal: 16, initiativeRolled: true, eligibleRound: 1, isSelf: false },
+      { id: 'player:late', kind: 'player', sourceId: 'late', name: 'Tardio', initiativeModifier: 2, initiativeRoll: 0, initiativeTotal: 0, initiativeRolled: false, eligibleRound: 4, isSelf: false },
+    ],
+  };
+  const rolled = rollManualInitiative(state, 'player:late', () => 17);
+  assert.ok(rolled);
+  assert.equal(rolled.participant.initiativeTotal, 19);
+  assert.equal(rolled.state.participants.find(({ id }) => id === 'player:late').eligibleRound, 4);
 });
 
 test('formata cada termo de dados com os resultados correspondentes', () => {
@@ -589,6 +621,11 @@ test('expõe somente os dados brutos de rolagens privadas e de chefão', () => {
       { id: 'roll:a', participantId: 'player:a', label: 'Reflexos', expression: '1d20 + 4', rolls: [11], modifier: 4, total: 15, outcome: 'success', category: 'test', createdAt: 1, retainedByParticipantId: null },
       { id: 'roll:b', participantId: 'player:b', label: 'Fortitude', expression: '1d20 + 3', rolls: [12], modifier: 3, total: 15, outcome: 'success', category: 'test', createdAt: 2, retainedByParticipantId: null },
       { id: 'roll:boss', participantId: 'boss:1', label: 'Iniciativa', expression: '1d20 + 9', rolls: [15], modifier: 9, total: 24, outcome: 'neutral', category: 'initiative', createdAt: 3, retainedByParticipantId: null },
+      { id: 'damage:boss', participantId: 'boss:1', label: 'Dano crítico', expression: '2d8 + 4', rolls: [8, 7], modifier: 4, total: 19, outcome: 'success', category: 'damage', createdAt: 4, retainedByParticipantId: null, critical: true },
+    ],
+    history: [
+      { id: 'history:roll:b', kind: 'roll', round: 1, turnParticipantId: 'player:b', actorParticipantId: 'player:b', actorName: 'B', label: 'Fortitude', detail: '', createdAt: 2, expression: '1d20 + 3', rolls: [12], modifier: 3, total: 15, outcome: 'success', visibility: 'full' },
+      { id: 'history:damage:b', kind: 'damage', round: 1, turnParticipantId: 'boss:1', actorParticipantId: 'boss:1', actorName: 'Chefão', targetParticipantId: 'player:b', label: 'Dano', detail: 'B: −8 PV', createdAt: 4 },
     ],
   };
 
@@ -609,6 +646,11 @@ test('expõe somente os dados brutos de rolagens privadas e de chefão', () => {
   assert.equal(personalized.rollResults[2].expression, '1d20');
   assert.equal(personalized.rollResults[2].modifier, 0);
   assert.equal(personalized.rollResults[2].total, 0);
+  assert.equal(personalized.rollResults[3].visibility, 'dice-and-total');
+  assert.equal(personalized.rollResults[3].total, 19);
+  assert.equal(personalized.history[0].visibility, 'dice-only');
+  assert.equal(personalized.history[0].total, 0);
+  assert.equal(personalized.history[1].detail, 'B: −8 PV');
 
   const masterView = personalizeEncounterTurnState(
     state,
@@ -620,4 +662,6 @@ test('expõe somente os dados brutos de rolagens privadas e de chefão', () => {
   assert.equal(masterView.rollResults[1].total, 15);
   assert.equal(masterView.rollResults[2].visibility, 'full');
   assert.equal(masterView.rollResults[2].total, 24);
+  assert.equal(masterView.history[0].total, 15);
+  assert.equal(masterView.history[1].detail, 'B: −8 PV');
 });

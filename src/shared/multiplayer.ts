@@ -3,6 +3,7 @@ import type {
   EncounterSoundEffect,
   EncounterEffectsState,
   HealthEffect,
+  MusicDuckEvent,
   MusicTrack,
   SoundEffect,
   SoundboardStop,
@@ -22,7 +23,7 @@ import type {
   PlayerResourceNotice,
 } from './player-combat';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 8;
+export const MULTIPLAYER_PROTOCOL_VERSION = 11;
 export const MAX_MULTIPLAYER_PLAYERS = 10;
 
 export type ConnectionQuality =
@@ -236,6 +237,7 @@ export interface MultiplayerServerToClientEvents {
   'presentation:music': (music: PublicMusicPresentationState) => void;
   'presentation:music-seek': (time: number) => void;
   'presentation:music-fade-out': (duration: number) => void;
+  'presentation:music-duck': (event: MusicDuckEvent) => void;
   'presentation:soundboard': (soundboard: PublicSoundboardPresentationState) => void;
   'presentation:soundboard-stop': (stop: SoundboardStop) => void;
   'presentation:sound-effect': (effect: SoundEffect) => void;
@@ -256,6 +258,7 @@ export interface MultiplayerClientToServerEvents {
     acknowledge: (result: EncounterTurnActionResult) => void,
   ) => void;
   'encounter:roll-initiative': (
+    extremeAdvantage: boolean,
     acknowledge: (result: EncounterTurnActionResult) => void,
   ) => void;
   'encounter:combat-action': (

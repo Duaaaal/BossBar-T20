@@ -16,6 +16,7 @@ import type {
   HealthSequenceResult,
   MusicPlaybackState,
   MusicControlCommand,
+  MusicDuckEvent,
   MusicState,
   SoundboardAssignmentResult,
   SoundboardCommand,
@@ -50,6 +51,11 @@ import type {
   HostedSessionState,
   HostedSessionPublicUrlResult,
 } from './multiplayer';
+import type {
+  EncounterDebugOverrideRequest,
+  EncounterDebugResult,
+  EncounterDebugSnapshot,
+} from './encounter-debugger';
 import type {
   AreaDamageRequest,
   AreaDamageResult,
@@ -103,6 +109,7 @@ export type BossAPI = {
   ) => Promise<EncounterTurnActionResult>;
   rollEncounterInitiative: (
     participantId?: string | null,
+    extremeAdvantage?: boolean,
   ) => Promise<EncounterTurnActionResult>;
   rollEncounterFormula: (
     request: EncounterFormulaRollRequest,
@@ -178,6 +185,11 @@ export type BossAPI = {
     command: ScenePlaylistCommand,
   ) => void;
   openBossLibrary: () => Promise<boolean>;
+  openEncounterDebugger: () => Promise<boolean>;
+  getEncounterDebugSnapshot: () => Promise<EncounterDebugSnapshot>;
+  overwriteEncounterDebugCreature: (
+    request: EncounterDebugOverrideRequest,
+  ) => Promise<EncounterDebugResult>;
   hasEncounterLibraryEntries: () => Promise<boolean>;
   startNewEncounter: () => Promise<boolean>;
   startHostedEncounter: () => Promise<HostedEncounterStartResult>;
@@ -314,6 +326,9 @@ export type BossAPI = {
   subscribeMusicSeek: (callback: (time: number) => void) => () => void;
   subscribeMusicFadeOut: (
     callback: (duration: number) => void,
+  ) => () => void;
+  subscribeMusicDuck: (
+    callback: (event: MusicDuckEvent) => void,
   ) => () => void;
   subscribeSoundboard: (
     callback: (state: SoundboardState) => void,

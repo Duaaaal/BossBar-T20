@@ -32,9 +32,12 @@ import { parseFile } from 'music-metadata';
 import {
   applyBattleCommand,
   advanceBossTurn,
+  BOSS_CRITICAL_DUCK_FADE_MS,
+  BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+  BOSS_CRITICAL_MUSIC_RESTORE_MS,
   calculateHealthSequence,
   clampDamageToHealthFloor,
-  chooseEncounterSoundIndex,
+  chooseNonRepeatingIndex,
   createInitialBoss,
   getEncounterSoundEffectKind,
   initialEncounterEffectsState,
@@ -61,6 +64,7 @@ import {
   type HealthSequenceResult,
   type MusicPlaybackState,
   type MusicControlCommand,
+  type MusicDuckEvent,
   type MusicState,
   type SoundboardAssignmentResult,
   type SoundboardState,
@@ -96,7 +100,23 @@ import {
   resolveByteRange,
   resolveMediaOriginPolicy,
 } from './shared/media';
+import {
+  MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
+  MEDIA_CACHE_ITEM_LIMIT_BYTES,
+} from './shared/media-cache';
 import type { RendererRole } from './shared/preload';
+import {
+  historyEntriesForRolls,
+  historyEntryForVitalChange,
+} from './shared/encounter-history';
+import {
+  isEncounterDebugOverrideRequest,
+  normalizeDebugBoss,
+  normalizeDebugNpc,
+  type EncounterDebugCreature,
+  type EncounterDebugResult,
+  type EncounterDebugSnapshot,
+} from './shared/encounter-debugger';
 import type {
   HostedEncounterStartResult,
   HostedSessionStartupProgress,
@@ -110,9 +130,13 @@ import {
   emptyEncounterTurnState,
   isAreaDamageRequest,
   isDirectPlayerDamageRequest,
+  getEncounterRollNatural,
   linkEncounterRollCorrelation,
   normalizeEncounterFormulaRequest,
   prepareManualInitiative,
+  parseAttackTestFormula,
+  resolveExtremeAdvantage,
+  rollAttackTestExtraDice,
   rollInitiativeOrder,
   rollManualInitiative,
   type AreaDamageResult,
@@ -137,6 +161,10 @@ import {
   normalizeBossSkillValues,
   resolveBossSkillValues,
 } from './shared/boss-skills';
+import {
+  normalizeBossAttacks,
+  selectedBossAttack,
+} from './shared/boss-attacks';
 import {
   deriveStatusAttributes,
   reconcileStatusIncompatibilities,
@@ -245,6 +273,7 @@ let launcherWindow: BrowserWindow | null = null;
 let soundboardWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
+let encounterDebuggerWindow: BrowserWindow | null = null;
 let hostedSessionServer: MultiplayerSessionServer | null = null;
 let hostedSessionPresence: MultiplayerPresence | null = null;
 let playerHudState: PlayerHudState[] = [];
@@ -328,6 +357,7 @@ type PendingLocalCombatImpact = {
 const pendingLocalCombatImpacts: PendingLocalCombatImpact[] = [];
 type InternalEncounterSoundOption = Omit<EncounterSoundOption, 'previewUrl'> & {
   filePath: string;
+  durationMs: number;
 };
 const encounterSoundOptions: InternalEncounterSoundOption[] = [];
 const defaultEncounterSoundDefinitions: Array<{
@@ -384,13 +414,37 @@ const defaultEncounterSoundDefinitions: Array<{
       { fileName: 'dice_3.mp3', label: 'Rolagem de dados 3' },
     ],
   },
+  {
+    kind: 'natural-failure',
+    directory: 'Mecanica_Rolagem_Dados',
+    sounds: [
+      { fileName: 'fracasso_natural_1.mp3', label: 'Fracasso natural 1' },
+      { fileName: 'fracasso_natural_2.mp3', label: 'Fracasso natural 2' },
+    ],
+  },
+  {
+    kind: 'natural-success-player',
+    directory: 'Mecanica_Rolagem_Dados',
+    sounds: [
+      { fileName: 'sucesso_natural_jogador.mp3', label: 'Sucesso natural do jogador' },
+    ],
+  },
+  {
+    kind: 'natural-success-enemy',
+    directory: 'Mecanica_Rolagem_Dados',
+    sounds: [
+      { fileName: 'sucesso_natural_inimigo.mp3', label: 'Sucesso natural do inimigo' },
+    ],
+  },
 ];
 const defaultEncounterSoundEnabled = new Map<string, boolean>();
 const previousEncounterSoundIndex = new Map<EncounterSoundEffectKind, number>();
-const encounterSoundGroupLastPlayedAt = new Map<EncounterSoundEffectKind, number>();
 let musicTrackSequence = 0;
 let soundEffectSequence = 0;
 let encounterEffectSequence = 0;
+let musicDuckSequence = 0;
+let activeMusicDuckId: number | null = null;
+let musicDuckRestoreTimer: ReturnType<typeof setTimeout> | null = null;
 let encounterSoundCustomizationRevision = 0;
 let soundboardRevision = 0;
 let musicState: Omit<MusicState, 'tracks'> = {
@@ -418,6 +472,7 @@ let encounterEffectsAudioState = {
   general: { ...initialEncounterEffectsState.general },
   sounds: { ...initialEncounterEffectsState.sounds },
   visuals: { ...initialEncounterEffectsState.visuals },
+  mediaCache: { ...initialEncounterEffectsState.mediaCache },
   revision: initialEncounterEffectsState.revision,
 };
 type AppUndoSnapshot = {
@@ -799,6 +854,18 @@ const findEncounterSfxFile = async (relativePath: string) => {
   return findPersonalSfxFile(relativePath);
 };
 
+const encounterSoundDurationMs = async (filePath: string) => {
+  try {
+    const metadata = await parseFile(filePath, { duration: true });
+    const duration = metadata.format.duration ?? 0;
+    return Number.isFinite(duration) && duration > 0
+      ? Math.ceil(duration * 1_000)
+      : 0;
+  } catch {
+    return 0;
+  }
+};
+
 const loadEncounterMechanicSounds = async () => {
   let storedDefaultEnabled: Record<string, unknown> = {};
   let storedCustomSounds: unknown[] = [];
@@ -830,7 +897,15 @@ const loadEncounterMechanicSounds = async () => {
         defaultEncounterSoundEnabled.set(id, enabled);
         const filePath = await findEncounterSfxFile(path.join(directory, fileName));
         return filePath
-          ? { id, kind, name: label, isDefault: true, enabled, filePath }
+          ? {
+            id,
+            kind,
+            name: label,
+            isDefault: true,
+            enabled,
+            filePath,
+            durationMs: await encounterSoundDurationMs(filePath),
+          }
           : null;
       }),
     ),
@@ -859,6 +934,7 @@ const loadEncounterMechanicSounds = async () => {
       isDefault: false,
       enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
       filePath: value.filePath,
+      durationMs: await encounterSoundDurationMs(value.filePath),
     } satisfies InternalEncounterSoundOption;
   }));
 
@@ -873,7 +949,6 @@ const loadEncounterMechanicSounds = async () => {
     ),
   );
   previousEncounterSoundIndex.clear();
-  encounterSoundGroupLastPlayedAt.clear();
   encounterSoundCustomizationRevision += 1;
 };
 
@@ -929,9 +1004,31 @@ const getSoundboardState = (): SoundboardState => ({
   revision: soundboardRevision,
 });
 
+const getHostedMediaCacheUsage = () => {
+  let usedBytes = 0;
+  const visitedPaths = new Set<string>();
+  for (const resource of hostedMediaSources.values()) {
+    if (visitedPaths.has(resource.filePath)) continue;
+    visitedPaths.add(resource.filePath);
+    try {
+      const size = statSync(resource.filePath).size;
+      if (size > MEDIA_CACHE_ITEM_LIMIT_BYTES) continue;
+      usedBytes = Math.min(MEDIA_CACHE_GLOBAL_LIMIT_BYTES, usedBytes + size);
+    } catch {
+      // A removed user file simply stops contributing to the cache estimate.
+    }
+  }
+  return {
+    usedBytes,
+    itemLimitBytes: MEDIA_CACHE_ITEM_LIMIT_BYTES,
+    globalLimitBytes: MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
+  };
+};
+
 const getEncounterEffectsState = (): EncounterEffectsState => ({
   ...encounterEffectsAudioState,
   universalMuted: musicState.universalMuted,
+  mediaCache: getHostedMediaCacheUsage(),
 });
 
 const encounterSoundSourceUrl = (optionId: string) =>
@@ -1134,7 +1231,18 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
           beginBossStatusTurn(participant.sourceId);
         }
       },
-      onDiceRolled: () => publishDiceRollSound(),
+      onDiceRolled: (result) => publishDiceRollSound(result),
+      onBossCriticalThreat: ({ targetPlayerIds }) => {
+        sendBossCriticalThreat(targetPlayerIds);
+      },
+      onPlayerDamaged: ({ critical, targetPlayerIds }) => {
+        if (critical) {
+          sendBossCriticalImpact(targetPlayerIds);
+          return;
+        }
+        const prepared = prepareEncounterSound('damage');
+        if (prepared) sendEncounterEffect(prepared.encounterEffect);
+      },
       getBossDefense: (bossId, attackType) => {
         const boss = battleState.bosses.find(
           (candidate) => candidate.id === bossId,
@@ -1179,6 +1287,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
           {
             critical: context?.critical === true,
             minimumHealth: context?.nonlethal === true ? 1 : 0,
+            sourceParticipantId: context?.sourceParticipantId,
           },
         );
         const after = battleState.bosses.find(
@@ -1378,6 +1487,7 @@ const loadEncounterEffectsSettings = async () => {
           ? visuals.healthNumbers
           : initialEncounterEffectsState.visuals.healthNumbers,
       },
+      mediaCache: { ...initialEncounterEffectsState.mediaCache },
       revision: initialEncounterEffectsState.revision,
     };
     if (isFiniteStoredNumber(parsed.musicVolume)) {
@@ -1576,6 +1686,7 @@ const normalizeStoredLibraryBoss = (
     value.skills,
     skillValues,
   );
+  const attacks = normalizeBossAttacks(value.attacks, value.bossId ?? fallbackBossId);
 
   return {
     bossId: value.bossId?.trim() || fallbackBossId,
@@ -1594,6 +1705,8 @@ const normalizeStoredLibraryBoss = (
     skillValues: resolveBossSkillValues(value.skills, skillValues, skillOverrides),
     skillOverrides,
     damageReduction: value.damageReduction,
+    attacks,
+    selectedAttackId: selectedBossAttack(attacks, value.selectedAttackId)?.id ?? attacks[0].id,
     description: value.description,
     actionSeverity: value.actionSeverity,
     turnCount: includesStatusState
@@ -2029,6 +2142,7 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       skillBase,
       rawSkillValues,
     );
+    const attacks = normalizeBossAttacks(rawBoss.attacks, rawBoss.bossId);
     return [{
       bossId: rawBoss.bossId,
       bossName: rawBoss.bossName.trim().slice(0, 100) || 'O Chefão Sem Nome',
@@ -2044,6 +2158,9 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
       skillOverrides,
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
+      attacks,
+      selectedAttackId:
+        selectedBossAttack(attacks, rawBoss.selectedAttackId)?.id ?? attacks[0].id,
       description: rawBoss.description.trim().slice(0, 100),
       actionSeverity: rawBoss.actionSeverity,
       turnCount: clampInteger(rawBoss.turnCount as number, 0, 1_000_000),
@@ -2087,6 +2204,8 @@ const captureLibraryEntry = (
     skillValues: boss.skillValues,
     skillOverrides: boss.skillOverrides,
     damageReduction: boss.damageReduction,
+    attacks: boss.attacks,
+    selectedAttackId: boss.selectedAttackId,
     description: boss.description,
     actionSeverity: boss.actionSeverity,
     turnCount: boss.turnCount,
@@ -2117,6 +2236,8 @@ const captureLibraryEntry = (
         skillValues: boss.skillValues,
         skillOverrides: boss.skillOverrides,
         damageReduction: boss.damageReduction,
+        attacks: boss.attacks,
+        selectedAttackId: boss.selectedAttackId,
         description: boss.nextAction,
         actionSeverity: boss.actionSeverity,
         turnCount: boss.turnCount,
@@ -2442,6 +2563,73 @@ const sendMusicFadeOut = (duration: number) => {
   hostedSessionServer?.publishMusicFadeOut(duration);
 };
 
+const publishMusicDuck = (event: MusicDuckEvent) => {
+  if (playerWindow && !playerWindow.isDestroyed()) {
+    playerWindow.webContents.send('music:duck', event);
+  }
+  const server = hostedSessionServer;
+  if (!server) return;
+  const hostedSoundUrl = event.soundEffect
+    ? rewriteHostedMediaUrl(event.soundEffect.url, (id) => server.mediaUrl(id))
+    : '';
+  server.publishMusicDuck({
+    ...event,
+    soundEffect: event.soundEffect && hostedSoundUrl
+      ? { ...event.soundEffect, url: hostedSoundUrl }
+      : null,
+  });
+};
+
+const sendBossCriticalThreat = (targetPlayerIds: string[]) => {
+  if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
+  musicDuckRestoreTimer = null;
+  const preparedThreatSound = prepareEncounterSound('natural-success-enemy');
+  const event: MusicDuckEvent = {
+    id: ++musicDuckSequence,
+    phase: 'duck',
+    duration: BOSS_CRITICAL_DUCK_FADE_MS,
+    targetVolume: 0.2,
+    soundEffect: preparedThreatSound?.encounterEffect ?? null,
+    targetPlayerIds,
+  };
+  activeMusicDuckId = event.id;
+  publishMusicDuck(event);
+};
+
+const sendBossCriticalImpact = (targetPlayerIds: string[]) => {
+  const preparedCriticalSound = prepareEncounterSound('critical-damage');
+  const event: MusicDuckEvent = {
+    id: activeMusicDuckId ?? ++musicDuckSequence,
+    phase: 'impact',
+    duration: Math.max(
+      BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+      (preparedCriticalSound?.durationMs ?? 0) + 100,
+    ),
+    soundEffect: preparedCriticalSound?.encounterEffect ?? null,
+    targetPlayerIds,
+  };
+  activeMusicDuckId = event.id;
+  publishMusicDuck(event);
+  if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
+  musicDuckRestoreTimer = setTimeout(() => {
+    musicDuckRestoreTimer = null;
+    restoreMusicDuck();
+  }, event.duration);
+};
+
+const restoreMusicDuck = () => {
+  if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
+  musicDuckRestoreTimer = null;
+  if (activeMusicDuckId === null) return;
+  const event: MusicDuckEvent = {
+    id: activeMusicDuckId,
+    phase: 'restore',
+    duration: BOSS_CRITICAL_MUSIC_RESTORE_MS,
+  };
+  activeMusicDuckId = null;
+  publishMusicDuck(event);
+};
+
 const sendSoundboardStop = (stop: SoundboardStop) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('soundboard:stop', stop);
@@ -2484,18 +2672,14 @@ const prepareEncounterSound = (soundKind: EncounterSoundEffectKind | null) => {
   const availableSounds = encounterSoundOptions.filter(
     (option) => option.kind === soundKind && option.enabled,
   );
-  const playbackTime = Date.now();
-  const soundIndex = chooseEncounterSoundIndex(
+  const soundIndex = chooseNonRepeatingIndex(
     availableSounds.length,
     previousEncounterSoundIndex.get(soundKind) ?? null,
-    encounterSoundGroupLastPlayedAt.get(soundKind) ?? null,
-    playbackTime,
     randomInt,
   );
   const selectedSound = availableSounds[soundIndex] ?? null;
   if (!selectedSound) return null;
   previousEncounterSoundIndex.set(soundKind, soundIndex);
-  encounterSoundGroupLastPlayedAt.set(soundKind, playbackTime);
 
   encounterEffectSequence += 1;
   encounterEffectSources.set(encounterEffectSequence, selectedSound.filePath);
@@ -2504,14 +2688,39 @@ const prepareEncounterSound = (soundKind: EncounterSoundEffectKind | null) => {
     kind: soundKind,
     url: `boss-media://encounter-sfx/${encounterEffectSequence}`,
   };
-  return { encounterEffect, optionId: selectedSound.id };
+  return {
+    encounterEffect,
+    optionId: selectedSound.id,
+    durationMs: selectedSound.durationMs,
+  };
 };
 
 const prepareEncounterMechanicSound = (effect: HealthEffect) =>
   prepareEncounterSound(getEncounterSoundEffectKind(effect));
 
-const publishDiceRollSound = () => {
-  const prepared = prepareEncounterSound('dice-roll');
+const publishDiceRollSound = (result?: EncounterRollResult) => {
+  // Attack damage is revealed with the impact SFX. A second dice sound here
+  // would mask the weapon hit; status checks continue to use their own rolls.
+  if (result?.category === 'damage') return;
+  // Boss critical attacks use the dedicated threat cue so the enemy-success
+  // SFX starts atomically with the three-second presentation on every client.
+  if (
+    result?.category === 'attack' &&
+    result.critical === true &&
+    result.participantId.startsWith('boss:')
+  ) return;
+  // Initiative has no automatic success/failure, even when its d20 is 1 or 20.
+  const natural = result?.category === 'initiative' ? null : result?.natural ?? (result
+    ? getEncounterRollNatural(result.expression, result.rolls, result.rollMode)
+    : null);
+  const soundKind: EncounterSoundEffectKind = natural === 1
+    ? 'natural-failure'
+    : natural === 20
+      ? result?.participantId.startsWith('boss:')
+        ? 'natural-success-enemy'
+        : 'natural-success-player'
+      : 'dice-roll';
+  const prepared = prepareEncounterSound(soundKind);
   if (!prepared) return;
   sendEncounterEffect(prepared.encounterEffect);
 };
@@ -2568,6 +2777,120 @@ const createSoundboardWindow = () => {
   loadRenderer(window, 'soundboard');
   window.on('closed', () => {
     if (soundboardWindow === window) soundboardWindow = null;
+  });
+  return window;
+};
+
+const getEncounterDebugSnapshot = (): EncounterDebugSnapshot => {
+  const creatures: EncounterDebugCreature[] = battleState.bosses.map((boss) => ({
+    id: boss.id,
+    kind: 'boss',
+    name: boss.bossName,
+    data: structuredClone(boss),
+  }));
+  if (hostedSessionServer) {
+    creatures.push(...hostedSessionServer.getEncounterDebugCreatures());
+  } else {
+    creatures.push(...encounterTurnState.participants
+      .filter(({ kind }) => kind === 'npc')
+      .map((participant) => ({
+        id: participant.id,
+        kind: 'npc' as const,
+        name: participant.name,
+        data: structuredClone(participant),
+      })));
+  }
+  return {
+    creatures,
+    revision: battleState.revision + encounterTurnState.revision,
+  };
+};
+
+const overwriteEncounterDebugCreature = (
+  request: unknown,
+): EncounterDebugResult => {
+  if (!isEncounterDebugOverrideRequest(request)) {
+    return { ok: false, error: 'A solicitação de sobrescrita é inválida.' };
+  }
+  if (request.kind === 'boss') {
+    const index = battleState.bosses.findIndex(({ id }) => id === request.id);
+    const current = battleState.bosses[index];
+    if (!current) return { ok: false, error: 'O chefão não está mais no encontro.' };
+    const next = normalizeDebugBoss(request.data, current);
+    if (!next) return { ok: false, error: 'Os valores do chefão são inválidos.' };
+    rememberAppChange();
+    const bosses = [...battleState.bosses];
+    bosses[index] = next;
+    battleState = {
+      ...battleState,
+      bosses,
+      revision: battleState.revision + 1,
+    };
+    syncLocalEncounterTurns();
+    broadcastBattleState();
+    return { ok: true, snapshot: getEncounterDebugSnapshot() };
+  }
+  if (hostedSessionServer) {
+    const result = hostedSessionServer.overwriteEncounterDebugCreature(request);
+    return result.ok
+      ? { ok: true, snapshot: getEncounterDebugSnapshot() }
+      : result;
+  }
+  if (request.kind === 'npc') {
+    const index = encounterTurnState.participants.findIndex(
+      ({ id, kind }) => id === request.id && kind === 'npc',
+    );
+    const current = encounterTurnState.participants[index];
+    if (!current) return { ok: false, error: 'O NPC não está mais no encontro.' };
+    const next = normalizeDebugNpc(request.data, current);
+    if (!next) return { ok: false, error: 'Os valores do NPC são inválidos.' };
+    const participants = [...encounterTurnState.participants];
+    participants[index] = next;
+    encounterTurnState = {
+      ...encounterTurnState,
+      participants,
+      revision: encounterTurnState.revision + 1,
+    };
+    broadcastEncounterTurnState();
+    return { ok: true, snapshot: getEncounterDebugSnapshot() };
+  }
+  return { ok: false, error: 'Jogadores só existem em uma sessão hospedada.' };
+};
+
+const createEncounterDebuggerWindow = () => {
+  if (encounterDebuggerWindow && !encounterDebuggerWindow.isDestroyed()) {
+    if (encounterDebuggerWindow.isMinimized()) encounterDebuggerWindow.restore();
+    encounterDebuggerWindow.show();
+    encounterDebuggerWindow.focus();
+    return encounterDebuggerWindow;
+  }
+  const { workArea } = screen.getDisplayMatching(
+    masterWindow?.getBounds() ?? screen.getPrimaryDisplay().bounds,
+  );
+  const width = Math.min(960, workArea.width);
+  const height = Math.min(720, workArea.height);
+  const window = new BrowserWindow({
+    icon: applicationIcon(),
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    minWidth: Math.min(760, width),
+    minHeight: Math.min(520, height),
+    title: 'Depurador do Encontro - BossBar T20',
+    backgroundColor: '#0c0a0e',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: preloadFile('encounter-debugger'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  encounterDebuggerWindow = window;
+  loadRenderer(window, 'encounter-debugger');
+  window.on('closed', () => {
+    if (encounterDebuggerWindow === window) encounterDebuggerWindow = null;
   });
   return window;
 };
@@ -3405,6 +3728,7 @@ const createEncounterWindows = () => {
     if (masterFocusTimer) clearTimeout(masterFocusTimer);
     masterFocusTimer = null;
     masterWindow = null;
+    encounterDebuggerWindow?.close();
     libraryWindow?.close();
     soundboardWindow?.close();
     allowSceneEditorClose = true;
@@ -3473,6 +3797,10 @@ const localInitiativeResult = (
   category: 'initiative',
   createdAt: Date.now(),
   retainedByParticipantId: null,
+  natural:
+    participant.initiativeRoll === 1 || participant.initiativeRoll === 20
+      ? participant.initiativeRoll
+      : null,
   sequence: ++localEncounterRollSequence,
 });
 
@@ -3580,6 +3908,7 @@ const syncLocalEncounterTurns = () => {
 const rollLocalEncounterInitiative = (
   participantId: string,
   allowedKinds: ReadonlySet<'boss' | 'npc'>,
+  extremeAdvantage = false,
 ): EncounterTurnActionResult => {
   const participant = encounterTurnState.participants.find(
     ({ id }) => id === participantId,
@@ -3587,14 +3916,32 @@ const rollLocalEncounterInitiative = (
   if (!participant || !allowedKinds.has(participant.kind as 'boss' | 'npc')) {
     return { ok: false, error: 'Este participante não pode ser rolado por aqui.' };
   }
+  let initiativeDice: number[] = [];
   const rolled = rollManualInitiative(
     encounterTurnState,
     participantId,
-    () => randomInt(1, 21),
+    () => {
+      initiativeDice = extremeAdvantage
+        ? [randomInt(1, 21), randomInt(1, 21)]
+        : [randomInt(1, 21)];
+      return extremeAdvantage
+        ? resolveExtremeAdvantage(initiativeDice[0], initiativeDice[1]).chosenDie
+        : initiativeDice[0];
+    },
   );
   if (!rolled) {
     return { ok: false, error: 'Esta iniciativa já foi rolada ou não está disponível.' };
   }
+  const baseInitiativeResult = localInitiativeResult(rolled.participant);
+  const initiativeResult: EncounterRollResult = extremeAdvantage
+    ? {
+      ...baseInitiativeResult,
+      expression: `2d20 ${rolled.participant.initiativeModifier >= 0 ? '+' : '-'} ${Math.abs(rolled.participant.initiativeModifier)}`,
+      rolls: initiativeDice,
+      rollMode: 'sum-capped',
+      natural: rolled.participant.initiativeRoll === 20 ? 20 : null,
+    }
+    : baseInitiativeResult;
   encounterTurnState = {
     ...rolled.state,
     rollResults: [
@@ -3603,10 +3950,19 @@ const rollLocalEncounterInitiative = (
           candidate.category !== 'initiative' ||
           candidate.participantId !== participantId,
       ),
-      localInitiativeResult(rolled.participant),
+      initiativeResult,
+    ],
+    history: [
+      ...(rolled.state.history ?? []),
+      ...historyEntriesForRolls(
+        [initiativeResult],
+        rolled.state.round,
+        rolled.state.activeParticipantId,
+        rolled.state.participants,
+      ),
     ],
   };
-  publishDiceRollSound();
+  publishDiceRollSound(initiativeResult);
   broadcastEncounterTurnState();
   return {
     ok: true,
@@ -4525,6 +4881,12 @@ const queueCrossedScenePhases = (
 const isMasterSender = (senderId: number) =>
   Boolean(masterWindow && senderId === masterWindow.webContents.id);
 
+const isEncounterDebuggerSender = (senderId: number) =>
+  Boolean(
+    encounterDebuggerWindow &&
+    senderId === encounterDebuggerWindow.webContents.id,
+  );
+
 const isControlSender = (senderId: number) =>
   Boolean(controlWindow && senderId === controlWindow.webContents.id);
 
@@ -4643,16 +5005,22 @@ ipcMain.handle(
   (
     event,
     participantId: unknown,
+    extremeAdvantage: unknown,
   ): EncounterTurnActionResult => {
     if (typeof participantId !== 'string' || participantId.length > 160) {
       return { ok: false, error: 'Participante inválido.' };
     }
+    if (extremeAdvantage !== undefined && typeof extremeAdvantage !== 'boolean') {
+      return { ok: false, error: 'Configuração de vantagem inválida.' };
+    }
+    const useExtremeAdvantage = extremeAdvantage === true;
     if (isControlSender(event.sender.id)) {
       return hostedSessionServer
-        ? hostedSessionServer.rollInitiativeAsHost(participantId)
+        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage)
         : rollLocalEncounterInitiative(
           participantId,
           new Set(['boss', 'npc']),
+          useExtremeAdvantage,
         );
     }
     if (isPlayerSender(event.sender.id)) {
@@ -4683,15 +5051,34 @@ ipcMain.handle(
     }
     const parsed = parseDamageFormula(request.formula);
     if (!parsed) return { ok: false, error: 'A fórmula de dados é inválida.' };
-    const rolled = rollDamageFormulaDetailed(
-      parsed,
-      (minimum, maximumExclusive) => randomInt(minimum, maximumExclusive),
-    );
+    const extreme = request.rollMode === 'sum-capped';
+    const rolled = extreme
+      ? (() => {
+        const first = randomInt(1, 21);
+        const second = randomInt(1, 21);
+        const effective = resolveExtremeAdvantage(first, second).chosenDie;
+        const extras = rollAttackTestExtraDice(
+          parseAttackTestFormula(request.formula),
+          (minimum, maximumExclusive) => randomInt(minimum, maximumExclusive),
+        );
+        return {
+          total: effective + extras.total,
+          rolls: [first, second, ...extras.rolls],
+          modifier: extras.total,
+        };
+      })()
+      : rollDamageFormulaDetailed(
+        parsed,
+        (minimum, maximumExclusive) => randomInt(minimum, maximumExclusive),
+      );
+    const expression = extreme
+      ? request.formula.replace(/\b1d20\b/i, '2d20')
+      : request.formula;
     const result: EncounterRollResult = {
       id: `formula:${participant.id}:${randomUUID()}`,
       participantId: participant.id,
       label: request.label,
-      expression: request.formula,
+      expression,
       rolls: rolled.rolls,
       modifier: rolled.modifier,
       total: rolled.total,
@@ -4699,6 +5086,8 @@ ipcMain.handle(
       category: request.category,
       createdAt: Date.now(),
       retainedByParticipantId: encounterTurnState.activeParticipantId,
+      rollMode: request.rollMode ?? 'sum',
+      natural: getEncounterRollNatural(expression, rolled.rolls, request.rollMode),
       ...(request.correlationId === undefined
         ? {}
         : { correlationId: request.correlationId }),
@@ -4720,11 +5109,20 @@ ipcMain.handle(
           ...previousResults,
           orderedResult,
         ],
+        history: [
+          ...(encounterTurnState.history ?? []),
+          ...historyEntriesForRolls(
+            [orderedResult],
+            encounterTurnState.round,
+            encounterTurnState.activeParticipantId,
+            encounterTurnState.participants,
+          ),
+        ],
         revision: encounterTurnState.revision + 1,
       };
       broadcastEncounterTurnState();
     }
-    publishDiceRollSound();
+    if (!hostedSessionServer) publishDiceRollSound(result);
     return { ok: true, total: rolled.total };
   },
 );
@@ -4789,6 +5187,27 @@ ipcMain.on('app:confirm-close', (event) => {
     }
   });
 });
+
+ipcMain.handle('encounter-debugger:open-window', (event) => {
+  if (!isMasterSender(event.sender.id)) return false;
+  createEncounterDebuggerWindow();
+  return true;
+});
+
+ipcMain.handle('encounter-debugger:get-snapshot', (event) => {
+  assertAuthorizedIpcSender(isEncounterDebuggerSender(event.sender.id));
+  return getEncounterDebugSnapshot();
+});
+
+ipcMain.handle(
+  'encounter-debugger:overwrite-creature',
+  (event, request: unknown): EncounterDebugResult => {
+    if (!isEncounterDebuggerSender(event.sender.id)) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    return overwriteEncounterDebugCreature(request);
+  },
+);
 
 ipcMain.handle('app:return-to-launcher', async (event) => {
   if (!isMasterSender(event.sender.id) || !masterWindow) return false;
@@ -5969,6 +6388,7 @@ const restoreLibraryEntry = (
       skillBase,
       rawSkillValues,
     );
+    const attacks = normalizeBossAttacks(storedBoss.attacks, storedBoss.bossId);
     return {
       id: storedBoss.bossId,
       setupStatus: 'ready' as const,
@@ -5988,6 +6408,9 @@ const restoreLibraryEntry = (
       skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
       skillOverrides,
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
+      attacks,
+      selectedAttackId:
+        selectedBossAttack(attacks, storedBoss.selectedAttackId)?.id ?? attacks[0].id,
       nextAction: storedBoss.description.trim().slice(0, 100),
       actionSeverity: storedBoss.actionSeverity,
       turnCount: clampInteger(storedBoss.turnCount, 0, 1_000_000),
@@ -6129,6 +6552,11 @@ const restoreLibraryEntry = (
           };
         })(),
         damageReduction: clampInteger(template.damageReduction, 0, 999),
+        attacks: normalizeBossAttacks(template.attacks, template.bossId),
+        selectedAttackId: (() => {
+          const attacks = normalizeBossAttacks(template.attacks, template.bossId);
+          return selectedBossAttack(attacks, template.selectedAttackId)?.id ?? attacks[0].id;
+        })(),
         nextAction: template.description,
         actionSeverity: template.actionSeverity,
         turnCount: clampInteger(template.turnCount, 0, 1_000_000),
@@ -6539,6 +6967,7 @@ ipcMain.handle(
     if (path.extname(sourcePath).toLowerCase() !== '.mp3') {
       return { ok: false, error: 'Selecione um arquivo MP3 válido.' };
     }
+    let customSoundDurationMs = 0;
     try {
       const fileInfo = await stat(sourcePath);
       if (!fileInfo.isFile() || fileInfo.size > MAX_USER_MEDIA_BYTES) {
@@ -6552,6 +6981,9 @@ ipcMain.handle(
         !codec.includes('layer 3') &&
         !codec.includes('mp3')
       ) throw new Error('invalid-codec');
+      customSoundDurationMs = Number.isFinite(metadata.format.duration)
+        ? Math.ceil((metadata.format.duration ?? 0) * 1_000)
+        : 0;
     } catch {
       return {
         ok: false,
@@ -6573,6 +7005,7 @@ ipcMain.handle(
       isDefault: false,
       enabled: true,
       filePath: destinationPath,
+      durationMs: customSoundDurationMs,
     };
     try {
       await mkdir(destinationDirectory, { recursive: true });
@@ -6580,7 +7013,6 @@ ipcMain.handle(
       encounterSoundOptions.push(option);
       encounterSoundCustomizationRevision += 1;
       previousEncounterSoundIndex.delete(kind);
-      encounterSoundGroupLastPlayedAt.delete(kind);
       await persistEncounterSoundCustomization();
       broadcastHostedEncounterSoundLibrary();
       return { ok: true, state: getEncounterSoundCustomizationState() };
@@ -6617,7 +7049,6 @@ ipcMain.handle(
     if (option.isDefault) defaultEncounterSoundEnabled.set(option.id, enabled);
     encounterSoundCustomizationRevision += 1;
     previousEncounterSoundIndex.delete(option.kind);
-    encounterSoundGroupLastPlayedAt.delete(option.kind);
     try {
       await persistEncounterSoundCustomization();
       broadcastHostedEncounterSoundLibrary();
@@ -6652,7 +7083,6 @@ ipcMain.handle(
     encounterSoundOptions.splice(optionIndex, 1);
     encounterSoundCustomizationRevision += 1;
     previousEncounterSoundIndex.delete(option.kind);
-    encounterSoundGroupLastPlayedAt.delete(option.kind);
     try {
       await persistEncounterSoundCustomization();
     } catch (error) {
@@ -7244,6 +7674,8 @@ const applyHealthMutation = (
   options: {
     critical?: boolean;
     minimumHealth?: number;
+    sourceParticipantId?: string;
+    sourceName?: string;
   } = {},
 ) => {
   const previousBoss = battleState.bosses.find((boss) => boss.id === bossId);
@@ -7280,6 +7712,34 @@ const applyHealthMutation = (
   }
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!nextBoss) return;
+  const changedHealth = Math.abs(
+    nextBoss.currentHealth - previousBoss.currentHealth,
+  );
+  if (changedHealth > 0) {
+    const historyEntry = historyEntryForVitalChange({
+      id: `history:boss-health:${bossId}:${healthEffectSequence + 1}:${randomUUID()}`,
+      kind: type === 'damage' ? 'damage' : 'heal',
+      round: encounterTurnState.round,
+      activeParticipantId: encounterTurnState.activeParticipantId,
+      actorParticipantId: options.sourceParticipantId ?? null,
+      actorName: options.sourceName ?? encounterTurnState.participants.find(
+        ({ id }) => id === options.sourceParticipantId,
+      )?.name ?? 'Mestre',
+      targetParticipantId: `boss:${bossId}`,
+      targetName: nextBoss.bossName,
+      amount: changedHealth,
+    });
+    if (hostedSessionServer) {
+      hostedSessionServer.publishHistoryEntry(historyEntry);
+    } else {
+      encounterTurnState = {
+        ...encounterTurnState,
+        history: [...(encounterTurnState.history ?? []), historyEntry],
+        revision: encounterTurnState.revision + 1,
+      };
+      broadcastEncounterTurnState();
+    }
+  }
   broadcastBattleState(false, false);
 
   if (
@@ -7540,6 +8000,15 @@ const beginBossStatusTurn = (bossId: string) => {
           encounterTurnState = {
             ...encounterTurnState,
             rollResults: [...(encounterTurnState.rollResults ?? []), rollResult],
+            history: [
+              ...(encounterTurnState.history ?? []),
+              ...historyEntriesForRolls(
+                [rollResult],
+                encounterTurnState.round,
+                encounterTurnState.activeParticipantId,
+                encounterTurnState.participants,
+              ),
+            ],
             revision: encounterTurnState.revision + 1,
           };
           broadcastEncounterTurnState();
@@ -7570,6 +8039,28 @@ const beginBossStatusTurn = (bossId: string) => {
           formula: tick.formula,
         },
       };
+      const statusHistory = historyEntryForVitalChange({
+        id: `history:boss-status:${bossId}:${tick.statusId}:${randomUUID()}`,
+        kind: 'damage',
+        round: encounterTurnState.round,
+        activeParticipantId: encounterTurnState.activeParticipantId,
+        actorParticipantId: `boss:${bossId}`,
+        actorName: previousBoss.bossName,
+        targetParticipantId: `boss:${bossId}`,
+        targetName: previousBoss.bossName,
+        amount: visibleFrom - visibleTo,
+        detail: tick.statusName,
+      });
+      if (hostedSessionServer) {
+        hostedSessionServer.publishHistoryEntry(statusHistory);
+      } else {
+        encounterTurnState = {
+          ...encounterTurnState,
+          history: [...(encounterTurnState.history ?? []), statusHistory],
+          revision: encounterTurnState.revision + 1,
+        };
+        broadcastEncounterTurnState();
+      }
       const preparedDiceSound = rolledDice
         ? prepareEncounterSound('dice-roll')
         : null;

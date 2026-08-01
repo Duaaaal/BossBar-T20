@@ -36,6 +36,7 @@ export default defineConfig({
         library: path.resolve(projectRoot, 'library.html'),
         sceneEditor: path.resolve(projectRoot, 'scene-editor.html'),
         soundboard: path.resolve(projectRoot, 'soundboard.html'),
+        encounterDebugger: path.resolve(projectRoot, 'encounter-debugger.html'),
         webPlayer: path.resolve(projectRoot, 'web-player.html'),
       },
     },

@@ -1,0 +1,31 @@
+:root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #0c0a0e; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 760px; min-height: 520px; color: #eadfcf; background: radial-gradient(circle at 70% 0, #281318 0, #0c0a0e 48%); }
+button, textarea { font: inherit; }
+button { border: 1px solid #8e5b43; border-radius: 7px; background: transparent; color: #f1d8bc; cursor: pointer; }
+button:hover:not(:disabled) { border-color: #dc895a; filter: brightness(1.16); }
+button:disabled { cursor: not-allowed; filter: grayscale(1); opacity: .38; }
+.debugger-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; height: 100vh; padding: 18px; }
+.debugger-shell > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.debugger-shell > header p { margin: 0 0 2px; color: #ba775c; font-size: 11px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+.debugger-shell h1, .debugger-shell h2 { margin: 0; font-family: Cinzel, Georgia, serif; }
+.debugger-shell h1 { color: #ffe5bd; font-size: 25px; }
+.debugger-shell > header button { padding: 8px 16px; }
+.debugger-warning { margin: 0; border-left: 3px solid #b36042; padding: 7px 10px; background: rgb(84 31 25 / 24%); color: #c9b6a2; font-size: 12px; }
+.debugger-workspace { display: grid; grid-template-columns: minmax(180px, 23%) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.debugger-workspace nav, .debugger-workspace article { min-height: 0; border: 1px solid rgb(173 112 75 / 38%); border-radius: 9px; background: rgb(10 8 10 / 82%); box-shadow: 0 14px 34px rgb(0 0 0 / 30%); }
+.debugger-workspace nav { display: flex; flex-direction: column; gap: 6px; overflow: auto; padding: 8px; }
+.debugger-workspace nav > button { display: grid; gap: 2px; padding: 9px; text-align: left; }
+.debugger-workspace nav > button.is-selected { border-color: #e18d52; background: linear-gradient(100deg, rgb(116 43 30 / 58%), rgb(52 24 28 / 52%)); }
+.debugger-workspace nav small, .debugger-editor-heading small { color: #a98c79; font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.debugger-workspace nav strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debugger-workspace article { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 12px; }
+.debugger-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.debugger-editor-heading h2 { margin-top: 2px; color: #eed6b9; font-size: 18px; }
+.debugger-reset-button { padding: 6px 10px; font-size: 11px; }
+.debugger-workspace textarea { width: 100%; min-height: 0; resize: none; border: 1px solid rgb(155 106 82 / 48%); border-radius: 7px; padding: 12px; outline: none; background: #08070a; color: #d9efdc; font: 12px/1.45 Consolas, "Cascadia Mono", monospace; tab-size: 2; }
+.debugger-workspace textarea:focus { border-color: #c7784e; box-shadow: 0 0 0 2px rgb(199 120 78 / 14%); }
+.debugger-workspace footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+.debugger-workspace footer span { color: #e18073; font-size: 11px; }
+.debugger-workspace footer span.is-success { color: #7edda0; }
+.debugger-workspace footer button { padding: 8px 14px; border-color: #b86743; background: linear-gradient(#8b3d29, #62241d); color: #fff0dc; font-weight: 800; }

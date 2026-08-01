@@ -7,7 +7,8 @@ export type RendererRole =
   | 'control'
   | 'soundboard'
   | 'library'
-  | 'scene-editor';
+  | 'scene-editor'
+  | 'encounter-debugger';
 
 export const bossApiMethodsByRole = {
   launcher: [
@@ -34,6 +35,7 @@ export const bossApiMethodsByRole = {
     'getState',
     'isPresentationOpen',
     'openBossLibrary',
+    'openEncounterDebugger',
     'openHostedSessionAsPlayer',
     'openPresentation',
     'openSceneEditor',
@@ -108,6 +110,7 @@ export const bossApiMethodsByRole = {
     'subscribePlayerResourceNotice',
     'subscribeEncounterTurn',
     'subscribeMusic',
+    'subscribeMusicDuck',
     'subscribeMusicFadeOut',
     'subscribeMusicSeek',
     'subscribeScenePlan',
@@ -185,5 +188,9 @@ export const bossApiMethodsByRole = {
     'subscribeActivePhasePlaylistRequested',
     'subscribeScenePlan',
     'undoLastChange',
+  ],
+  'encounter-debugger': [
+    'getEncounterDebugSnapshot',
+    'overwriteEncounterDebugCreature',
   ],
 } as const satisfies Record<RendererRole, readonly (keyof BossAPI)[]>;
