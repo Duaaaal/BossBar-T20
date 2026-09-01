@@ -1,4 +1,8 @@
-import type { CharacterSheetSummary } from './character-sheet';
+import type {
+  CharacterSheetInteractionState,
+  CharacterSheetSummary,
+} from './character-sheet';
+import type { EncounterSoundEffectKind } from './battle';
 import { resolveD20Check } from './d20-rules.ts';
 import {
   historyEntriesForTurn,
@@ -22,6 +26,7 @@ export type PlayerEncounterState = {
   characterName: string;
   currentHealth: number;
   maxHealth: number;
+  temporaryHealth: number;
   currentMana: number;
   maxMana: number;
   defenseMelee: number;
@@ -45,6 +50,8 @@ export type PlayerEncounterState = {
   stabilized: boolean;
   /** Death is permanent for the encounter unless a future resurrection rule says otherwise. */
   dead: boolean;
+  /** Server-authoritative lock while the sheet is being edited or reviewed. */
+  sheetInteractionState?: CharacterSheetInteractionState;
   revision: number;
 };
 
@@ -64,6 +71,7 @@ export type PlayerHudState = {
   redacted: boolean;
   currentHealth: number | null;
   maxHealth: number | null;
+  temporaryHealth: number | null;
   currentMana: number | null;
   maxMana: number | null;
   defenseMelee: number | null;
@@ -85,7 +93,20 @@ export type PlayerHudState = {
   deathThreshold: number | null;
   summary: CharacterSheetSummary | null;
   actions: PlayerHudActionState;
+  pendingDamage: PendingCombatDamage | null;
+  /** Only exposed for the player's own HUD. */
+  sheetInteractionState?: CharacterSheetInteractionState;
   revision: number;
+};
+
+export type PendingCombatDamage = {
+  id: string;
+  attackerKind: 'player' | 'boss';
+  attackerParticipantId: string;
+  label: string;
+  targetName: string;
+  critical: boolean;
+  createdAt: number;
 };
 
 export type EncounterActorKind = 'player' | 'boss' | 'npc';
@@ -134,6 +155,9 @@ export type EncounterRollResult = {
   actionId?: string;
   /** Links opposed or otherwise related actions without exposing hidden values. */
   correlationId?: string;
+  /** Optional public target identity for presentation and encounter history. */
+  targetParticipantId?: string;
+  targetName?: string;
   critical?: boolean;
   criticalMultiplier?: number;
   /** Natural result of the effective d20 used by this test, when applicable. */
@@ -170,6 +194,26 @@ export const getEncounterRollNatural = (
   if (d20Rolls.some((die) => die === 20)) return 20;
   if (d20Rolls.length === 1 && d20Rolls[0] === 1) return 1;
   return null;
+};
+
+export const encounterRollSoundKind = (
+  result?: EncounterRollResult,
+): EncounterSoundEffectKind | null => {
+  if (result?.category === 'damage') return null;
+  if (
+    result?.category === 'attack' &&
+    result.critical === true &&
+    result.participantId.startsWith('boss:')
+  ) return null;
+  const natural = result?.category === 'initiative'
+    ? null
+    : result?.natural ?? (result
+      ? getEncounterRollNatural(result.expression, result.rolls, result.rollMode)
+      : null);
+  if (natural === 1) return 'natural-failure';
+  if (natural !== 20) return 'dice-roll';
+  if (!result?.participantId.startsWith('boss:')) return 'natural-success-player';
+  return result.category === 'attack' ? 'natural-success-enemy' : 'dice-roll';
 };
 
 export type EncounterTurnState = {
@@ -314,11 +358,16 @@ export type PlayerCombatActionRequest =
   | PlayerSkillTestRequest
   | PlayerStabilizeRequest
   | PlayerAttackRequest
+  | {
+    kind: 'damage';
+    pendingDamageId: string;
+  }
   | PlayerStandaloneResourceRequest;
 
 export type PlayerCombatActionResult = {
   ok: boolean;
   pendingApproval?: boolean;
+  pendingDamageId?: string;
   requestId?: string;
   error?: string;
 };
@@ -856,6 +905,8 @@ export type DirectPlayerDamageRequest = {
   attackerParticipantId?: string;
   actionId?: string;
   correlationId?: string;
+  /** Runs the attack check now and waits for an explicit damage command. */
+  deferDamage?: boolean;
 };
 
 export type PlayerStatusRequest = {
@@ -869,6 +920,7 @@ export type PlayerTargetActionResult = {
   skippedPlayers: string[];
   missedPlayers?: string[];
   rolledDamage?: number;
+  pendingDamageId?: string;
   impacts?: Array<{
     playerId: string;
     hit: boolean;
@@ -1016,6 +1068,7 @@ export const isDirectPlayerDamageRequest = (
       (candidate.extremeAdvantage === undefined ||
         typeof candidate.extremeAdvantage === 'boolean')
     )) &&
+    (candidate.deferDamage === undefined || typeof candidate.deferDamage === 'boolean') &&
     isSafeActionIdentity(candidate.actionId) &&
     isSafeActionIdentity(candidate.correlationId);
 };
@@ -1335,6 +1388,13 @@ export const isPlayerCombatActionRequest = (
       isPlayerResourceUse(attack.resource) &&
       isSafeActionIdentity(attack.actionId) &&
       isSafeActionIdentity(attack.correlationId);
+  }
+  if (candidate.kind === 'damage') {
+    const damage = candidate as { pendingDamageId?: unknown };
+    return typeof damage.pendingDamageId === 'string' &&
+      damage.pendingDamageId.length >= 8 &&
+      damage.pendingDamageId.length <= 128 &&
+      /^[A-Za-z0-9:_-]+$/.test(damage.pendingDamageId);
   }
   if (candidate.kind === 'resource') {
     return isSafeActionIdentity(

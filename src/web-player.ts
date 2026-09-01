@@ -4,8 +4,16 @@ import {
 } from './web-player-api';
 import {
   MAX_CHARACTER_SHEET_BYTES,
+  type CharacterSheetEditorField,
   type PlayerCharacterSheetStatus,
 } from './shared/character-sheet';
+import {
+  CHARACTER_SHEET_DRAFT_MAX_BYTES,
+  characterSheetDraftByteLength,
+  characterSheetDraftStorageKey,
+  recoverCharacterSheetDraft,
+  serializeCharacterSheetDraft,
+} from './shared/character-sheet-draft';
 import {
   createPlayerNotesDocument,
   nextPlayerNoteTab,
@@ -44,18 +52,26 @@ const joinForm = document.getElementById('web-player-join-form');
 const nameInput = document.getElementById('web-player-name');
 const passwordInput = document.getElementById('web-player-password');
 const createAccessButton = document.getElementById('web-player-create-access');
-const passwordConfirmInput = document.getElementById('web-player-password-confirm');
-const passwordConfirmLabel = document.getElementById('web-player-password-confirm-label');
 const confirmMessageElement = document.getElementById('web-player-confirm-message');
 const authErrorElement = document.getElementById('web-player-auth-error');
 const nameConfirmElement = document.getElementById('web-player-name-confirm');
 const confirmedNameElement = document.getElementById('web-player-confirmed-name');
 const nameBackButton = document.getElementById('web-player-name-back');
+const nameConfirmCloseButton = document.getElementById('web-player-name-confirm-close');
 const nameSubmitButton = document.getElementById('web-player-name-submit');
+const createAccountDialog = document.getElementById('web-player-create-account');
+const createAccountForm = document.getElementById('web-player-create-account-form');
+const createAccountName = document.getElementById('web-player-create-name');
+const createAccountPassword = document.getElementById('web-player-create-password');
+const createAccountPasswordConfirm = document.getElementById('web-player-create-password-confirm');
+const createAccountError = document.getElementById('web-player-create-error');
+const createAccountBack = document.getElementById('web-player-create-back');
+const createAccountClose = document.getElementById('web-player-create-close');
 const pendingElement = document.getElementById('web-player-pending');
 const pendingTitleElement = document.getElementById('web-player-pending-title');
 const pendingMessageElement = document.getElementById('web-player-pending-message');
 const changeNameButton = document.getElementById('web-player-change-name');
+const changeNameCloseButton = document.getElementById('web-player-change-name-close');
 const toolsElement = document.getElementById('web-player-tools');
 const sheetButton = document.getElementById('web-player-sheet-button');
 const sheetDialog = document.getElementById('web-player-sheet-dialog');
@@ -69,7 +85,13 @@ const sheetRemoveButton = document.getElementById('web-player-sheet-remove');
 const sheetSelectionRemoveButton = document.getElementById('web-player-sheet-selection-remove');
 const sheetRemoveDialog = document.getElementById('web-player-sheet-remove-confirm');
 const sheetRemoveCancelButton = document.getElementById('web-player-sheet-remove-cancel');
+const sheetRemoveCloseButton = document.getElementById('web-player-sheet-remove-close');
 const sheetRemoveConfirmButton = document.getElementById('web-player-sheet-remove-confirm-button');
+const sheetEditorDialog = document.getElementById('web-player-sheet-editor');
+const sheetEditorClose = document.getElementById('web-player-sheet-editor-close');
+const sheetEditorSearch = document.getElementById('web-player-sheet-editor-search');
+const sheetEditorFields = document.getElementById('web-player-sheet-editor-fields');
+const sheetEditorStatus = document.getElementById('web-player-sheet-editor-status');
 const characterHud = document.getElementById('web-player-character-hud');
 const characterStatuses = document.getElementById('web-player-character-statuses');
 const characterName = document.getElementById('web-player-character-name');
@@ -81,11 +103,17 @@ const characterActionButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('[data-player-action]'),
 ];
 const characterHealthFill = document.getElementById('web-player-character-health-fill');
+const characterTemporaryHealthFill = document.getElementById(
+  'web-player-character-temporary-health-fill',
+);
 const characterHealthValue = document.getElementById('web-player-character-health-value');
 const characterManaFill = document.getElementById('web-player-character-mana-fill');
 const characterManaValue = document.getElementById('web-player-character-mana-value');
+const characterMelee = document.getElementById('web-player-character-melee');
+const characterRanged = document.getElementById('web-player-character-ranged');
 const characterDefenseMelee = document.getElementById('web-player-character-defense-melee');
 const characterDefenseRanged = document.getElementById('web-player-character-defense-ranged');
+const characterDefenseGroup = document.getElementById('web-player-character-defense-group');
 const characterAttributes = document.getElementById('web-player-character-attributes');
 const characterMovement = document.getElementById('web-player-character-movement');
 const characterSkills = document.getElementById('web-player-character-skills');
@@ -105,19 +133,120 @@ const notesSaveButton = document.getElementById('web-player-notes-save');
 const notesClearButton = document.getElementById('web-player-notes-clear');
 const notesClearDialog = document.getElementById('web-player-notes-clear-confirm');
 const notesClearCancelButton = document.getElementById('web-player-notes-clear-cancel');
+const notesClearCloseButton = document.getElementById('web-player-notes-clear-close');
 const notesClearConfirmButton = document.getElementById('web-player-notes-clear-confirm-button');
 const notesStatusElement = document.getElementById('web-player-notes-status');
+const settingsButton = document.getElementById('web-player-settings-button');
 let hideStatusTimer: ReturnType<typeof setTimeout> | null = null;
 let playerMounted = false;
 let sessionReady = false;
 let sessionClosed = false;
 let unmountPlayer: (() => void) | null = null;
-let creatingAccount = false;
 let authenticating = false;
 let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
 let playerEncounterState: PlayerEncounterState | null = null;
 let selfHudId: string | null = null;
 let activeTurnParticipantId: string | null = null;
+let sheetEditorDocument: CharacterSheetEditorField[] = [];
+let sheetEditorRemovedFields: CharacterSheetEditorField[] = [];
+let sheetEditorBaseDocument: CharacterSheetEditorField[] = [];
+let sheetEditorFileName = '';
+let sheetEditorUsername = '';
+let sheetEditorDirty = false;
+let sheetEditorClosing = false;
+let sheetEditorDraftTimer: ReturnType<typeof setTimeout> | null = null;
+
+const currentRoomCode = () => {
+  const parameters = new URLSearchParams(window.location.search);
+  const pathMatch = window.location.pathname.match(/\/(?:join|session)\/([^/]+)/i);
+  return (
+    parameters.get('room') ??
+    parameters.get('roomCode') ??
+    (pathMatch ? decodeURIComponent(pathMatch[1]) : '')
+  ).trim().toUpperCase();
+};
+
+const cloneSheetEditorFields = (fields: readonly CharacterSheetEditorField[]) =>
+  fields.map((field) => ({
+    ...field,
+    ...(field.options ? { options: [...field.options] } : {}),
+    ...(field.validation ? { validation: { ...field.validation } } : {}),
+  }));
+
+const activeSheetEditorDraftKey = () => {
+  const username = sheetEditorUsername.trim();
+  const roomCode = currentRoomCode();
+  return username && roomCode
+    ? characterSheetDraftStorageKey(roomCode, username)
+    : null;
+};
+
+const clearSheetEditorDraftTimer = () => {
+  if (!sheetEditorDraftTimer) return;
+  clearTimeout(sheetEditorDraftTimer);
+  sheetEditorDraftTimer = null;
+};
+
+const clearSheetEditorDraft = () => {
+  clearSheetEditorDraftTimer();
+  const key = activeSheetEditorDraftKey();
+  if (!key) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // The editor still works when browser storage is unavailable.
+  }
+};
+
+const persistSheetEditorDraft = () => {
+  clearSheetEditorDraftTimer();
+  if (!sheetEditorDirty || !sheetEditorFileName || sheetEditorBaseDocument.length === 0) return;
+  const key = activeSheetEditorDraftKey();
+  if (!key) return;
+  try {
+    const serialized = serializeCharacterSheetDraft({
+      fileName: sheetEditorFileName,
+      baseFields: sheetEditorBaseDocument,
+      fields: sheetEditorDocument,
+      removedFields: sheetEditorRemovedFields,
+    });
+    if (characterSheetDraftByteLength(serialized) > CHARACTER_SHEET_DRAFT_MAX_BYTES) {
+      throw new Error('O rascunho ultrapassou o limite local de 512 KB.');
+    }
+    window.localStorage.setItem(key, serialized);
+  } catch (error) {
+    if (sheetEditorStatus) {
+      sheetEditorStatus.textContent = error instanceof Error
+        ? `${error.message} As alterações continuam abertas nesta tela.`
+        : 'Não foi possível proteger este rascunho no navegador.';
+    }
+  }
+};
+
+const scheduleSheetEditorDraft = () => {
+  clearSheetEditorDraftTimer();
+  sheetEditorDraftTimer = setTimeout(persistSheetEditorDraft, 250);
+};
+
+const syncPermanentEncounterValuesIntoSheetEditor = () => {
+  if (!playerEncounterState || sheetEditorDialog?.hasAttribute('hidden')) return;
+  const values = new Map<string, string>([
+    ['PVs Totais', String(playerEncounterState.maxHealth)],
+    ['PVs Atuais', String(playerEncounterState.currentHealth)],
+    ['BossBar.PVs Temporarios', String(playerEncounterState.temporaryHealth)],
+    ['PMs Totais', String(playerEncounterState.maxMana)],
+    ['PMs Atuais', String(playerEncounterState.currentMana)],
+  ]);
+  for (const field of sheetEditorDocument) {
+    const value = values.get(field.name);
+    if (value === undefined) continue;
+    field.value = value;
+    const fieldElement = [...(sheetEditorFields?.querySelectorAll<HTMLElement>('[data-field-name]') ?? [])]
+      .find((element) => element.dataset.fieldName === field.name);
+    const input = fieldElement?.querySelector<HTMLInputElement>('input');
+    if (input && document.activeElement !== input) input.value = value;
+  }
+};
 
 const updateOwnTurnHighlight = () => {
   characterHud?.classList.toggle(
@@ -282,14 +411,14 @@ const {
   canConnect,
   getAccountStatus,
   connect,
-  leave,
   dispose,
-  socket,
   uploadCharacterSheet,
   automaticallyFixCharacterSheet,
   fetchCharacterSheetBlob,
-  createCharacterSheetViewUrl,
   removeCharacterSheet,
+  getCharacterSheetEditor,
+  saveCharacterSheetEditor,
+  setCharacterSheetEditorOpen,
   saveNotes,
   setCharacterPrivate,
   usePlayerAction,
@@ -299,16 +428,40 @@ const {
   onPlayerState: (state) => {
     playerEncounterState = state;
     renderCharacterSheet(getPlayerToolsState().sheet);
+    syncPermanentEncounterValuesIntoSheetEditor();
+  },
+  onCharacterSheetChanged: (sheet) => {
+    renderCharacterSheet(sheet);
+    if (!sheetEditorDialog?.hasAttribute('hidden') && !sheetEditorDirty) {
+      void getCharacterSheetEditor().then((result) => {
+        if (!result.ok || !result.document) return;
+        sheetEditorRemovedFields = [];
+        sheetEditorFileName = result.document.fileName;
+        sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
+        sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
+        syncPermanentEncounterValuesIntoSheetEditor();
+        renderSheetEditorFields();
+        if (sheetEditorStatus) {
+          sheetEditorStatus.textContent = result.document.pendingApproval
+            ? 'Alterações salvas. Aguardando aprovação do mestre.'
+            : 'Ficha atualizada com a decisão do mestre.';
+        }
+      });
+    }
   },
   onPlayerCombatImpact: (impact) => {
     playerEncounterState = impact.playerState;
     renderCharacterSheet(getPlayerToolsState().sheet);
+    syncPermanentEncounterValuesIntoSheetEditor();
     showReflexResult(impact);
   },
   onSessionReady: () => {
     sessionReady = true;
+    sheetEditorUsername = getPlayerToolsState().username ?? '';
+    changeNameCloseButton?.setAttribute('hidden', '');
     mountPlayer();
     toolsElement?.removeAttribute('hidden');
+    changeNameButton?.removeAttribute('hidden');
     renderCharacterSheet(getPlayerToolsState().sheet);
     notesDocument = parsePlayerNotesDocument(getPlayerToolsState().notes);
     renderNotesEditor();
@@ -316,7 +469,7 @@ const {
       void api.getState().then((state) => {
         changeNameButton?.toggleAttribute(
           'hidden',
-          !socket?.connected || state.battleStarted,
+          state.battleStarted,
         );
       });
     });
@@ -339,6 +492,8 @@ api.subscribePlayerHuds((players) => {
     characterPrivateInput.checked = self.privateMode;
   }
   if (self) {
+    const sheetLocked = self.sheetInteractionState &&
+      self.sheetInteractionState !== 'idle';
     for (const button of characterActionButtons) {
       const action = button.dataset.playerAction as PlayerActionKind;
       const ready = self.actions[action];
@@ -349,7 +504,11 @@ api.subscribePlayerHuds((players) => {
           : 'Ação padrão';
       button.classList.toggle('is-ready', ready);
       button.disabled = !ready;
-      button.dataset.appTooltip = ready
+      button.dataset.appTooltip = sheetLocked
+        ? self.sheetInteractionState === 'editing'
+          ? 'Feche a ficha para liberar as ações'
+          : 'Aguardando a decisão do mestre sobre a ficha'
+        : ready
         ? `${label} disponível`
         : `${label} não disponível`;
       delete button.dataset.tooltip;
@@ -381,7 +540,16 @@ const mountPlayer = () => {
 };
 
 const prepareSheetPreview = (sheet: PlayerCharacterSheetStatus | null) => {
-  sheetOpenButton?.toggleAttribute('disabled', !sheet?.hasSheet);
+  const interactionState = playerEncounterState?.sheetInteractionState ?? 'idle';
+  const disabled = !sheet?.hasSheet || interactionState !== 'idle';
+  sheetOpenButton?.toggleAttribute('disabled', disabled);
+  if (sheetOpenButton) {
+    sheetOpenButton.dataset.disabledReason = interactionState === 'pending-approval'
+      ? 'Aguardando a decisão do mestre'
+      : interactionState === 'editing'
+        ? 'A ficha já está aberta para edição'
+        : 'Vincule uma ficha antes de ajustar';
+  }
 };
 
 const boundedPercent = (current: number | null, maximum: number | null) => {
@@ -508,15 +676,22 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   };
   const skills = Array.isArray(summary.skills) ? summary.skills : [];
   const attacks = Array.isArray(summary.attacks) ? summary.attacks : [];
+  const naturalMelee = skills.find(({ id, name }) =>
+    id === '190' || name.toLocaleLowerCase('pt-BR') === 'luta'
+  )?.total ?? null;
+  const naturalRanged = skills.find(({ id, name }) =>
+    id === '260' || name.toLocaleLowerCase('pt-BR') === 'pontaria'
+  )?.total ?? null;
   const currentHealth = playerEncounterState?.currentHealth ?? summary.currentHealth;
   const maxHealth = playerEncounterState?.maxHealth ?? summary.maxHealth;
+  const temporaryHealth = playerEncounterState?.temporaryHealth ?? summary.temporaryHealth ?? 0;
   const currentMana = playerEncounterState?.currentMana ?? summary.currentMana;
   const maxMana = playerEncounterState?.maxMana ?? summary.maxMana;
   const temporaryDefenseBonus = playerEncounterState?.temporaryDefenseBonus ?? 0;
-  const statusDefenses = playerEncounterState
+  const statusValues = playerEncounterState
     ? deriveStatusAttributes({
-      attack: 0,
-      rangedAttack: 0,
+      attack: naturalMelee ?? 0,
+      rangedAttack: naturalRanged ?? 0,
       skills: 0,
       meleeDefense: playerEncounterState.defenseMelee,
       rangedDefense: playerEncounterState.defenseRanged,
@@ -524,11 +699,13 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       shield: 0,
     }, playerEncounterState.statuses)
     : null;
-  const defenseMelee = statusDefenses
-    ? statusDefenses.values.meleeDefense + temporaryDefenseBonus
+  const melee = naturalMelee === null ? null : statusValues?.values.attack ?? naturalMelee;
+  const ranged = naturalRanged === null ? null : statusValues?.values.rangedAttack ?? naturalRanged;
+  const defenseMelee = statusValues
+    ? statusValues.values.meleeDefense + temporaryDefenseBonus
     : defenses.melee;
-  const defenseRanged = statusDefenses
-    ? statusDefenses.values.rangedDefense + temporaryDefenseBonus
+  const defenseRanged = statusValues
+    ? statusValues.values.rangedDefense + temporaryDefenseBonus
     : defenses.ranged;
   characterHud?.removeAttribute('hidden');
   characterHud?.classList.toggle('is-dead', Boolean(playerEncounterState?.dead));
@@ -545,26 +722,7 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
     health.textContent = `PV ${currentHealth ?? '—'}/${maxHealth ?? '—'}`;
     const mana = document.createElement('b');
     mana.textContent = `PM ${currentMana ?? '—'}/${maxMana ?? '—'}`;
-    const defense = document.createElement('span');
-    defense.className = 'web-player-character-detail-defense';
-    const meleeIcon = document.createElement('img');
-    meleeIcon.src = '/session-assets/ui/defense-melee.png';
-    meleeIcon.alt = 'Corpo a corpo';
-    const rangedIcon = document.createElement('img');
-    rangedIcon.src = '/session-assets/ui/defense-ranged.png';
-    rangedIcon.alt = 'À distância';
-    const meleeValue = document.createElement('b');
-    meleeValue.textContent = `${defenseMelee ?? '—'}`;
-    meleeValue.className = defenseMelee !== null && defenses.melee !== null
-      ? defenseMelee > defenses.melee ? 'is-bonus' : defenseMelee < defenses.melee ? 'is-penalty' : ''
-      : '';
-    const rangedValue = document.createElement('b');
-    rangedValue.textContent = `${defenseRanged ?? '—'}`;
-    rangedValue.className = defenseRanged !== null && defenses.ranged !== null
-      ? defenseRanged > defenses.ranged ? 'is-bonus' : defenseRanged < defenses.ranged ? 'is-penalty' : ''
-      : '';
-    defense.append('Defesa: ', meleeIcon, meleeValue, ' / ', rangedIcon, rangedValue);
-    vitalSummary.append(health, mana, defense);
+    vitalSummary.append(health, mana);
     characterClassLevel.replaceChildren(classLevel, vitalSummary);
     characterClassLevel.tabIndex = -1;
     delete characterClassLevel.dataset.calculation;
@@ -580,6 +738,16 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
         : `PV da ficha: ${currentHealth ?? '—'}/${maxHealth ?? '—'}.`,
     );
   }
+  if (characterTemporaryHealthFill instanceof HTMLElement) {
+    const excess = Math.max(
+      0,
+      (currentHealth ?? 0) + temporaryHealth - Math.max(0, maxHealth ?? 0),
+    );
+    characterTemporaryHealthFill.style.width = `${boundedPercent(excess, maxHealth)}%`;
+    characterTemporaryHealthFill.toggleAttribute('hidden', excess <= 0);
+    characterTemporaryHealthFill.dataset.calculation =
+      `PV temporários excedentes: ${excess} de ${temporaryHealth}.`;
+  }
   if (characterHealthValue) characterHealthValue.textContent = `${currentHealth ?? '—'}/${maxHealth ?? '—'}`;
   if (characterManaFill instanceof HTMLElement) {
     characterManaFill.style.width = `${boundedPercent(currentMana, maxMana)}%`;
@@ -593,6 +761,22 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
     );
   }
   if (characterManaValue) characterManaValue.textContent = `${currentMana ?? '—'}/${maxMana ?? '—'}`;
+  const updateCombatValue = (
+    element: HTMLElement | null,
+    value: number | null,
+    natural: number | null,
+    label: string,
+  ) => {
+    if (!element) return;
+    element.textContent = `${value ?? '—'}`;
+    element.classList.toggle('is-penalty', value !== null && natural !== null && value < natural);
+    element.classList.toggle('is-bonus', value !== null && natural !== null && value > natural);
+    element.dataset.calculation = value === natural || value === null || natural === null
+      ? `${label}: ${value ?? '—'}.`
+      : `${label}: ${natural} ${value > natural ? '+' : '−'} ${Math.abs(value - natural)} = ${value}.`;
+  };
+  updateCombatValue(characterMelee, melee, naturalMelee, 'Luta');
+  updateCombatValue(characterRanged, ranged, naturalRanged, 'Pontaria');
   if (characterDefenseMelee) {
     characterDefenseMelee.textContent = `${defenseMelee ?? '—'}`;
     const modifier = defenseMelee !== null && defenses.melee !== null
@@ -628,6 +812,10 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       'is-bonus',
       defenseRanged !== null && defenses.ranged !== null && defenseRanged > defenses.ranged,
     );
+  }
+  if (characterDefenseGroup) {
+    characterDefenseGroup.dataset.appTooltip =
+      `Defesa corpo a corpo ${defenseMelee ?? '—'} / à distância ${defenseRanged ?? '—'}`;
   }
   if (characterAttributes) {
     const attributes = summary.attributes ?? {
@@ -836,6 +1024,7 @@ sheetInput?.addEventListener('change', () => {
   sheetSelectionRemoveButton?.setAttribute('disabled', '');
   if (sheetStatusElement) sheetStatusElement.textContent = 'Lendo e validando a ficha…';
   void uploadCharacterSheet(file).then((result) => {
+    if (result.ok) clearSheetEditorDraft();
     renderCharacterSheet(result.sheet ?? null);
     const hasErrors = result.sheet?.validation?.issues.some(
       ({ severity }) => severity === 'error',
@@ -875,34 +1064,588 @@ sheetSelectionRemoveButton?.addEventListener('click', () => {
   renderCharacterSheet(getPlayerToolsState().sheet);
 });
 
-sheetOpenButton?.addEventListener('click', () => {
-  if (sheetOpenButton.hasAttribute('disabled')) return;
-  const previewWindow = window.open('', '_blank');
-  if (!previewWindow) {
-    if (sheetStatusElement) {
-      sheetStatusElement.textContent = 'O navegador bloqueou a abertura da ficha. Permita pop-ups para esta página.';
-    }
+const spellEditorFields = [
+  ['Nome', 'Nome', 160],
+  ['Escola', 'Escola', 160],
+  ['Execucao', 'Execução', 160],
+  ['Alcance', 'Alcance', 160],
+  ['Area', 'Área', 160],
+  ['Duracao', 'Duração', 160],
+  ['Resistencia', 'Resistência', 160],
+  ['Efeito', 'Efeito', 1_000],
+] as const;
+
+const officeOptions = [
+  'Armeiro',
+  'Artesão',
+  'Alquimista',
+  'Cozinheiro',
+  'Alfaiate',
+  'Carpinteiro',
+  'Pedreiro',
+  'Ourives',
+  'Fazendeiro',
+  'Pescador',
+  'Estalajadeiro',
+  'Escriba',
+  'Escultor',
+  'Pintor',
+] as const;
+
+const editorField = (
+  name: string,
+  label: string,
+  section: string,
+  group: string,
+  validation?: CharacterSheetEditorField['validation'],
+): CharacterSheetEditorField => ({
+  name,
+  label,
+  section,
+  group,
+  kind: 'text',
+  value: '',
+  ...(validation ? { validation } : {}),
+});
+
+const itemEditorFields = (index: number) => [
+  editorField(index <= 15 ? `Item${index}` : `BossBar.Item.${index}.Nome`, 'Item', 'Itens', `Item ${index}`),
+  {
+    ...editorField(`BossBar.Item.${index}.Quantidade`, 'Quantidade', 'Itens', `Item ${index}`, {
+      kind: 'integer', min: 0, max: 9_999,
+    }),
+    value: '0',
+  },
+  editorField(index <= 15 ? `PesoItem${index}` : `BossBar.Item.${index}.Peso`, 'Peso', 'Itens', `Item ${index}`, {
+    kind: 'decimal', min: 0, max: 1_000_000,
+  }),
+];
+
+const equipmentEditorFields = (kind: 'Armadura' | 'Escudo', index: number) => {
+  const section = 'Armadura e escudo';
+  const group = `${kind} ${index}`;
+  const prefix = `BossBar.${kind}.${index}`;
+  return [
+    editorField(`${prefix}.Nome`, 'Nome', section, group),
+    editorField(`${prefix}.Defesa`, 'Defesa', section, group, {
+      kind: 'integer', min: 0, max: 999,
+    }),
+    editorField(`${prefix}.Penalidade`, 'Penalidade', section, group, {
+      kind: 'integer', min: -99, max: 99,
+    }),
+  ];
+};
+
+const nextEditorGroupIndex = (pattern: RegExp, maximum: number) => {
+  const used = new Set(sheetEditorDocument.flatMap(({ group }) => {
+    const match = pattern.exec(group ?? '');
+    return match ? [Number(match[1])] : [];
+  }));
+  return Array.from({ length: maximum }, (_, offset) => offset + 1)
+    .find((candidate) => !used.has(candidate)) ?? null;
+};
+
+const addItemEditorRow = () => {
+  const index = nextEditorGroupIndex(/^Item (\d+)$/, 100);
+  if (!index) {
+    if (sheetEditorStatus) sheetEditorStatus.textContent = 'O limite de 100 itens foi atingido.';
     return;
   }
-  previewWindow.opener = null;
+  sheetEditorRemovedFields = sheetEditorRemovedFields.filter(
+    ({ group }) => group !== `Item ${index}`,
+  );
+  sheetEditorDocument.push(...itemEditorFields(index));
+  renderSheetEditorFields();
+  markSheetEditorDirty();
+};
+
+const addEquipmentEditorRow = (kind: 'Armadura' | 'Escudo') => {
+  const index = nextEditorGroupIndex(new RegExp(`^${kind} (\\d+)$`), 20);
+  if (!index) {
+    if (sheetEditorStatus) sheetEditorStatus.textContent = `O limite de 20 ${kind === 'Armadura' ? 'armaduras' : 'escudos'} foi atingido.`;
+    return;
+  }
+  sheetEditorRemovedFields = sheetEditorRemovedFields.filter(
+    ({ group }) => group !== `${kind} ${index}`,
+  );
+  sheetEditorDocument.push(...equipmentEditorFields(kind, index));
+  renderSheetEditorFields();
+  markSheetEditorDirty();
+};
+
+const parseEditorDecimal = (value: string) => {
+  const parsed = Number(value.trim().replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const recalculateSheetLoad = () => {
+  const groups = new Map<string, CharacterSheetEditorField[]>();
+  for (const field of sheetEditorDocument) {
+    if (!/^Item \d+$/.test(field.group ?? '')) continue;
+    const fields = groups.get(field.group ?? '') ?? [];
+    fields.push(field);
+    groups.set(field.group ?? '', fields);
+  }
+  const total = [...groups.values()].reduce((sum, fields) => {
+    const quantity = parseEditorDecimal(
+      fields.find(({ label }) => label === 'Quantidade')?.value ?? '0',
+    );
+    const weight = parseEditorDecimal(
+      fields.find(({ label }) => label === 'Peso')?.value ?? '0',
+    );
+    return sum + Math.max(0, quantity) * Math.max(0, weight);
+  }, 0);
+  const formatted = String(Number(total.toFixed(3)));
+  const loadField = sheetEditorDocument.find(({ name }) => name === 'CargaTotal');
+  if (loadField) loadField.value = formatted;
+  const loadInput = [...(sheetEditorFields?.querySelectorAll<HTMLElement>('[data-field-name]') ?? [])]
+    .find(({ dataset }) => dataset.fieldName === 'CargaTotal')
+    ?.querySelector<HTMLInputElement>('input');
+  if (loadInput) loadInput.value = formatted;
+};
+
+const markSheetEditorDirty = () => {
+  sheetEditorDirty = true;
+  scheduleSheetEditorDraft();
+  if (sheetEditorStatus) {
+    sheetEditorStatus.textContent =
+      'Rascunho local. Uma única solicitação será enviada ao fechar a ficha.';
+  }
+};
+
+const addSpellEditorRow = () => {
+  const usedRows = new Set(sheetEditorDocument.flatMap(({ name }) => {
+    const match = /^BossBar\.Magia\.(\d+)\./.exec(name);
+    return match ? [Number(match[1])] : [];
+  }));
+  const index = Array.from({ length: 100 }, (_, offset) => offset + 1)
+    .find((candidate) => !usedRows.has(candidate));
+  if (!index) {
+    if (sheetEditorStatus) sheetEditorStatus.textContent = 'O limite de 100 magias foi atingido.';
+    return;
+  }
+  sheetEditorDocument.push(...spellEditorFields.map(([fieldName, label, maxLength]) => ({
+    name: `BossBar.Magia.${index}.${fieldName}`,
+    label,
+    section: 'Magias',
+    group: `Magia ${index}`,
+    kind: 'text' as const,
+    value: '',
+    validation: { kind: 'text' as const, maxLength },
+  })));
+  renderSheetEditorFields();
+  markSheetEditorDirty();
+};
+
+const renderSheetEditorFields = () => {
+  if (!sheetEditorFields) return;
+  const query = sheetEditorSearch instanceof HTMLInputElement
+    ? sheetEditorSearch.value.trim().toLocaleLowerCase('pt-BR')
+    : '';
+  sheetEditorFields.replaceChildren();
+  const filteredFields = sheetEditorDocument.filter((field) => {
+    if (!query) return true;
+    return [field.label, field.section, field.group, field.name]
+      .some((value) => value?.toLocaleLowerCase('pt-BR').includes(query));
+  });
+  const sections = new Map<string, CharacterSheetEditorField[]>();
+  for (const field of filteredFields) {
+    const sectionFields = sections.get(field.section) ?? [];
+    sectionFields.push(field);
+    sections.set(field.section, sectionFields);
+  }
+
+  const scheduleFieldSave = (
+    field: CharacterSheetEditorField,
+    input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  ) => {
+    field.value = field.kind === 'checkbox'
+      ? (input as HTMLInputElement).checked ? 'Yes' : 'Off'
+      : input.value;
+    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+      input.setCustomValidity('');
+      const value = input.value.trim();
+      const validation = field.validation;
+      if (value && validation?.kind === 'integer' && !/^[+-]?\d+$/.test(value)) {
+        input.setCustomValidity('Informe um número inteiro.');
+      } else if (
+        value &&
+        validation?.kind === 'integer' &&
+        validation.min !== undefined &&
+        Number(value) < validation.min
+      ) {
+        input.setCustomValidity(`O valor mínimo é ${validation.min}.`);
+      } else if (
+        value &&
+        validation?.kind === 'integer' &&
+        validation.max !== undefined &&
+        Number(value) > validation.max
+      ) {
+        input.setCustomValidity(`O valor máximo é ${validation.max}.`);
+      } else if (
+        value &&
+        validation?.kind === 'formula' &&
+        !/^[+-]?\s*(?:\d+d\d+|\d+)(?:\s*[+-]\s*(?:\d+d\d+|\d+))*$/i.test(value)
+      ) {
+        input.setCustomValidity('Use apenas números, dados, + e - (ex.: 2d6 + 3).');
+      } else if (value && validation?.kind === 'decimal') {
+        const normalized = value.replace(',', '.');
+        const parsed = Number(normalized);
+        if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) {
+          input.setCustomValidity('Informe um número válido.');
+        } else if (validation.min !== undefined && parsed < validation.min) {
+          input.setCustomValidity(`O valor mínimo é ${validation.min}.`);
+        } else if (validation.max !== undefined && parsed > validation.max) {
+          input.setCustomValidity(`O valor máximo é ${validation.max}.`);
+        }
+      }
+      if (!input.checkValidity()) {
+        if (sheetEditorStatus) sheetEditorStatus.textContent = input.validationMessage;
+        return;
+      }
+    }
+    if (/^Item \d+$/.test(field.group ?? '')) recalculateSheetLoad();
+    markSheetEditorDirty();
+  };
+
+  const createFieldInput = (field: CharacterSheetEditorField) => {
+    let input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    if (field.name === 'Ofício 1' || field.name === 'Ofício_2') {
+      const select = document.createElement('select');
+      const options: string[] = ['', ...officeOptions];
+      if (field.value && !options.includes(field.value)) options.push(field.value);
+      for (const optionValue of options) {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue || 'Escolher Ofício';
+        option.selected = optionValue === field.value;
+        select.append(option);
+      }
+      input = select;
+    } else if (field.kind === 'choice') {
+      const select = document.createElement('select');
+      for (const optionValue of field.options ?? []) {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue || '—';
+        option.selected = optionValue === field.value;
+        select.append(option);
+      }
+      input = select;
+    } else {
+      const isLongText = [
+        'Proficiências',
+        'Descrição',
+        'HabRaçasOrigem',
+        'HabClassePoderes',
+      ].includes(field.name);
+      if (isLongText) {
+        const textArea = document.createElement('textarea');
+        textArea.rows = 3;
+        textArea.value = field.value;
+        input = textArea;
+      } else {
+        const fieldInput = document.createElement('input');
+        fieldInput.type = field.kind === 'checkbox' ? 'checkbox' : 'text';
+        if (field.kind === 'checkbox') fieldInput.checked = field.value === 'Yes';
+        else fieldInput.value = field.value;
+        input = fieldInput;
+      }
+    }
+    if (
+      (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) &&
+      field.validation?.maxLength !== undefined
+    ) {
+      input.maxLength = field.validation.maxLength;
+    }
+    if (input instanceof HTMLInputElement && field.validation?.kind === 'integer') {
+      input.inputMode = 'numeric';
+      if (field.validation.min !== undefined && field.validation.min < 0) {
+        input.maxLength = Math.max(
+          String(Math.abs(field.validation.min)).length + 1,
+          String(Math.abs(field.validation.max ?? 0)).length,
+        );
+      } else if (field.validation.max !== undefined) {
+        input.maxLength = String(Math.abs(field.validation.max)).length;
+      }
+    }
+    if (input instanceof HTMLInputElement && field.validation?.kind === 'decimal') {
+      input.inputMode = 'decimal';
+    }
+    if (input instanceof HTMLInputElement && field.name === 'CargaTotal') {
+      input.readOnly = true;
+      input.setAttribute('aria-readonly', 'true');
+    }
+    input.addEventListener('input', () => scheduleFieldSave(field, input));
+    return input;
+  };
+
+  const appendField = (container: HTMLElement, field: CharacterSheetEditorField) => {
+    const label = document.createElement('label');
+    label.dataset.fieldName = field.name;
+    const name = document.createElement('span');
+    name.textContent = field.label;
+    const input = createFieldInput(field);
+    label.append(name, input);
+    container.append(label);
+  };
+
+  for (const [sectionName, fields] of sections) {
+    const section = document.createElement('section');
+    section.className = 'web-player-sheet-editor-section';
+    const sectionClass = new Map([
+      ['Identidade', 'is-identity'],
+      ['Atributos e modificadores', 'is-attributes'],
+      ['Perícias', 'is-skills'],
+      ['Defesa', 'is-defense'],
+      ['Armadura e escudo', 'is-equipment'],
+      ['Itens', 'is-items'],
+    ]).get(sectionName);
+    if (sectionClass) section.classList.add(sectionClass);
+    const heading = document.createElement('h2');
+    heading.textContent = sectionName;
+    if (['Magias', 'Itens', 'Armadura e escudo'].includes(sectionName)) {
+      const headingRow = document.createElement('div');
+      headingRow.className = 'web-player-sheet-editor-section-heading';
+      const controls = document.createElement('div');
+      controls.className = 'web-player-sheet-editor-section-actions';
+      if (sectionName === 'Magias') {
+        const addSpell = document.createElement('button');
+        addSpell.type = 'button';
+        addSpell.textContent = '+ Adicionar magia';
+        addSpell.addEventListener('click', addSpellEditorRow);
+        controls.append(addSpell);
+      } else if (sectionName === 'Itens') {
+        const addItem = document.createElement('button');
+        addItem.type = 'button';
+        addItem.textContent = '+ Adicionar item';
+        addItem.addEventListener('click', addItemEditorRow);
+        controls.append(addItem);
+      } else {
+        for (const kind of ['Armadura', 'Escudo'] as const) {
+          const addEquipment = document.createElement('button');
+          addEquipment.type = 'button';
+          addEquipment.textContent = `+ ${kind}`;
+          addEquipment.addEventListener('click', () => addEquipmentEditorRow(kind));
+          controls.append(addEquipment);
+        }
+      }
+      headingRow.append(heading, controls);
+      section.append(headingRow);
+    } else {
+      section.append(heading);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'web-player-sheet-editor-section-body';
+    const groups = new Map<string, CharacterSheetEditorField[]>();
+    for (const field of fields) {
+      const groupName = field.group ?? '';
+      const groupFields = groups.get(groupName) ?? [];
+      groupFields.push(field);
+      groups.set(groupName, groupFields);
+    }
+    for (const [groupName, groupFields] of groups) {
+      if (!groupName) {
+        groupFields.forEach((field) => appendField(body, field));
+        continue;
+      }
+      const group = document.createElement('article');
+      group.className = 'web-player-sheet-editor-group';
+      if (sectionName === 'Magias' && /^Magia \d+$/.test(groupName)) {
+        group.classList.add('is-spell-row');
+      }
+      if (/^Item \d+$/.test(groupName)) group.classList.add('is-item-row');
+      if (/^Armadura \d+$/.test(groupName)) group.classList.add('is-armor-row');
+      if (/^Escudo \d+$/.test(groupName)) group.classList.add('is-shield-row');
+      if (groupName === 'Carga') group.classList.add('is-load-row');
+      const groupHeader = document.createElement('header');
+      groupHeader.className = 'web-player-sheet-editor-group-heading';
+      const groupHeading = document.createElement('h3');
+      groupHeading.textContent = groupName;
+      groupHeader.append(groupHeading);
+      const groupIndex = Number(/(\d+)$/.exec(groupName)?.[1] ?? 0);
+      if (
+        groupIndex > 0 &&
+        (group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row'))
+      ) {
+        group.style.gridRow = String(groupIndex);
+      }
+      const removable = group.classList.contains('is-spell-row') ||
+        (group.classList.contains('is-item-row') && groupIndex > 3) ||
+        ((group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row')) && groupIndex > 1);
+      if (removable) {
+        const removeRow = document.createElement('button');
+        removeRow.className = 'web-player-sheet-editor-remove-spell';
+        removeRow.type = 'button';
+        removeRow.setAttribute('aria-label', `Remover ${groupName}`);
+        removeRow.textContent = '×';
+        removeRow.addEventListener('click', () => {
+          sheetEditorRemovedFields.push(...groupFields.map((field) => ({
+            ...field,
+            value: '',
+          })));
+          sheetEditorDocument = sheetEditorDocument.filter(
+            (field) => field.group !== groupName || field.section !== sectionName,
+          );
+          renderSheetEditorFields();
+          markSheetEditorDirty();
+        });
+        groupHeader.append(removeRow);
+      }
+      const trainedField = sectionName === 'Perícias'
+        ? groupFields.find(({ kind }) => kind === 'checkbox')
+        : undefined;
+      const officeField = sectionName === 'Perícias'
+        ? groupFields.find(({ name }) => name === 'Ofício 1' || name === 'Ofício_2')
+        : undefined;
+      const groupHeaderControls = document.createElement('div');
+      groupHeaderControls.className = 'web-player-sheet-editor-group-controls';
+      if (officeField) {
+        const officeLabel = document.createElement('label');
+        officeLabel.className = 'web-player-sheet-editor-office';
+        officeLabel.dataset.fieldName = officeField.name;
+        officeLabel.append(createFieldInput(officeField));
+        groupHeaderControls.append(officeLabel);
+      }
+      if (trainedField) {
+        const trainedLabel = document.createElement('label');
+        trainedLabel.className = 'web-player-sheet-editor-trained';
+        trainedLabel.dataset.fieldName = trainedField.name;
+        const trainedInput = createFieldInput(trainedField);
+        const trainedText = document.createElement('span');
+        trainedText.textContent = 'Treinada';
+        trainedLabel.append(trainedInput, trainedText);
+        groupHeaderControls.append(trainedLabel);
+      }
+      if (groupHeaderControls.childElementCount > 0) groupHeader.append(groupHeaderControls);
+      const groupFieldsContainer = document.createElement('div');
+      groupFieldsContainer.className = 'web-player-sheet-editor-group-fields';
+      groupFields
+        .filter((field) => field !== trainedField && field !== officeField)
+        .forEach((field) => appendField(groupFieldsContainer, field));
+      group.append(groupHeader, groupFieldsContainer);
+      body.append(group);
+    }
+    section.append(body);
+    sheetEditorFields.append(section);
+  }
+  recalculateSheetLoad();
+};
+
+sheetEditorSearch?.addEventListener('input', renderSheetEditorFields);
+const closeSheetEditor = async () => {
+  if (sheetEditorClosing) return;
+  const invalidInput = sheetEditorFields?.querySelector<
+    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+  >(':invalid');
+  if (invalidInput) {
+    invalidInput.reportValidity();
+    invalidInput.focus();
+    if (sheetEditorStatus) sheetEditorStatus.textContent = invalidInput.validationMessage;
+    return;
+  }
+  sheetEditorClosing = true;
+  sheetEditorClose?.setAttribute('disabled', '');
+  if (sheetEditorStatus) {
+    sheetEditorStatus.textContent = sheetEditorDirty
+      ? 'Enviando uma única solicitação ao mestre…'
+      : 'Fechando ficha…';
+  }
+  try {
+    if (sheetEditorDirty) {
+      const result = await saveCharacterSheetEditor([
+        ...sheetEditorDocument,
+        ...sheetEditorRemovedFields,
+      ]);
+      if (!result.ok) {
+        throw new Error(result.error ?? 'Não foi possível enviar as alterações da ficha.');
+      }
+      if (result.document) {
+        sheetEditorFileName = result.document.fileName;
+        sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
+        sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
+      }
+    } else {
+      const result = await setCharacterSheetEditorOpen(false);
+      if (!result.ok) {
+        throw new Error(result.error ?? 'Não foi possível fechar a edição da ficha.');
+      }
+    }
+    sheetEditorRemovedFields = [];
+    sheetEditorDirty = false;
+    clearSheetEditorDraft();
+    sheetEditorDialog?.setAttribute('hidden', '');
+  } catch (error) {
+    if (sheetEditorStatus) {
+      sheetEditorStatus.textContent = error instanceof Error
+        ? error.message
+        : 'Não foi possível concluir a edição da ficha.';
+    }
+  } finally {
+    sheetEditorClosing = false;
+    sheetEditorClose?.removeAttribute('disabled');
+  }
+};
+sheetEditorClose?.addEventListener('click', () => void closeSheetEditor());
+
+sheetOpenButton?.addEventListener('click', () => {
+  if (sheetOpenButton.hasAttribute('disabled')) return;
   sheetOpenButton.setAttribute('disabled', '');
-  if (sheetStatusElement) sheetStatusElement.textContent = 'Liberando acesso à ficha…';
-  void createCharacterSheetViewUrl().then((url) => {
-    previewWindow.location.replace(url);
-    renderCharacterSheet(getPlayerToolsState().sheet);
+  if (sheetStatusElement) sheetStatusElement.textContent = 'Abrindo editor da ficha…';
+  void getCharacterSheetEditor().then(async (result) => {
+    if (!result.ok || !result.document) {
+      throw new Error(result.error ?? 'Não foi possível abrir o editor da ficha.');
+    }
+    if (result.document.pendingApproval) {
+      throw new Error('Aguarde o mestre avaliar as alterações já enviadas.');
+    }
+    const editorLock = await setCharacterSheetEditorOpen(true);
+    if (!editorLock.ok) {
+      throw new Error(editorLock.error ?? 'Não foi possível bloquear a ficha para edição.');
+    }
+    sheetEditorUsername = getPlayerToolsState().username ?? '';
+    sheetEditorFileName = result.document.fileName;
+    sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
+    const draftKey = activeSheetEditorDraftKey();
+    let recoveredDraft = null;
+    if (draftKey) {
+      try {
+        const serialized = window.localStorage.getItem(draftKey);
+        recoveredDraft = recoverCharacterSheetDraft({
+          serialized,
+          fileName: sheetEditorFileName,
+          baseFields: sheetEditorBaseDocument,
+        });
+        if (serialized && !recoveredDraft) window.localStorage.removeItem(draftKey);
+      } catch {
+        recoveredDraft = null;
+      }
+    }
+    sheetEditorRemovedFields = recoveredDraft
+      ? cloneSheetEditorFields(recoveredDraft.removedFields)
+      : [];
+    sheetEditorDocument = recoveredDraft
+      ? cloneSheetEditorFields(recoveredDraft.fields)
+      : cloneSheetEditorFields(result.document.fields);
+    sheetEditorDirty = Boolean(recoveredDraft);
+    if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
+    sheetEditorDialog?.removeAttribute('hidden');
+    syncPermanentEncounterValuesIntoSheetEditor();
+    renderSheetEditorFields();
+    if (sheetEditorStatus) {
+      sheetEditorStatus.textContent = recoveredDraft
+        ? `Rascunho local recuperado de ${new Date(recoveredDraft.savedAt).toLocaleString('pt-BR')}.`
+        : 'Edite livremente. Uma única solicitação será enviada ao fechar a ficha.';
+    }
+    sheetDialog?.setAttribute('hidden', '');
   }).catch((error: unknown) => {
-    previewWindow.close();
     if (sheetStatusElement) {
       sheetStatusElement.textContent = error instanceof Error
         ? error.message
-        : 'Não foi possível liberar o acesso à ficha.';
+        : 'Não foi possível abrir o editor da ficha.';
     }
-  }).finally(() => {
-    sheetOpenButton.removeAttribute('disabled');
-  });
-  if (previewWindow.closed && sheetStatusElement) {
-    sheetStatusElement.textContent = 'O navegador bloqueou a abertura da ficha. Permita pop-ups para esta página.';
-  }
+  }).finally(() => renderCharacterSheet(getPlayerToolsState().sheet));
 });
 
 sheetRemoveButton?.addEventListener('click', () => {
@@ -912,6 +1655,7 @@ sheetRemoveButton?.addEventListener('click', () => {
 sheetRemoveCancelButton?.addEventListener('click', () => {
   sheetRemoveDialog?.setAttribute('hidden', '');
 });
+sheetRemoveCloseButton?.addEventListener('click', () => sheetRemoveCancelButton?.click());
 sheetRemoveConfirmButton?.addEventListener('click', () => {
   sheetRemoveConfirmButton.setAttribute('disabled', '');
   void removeCharacterSheet().then((result) => {
@@ -922,6 +1666,7 @@ sheetRemoveConfirmButton?.addEventListener('click', () => {
       return;
     }
     renderCharacterSheet(result.sheet ?? null);
+    clearSheetEditorDraft();
     sheetRemoveDialog?.setAttribute('hidden', '');
     if (sheetStatusElement) sheetStatusElement.textContent = 'Ficha removida deste usuário.';
   }).finally(() => sheetRemoveConfirmButton.removeAttribute('disabled'));
@@ -1209,6 +1954,7 @@ notesClearButton?.addEventListener('click', () => {
   notesClearCancelButton?.focus();
 });
 notesClearCancelButton?.addEventListener('click', () => notesClearDialog?.setAttribute('hidden', ''));
+notesClearCloseButton?.addEventListener('click', () => notesClearCancelButton?.click());
 notesClearConfirmButton?.addEventListener('click', () => {
   const tab = activeNoteTab();
   if (!tab) return;
@@ -1240,7 +1986,7 @@ if (!canConnect && joinForm instanceof HTMLFormElement) {
   createAccessButton?.setAttribute('disabled', '');
 }
 
-const prepareAuthentication = (createRequested: boolean) => {
+const prepareAuthentication = () => {
   if (
     !(nameInput instanceof HTMLInputElement) ||
     !(passwordInput instanceof HTMLInputElement) ||
@@ -1253,32 +1999,21 @@ const prepareAuthentication = (createRequested: boolean) => {
   if (submit) submit.disabled = true;
   createAccessButton?.setAttribute('disabled', '');
   void getAccountStatus(requestedName).then((status) => {
-    if (createRequested === status.exists) {
+    if (!status.exists) {
       showConnectionState({
         state: 'error',
-        message: createRequested
-          ? 'Este usuário já existe. Use Entrar.'
-          : 'Usuário ainda não cadastrado. Use Criar acesso.',
+        message: 'Usuário ainda não cadastrado. Use Criar acesso.',
       });
       return;
     }
-    creatingAccount = createRequested;
     if (confirmedNameElement) confirmedNameElement.textContent = status.username;
     if (confirmMessageElement) {
-      confirmMessageElement.textContent = creatingAccount
-        ? 'Este usuário ainda não existe. Confirme a senha para criá-lo como'
-        : 'Você entrará no encontro como';
-    }
-    passwordConfirmLabel?.toggleAttribute('hidden', !creatingAccount);
-    if (passwordConfirmInput instanceof HTMLInputElement) {
-      passwordConfirmInput.value = '';
-      passwordConfirmInput.required = creatingAccount;
+      confirmMessageElement.textContent = 'Você entrará no encontro como';
     }
     authErrorElement?.setAttribute('hidden', '');
     joinElement?.setAttribute('hidden', '');
     nameConfirmElement?.removeAttribute('hidden');
-    if (creatingAccount) passwordConfirmInput?.focus();
-    else nameSubmitButton?.focus();
+    nameSubmitButton?.focus();
   }).catch((error: unknown) => {
     showConnectionState({
       state: 'error',
@@ -1293,10 +2028,73 @@ const prepareAuthentication = (createRequested: boolean) => {
 
 joinForm?.addEventListener('submit', (event) => {
   event.preventDefault();
-  prepareAuthentication(false);
+  prepareAuthentication();
 });
 
-createAccessButton?.addEventListener('click', () => prepareAuthentication(true));
+createAccessButton?.addEventListener('click', () => {
+  createAccountError?.setAttribute('hidden', '');
+  if (createAccountName instanceof HTMLInputElement && nameInput instanceof HTMLInputElement) {
+    createAccountName.value = nameInput.value.trim().slice(0, 40);
+  }
+  if (createAccountPassword instanceof HTMLInputElement) createAccountPassword.value = '';
+  if (createAccountPasswordConfirm instanceof HTMLInputElement) createAccountPasswordConfirm.value = '';
+  joinElement?.setAttribute('hidden', '');
+  createAccountDialog?.removeAttribute('hidden');
+  createAccountName?.focus();
+});
+
+createAccountBack?.addEventListener('click', () => {
+  createAccountDialog?.setAttribute('hidden', '');
+  joinElement?.removeAttribute('hidden');
+  nameInput?.focus();
+});
+createAccountClose?.addEventListener('click', () => createAccountBack?.click());
+
+createAccountForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (
+    authenticating ||
+    !(createAccountName instanceof HTMLInputElement) ||
+    !(createAccountPassword instanceof HTMLInputElement) ||
+    !(createAccountPasswordConfirm instanceof HTMLInputElement)
+  ) return;
+  const username = createAccountName.value.trim().slice(0, 40);
+  const password = createAccountPassword.value;
+  if (!username || password.length < 3) return;
+  if (password !== createAccountPasswordConfirm.value) {
+    if (createAccountError) {
+      createAccountError.textContent = 'As senhas não coincidem.';
+      createAccountError.removeAttribute('hidden');
+    }
+    createAccountPasswordConfirm.focus();
+    return;
+  }
+  authenticating = true;
+  const submit = createAccountForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  createAccountError?.setAttribute('hidden', '');
+  void getAccountStatus(username).then(async (status) => {
+    if (status.exists) throw new Error('Este usuário já existe. Use Entrar.');
+    return connect(username, password, true);
+  }).then((result) => {
+    if (!result.ok) throw new Error(result.error ?? 'Não foi possível criar o acesso.');
+    if (nameInput instanceof HTMLInputElement) {
+      nameInput.value = username;
+      nameInput.readOnly = true;
+    }
+    createAccountDialog?.setAttribute('hidden', '');
+  }).catch((error: unknown) => {
+    if (createAccountError) {
+      createAccountError.textContent = error instanceof Error
+        ? error.message
+        : 'Não foi possível criar o acesso.';
+      createAccountError.removeAttribute('hidden');
+    }
+  }).finally(() => {
+    authenticating = false;
+    if (submit) submit.disabled = false;
+  });
+});
 
 nameBackButton?.addEventListener('click', () => {
   nameConfirmElement?.setAttribute('hidden', '');
@@ -1304,6 +2102,7 @@ nameBackButton?.addEventListener('click', () => {
   nameInput?.focus();
   authErrorElement?.setAttribute('hidden', '');
 });
+nameConfirmCloseButton?.addEventListener('click', () => nameBackButton?.click());
 
 nameSubmitButton?.addEventListener('click', () => {
   if (
@@ -1311,25 +2110,13 @@ nameSubmitButton?.addEventListener('click', () => {
     !(passwordInput instanceof HTMLInputElement) ||
     authenticating
   ) return;
-  if (
-    creatingAccount &&
-    (!(passwordConfirmInput instanceof HTMLInputElement) ||
-      passwordConfirmInput.value !== passwordInput.value)
-  ) {
-    if (authErrorElement) {
-      authErrorElement.textContent = 'As senhas não coincidem.';
-      authErrorElement.removeAttribute('hidden');
-    }
-    passwordConfirmInput?.focus();
-    return;
-  }
   authenticating = true;
   nameSubmitButton.setAttribute('disabled', '');
   const submit = joinForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (submit) submit.disabled = true;
   createAccessButton?.setAttribute('disabled', '');
   authErrorElement?.setAttribute('hidden', '');
-  void connect(nameInput.value, passwordInput.value, creatingAccount).then((result) => {
+  void connect(nameInput.value, passwordInput.value, false).then((result) => {
     if (!result.ok) {
       if (authErrorElement) {
         authErrorElement.textContent = result.error ?? 'Não foi possível entrar.';
@@ -1339,7 +2126,6 @@ nameSubmitButton?.addEventListener('click', () => {
     }
     nameInput.readOnly = true;
     passwordInput.value = '';
-    if (passwordConfirmInput instanceof HTMLInputElement) passwordConfirmInput.value = '';
     nameConfirmElement?.setAttribute('hidden', '');
   }).finally(() => {
     authenticating = false;
@@ -1351,20 +2137,21 @@ nameSubmitButton?.addEventListener('click', () => {
 
 api.subscribe((state) => {
   if (!changeNameButton) return;
-  const canChangeName = sessionReady && socket?.connected && !state.battleStarted;
+  const canChangeName = sessionReady && !state.battleStarted;
   changeNameButton.toggleAttribute('hidden', !canChangeName);
 });
 
+settingsButton?.addEventListener('click', () => {
+  document.dispatchEvent(new Event('bossbar:open-player-settings'));
+});
+
 changeNameButton?.addEventListener('click', () => {
-  leave();
-  sessionReady = false;
-  playerEncounterState = null;
-  characterHud?.setAttribute('hidden', '');
   toolsElement?.setAttribute('hidden', '');
   changeNameButton.setAttribute('hidden', '');
   pendingElement?.setAttribute('hidden', '');
   nameConfirmElement?.setAttribute('hidden', '');
   joinElement?.removeAttribute('hidden');
+  changeNameCloseButton?.removeAttribute('hidden');
   if (nameInput instanceof HTMLInputElement) {
     nameInput.readOnly = false;
     nameInput.select();
@@ -1380,15 +2167,31 @@ changeNameButton?.addEventListener('click', () => {
   if (statusElement) statusElement.dataset.visible = 'false';
 });
 
+changeNameCloseButton?.addEventListener('click', () => {
+  joinElement?.setAttribute('hidden', '');
+  nameConfirmElement?.setAttribute('hidden', '');
+  changeNameCloseButton.setAttribute('hidden', '');
+  toolsElement?.removeAttribute('hidden');
+  changeNameButton?.removeAttribute('hidden');
+  if (nameInput instanceof HTMLInputElement) {
+    nameInput.value = getPlayerToolsState().username ?? '';
+    nameInput.readOnly = true;
+  }
+  if (passwordInput instanceof HTMLInputElement) passwordInput.value = '';
+});
+
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!notesClearDialog?.hasAttribute('hidden')) notesClearCancelButton?.click();
   else if (!sheetRemoveDialog?.hasAttribute('hidden')) sheetRemoveCancelButton?.click();
+  else if (!sheetEditorDialog?.hasAttribute('hidden')) sheetEditorClose?.click();
   else if (!sheetDialog?.hasAttribute('hidden')) sheetCloseButton?.click();
+  else if (!createAccountDialog?.hasAttribute('hidden')) createAccountBack?.click();
   else if (!nameConfirmElement?.hasAttribute('hidden')) nameBackButton?.click();
 });
 
 window.addEventListener('beforeunload', () => {
+  if (sheetEditorDirty) persistSheetEditorDraft();
   if (hideStatusTimer) clearTimeout(hideStatusTimer);
   unmountPlayer?.();
   dispose();

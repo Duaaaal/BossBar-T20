@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
@@ -16,7 +16,10 @@ import { bundledAssetUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
-import type { PlayerProfileSummary } from './shared/character-sheet';
+import type {
+  PlayerProfileSummary,
+  PlayerSheetChangeRequest,
+} from './shared/character-sheet';
 import type {
   ConnectionQuality,
   HostedSessionState,
@@ -167,9 +170,19 @@ const MasterApp = () => {
     source: 'connected' | 'profile';
   } | null>(null);
   const [profileDeleteError, setProfileDeleteError] = useState('');
-  const [autosaveNoticeVisible, setAutosaveNoticeVisible] = useState(false);
+  const [sheetChangeCandidate, setSheetChangeCandidate] = useState<PlayerSheetChangeRequest | null>(null);
+  const [sheetChangeBusy, setSheetChangeBusy] = useState(false);
+  const [sheetChangeError, setSheetChangeError] = useState('');
+  const [masterNotifications, setMasterNotifications] = useState<Array<{
+    id: string;
+    message: string;
+    tone: 'normal' | 'serious';
+  }>>([]);
   const latestLibraryDraft = useRef<BossLibraryDraft | null>(null);
-  const autosaveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const masterNotificationTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+  const knownSheetChangeRequests = useRef(new Set<string>());
   const soundPreviewRef = useRef<HTMLAudioElement | null>(null);
   const soundCategoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const soundCategoryMenuRef = useRef<HTMLDivElement | null>(null);
@@ -177,6 +190,43 @@ const MasterApp = () => {
   const hostedSessionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+
+  const enqueueMasterNotification = useCallback((notification: {
+    id: string;
+    message: string;
+    tone?: 'normal' | 'serious';
+  }) => {
+    setMasterNotifications((current) => [
+      ...current.filter(({ id }) => id !== notification.id),
+      { ...notification, tone: notification.tone ?? 'normal' },
+    ]);
+    const previousTimer = masterNotificationTimers.current.get(notification.id);
+    if (previousTimer) clearTimeout(previousTimer);
+    const timer = setTimeout(() => {
+      masterNotificationTimers.current.delete(notification.id);
+      setMasterNotifications((current) =>
+        current.filter(({ id }) => id !== notification.id));
+    }, 5_000);
+    masterNotificationTimers.current.set(notification.id, timer);
+  }, []);
+
+  useEffect(() => () => {
+    masterNotificationTimers.current.forEach(clearTimeout);
+    masterNotificationTimers.current.clear();
+  }, []);
+
+  useEffect(() => {
+    const pending = hostedSession?.pendingSheetChangeRequests ?? [];
+    const currentIds = new Set(pending.map(({ id }) => id));
+    for (const request of pending) {
+      if (knownSheetChangeRequests.current.has(request.id)) continue;
+      enqueueMasterNotification({
+        id: `sheet-change:${request.id}`,
+        message: `${request.username} alterou a ficha. Revise os campos modificados.`,
+      });
+    }
+    knownSheetChangeRequests.current = currentIds;
+  }, [enqueueMasterNotification, hostedSession?.pendingSheetChangeRequests]);
 
   useLayoutEffect(() => {
     if (!soundCategoryMenuOpen) {
@@ -406,19 +456,16 @@ const MasterApp = () => {
           console.error(result.error ?? 'Falha no salvamento automático.');
           return;
         }
-        setAutosaveNoticeVisible(true);
-        if (autosaveNoticeTimer.current) clearTimeout(autosaveNoticeTimer.current);
-        autosaveNoticeTimer.current = setTimeout(() => {
-          autosaveNoticeTimer.current = null;
-          setAutosaveNoticeVisible(false);
-        }, 4000);
+        enqueueMasterNotification({
+          id: `autosave:${Date.now()}`,
+          message: 'Salvamento automático concluído',
+        });
       });
     }, 5 * 60 * 1000);
     return () => {
       clearInterval(timer);
-      if (autosaveNoticeTimer.current) clearTimeout(autosaveNoticeTimer.current);
     };
-  }, []);
+  }, [enqueueMasterNotification]);
 
   const saveEncounter = async (mode: BossLibrarySaveMode = 'prompt') => {
     const draft = latestLibraryDraft.current;
@@ -969,6 +1016,25 @@ const MasterApp = () => {
     showHostedSessionFeedback('Conta excluída.');
   };
 
+  const decideSheetChanges = async (approved: boolean) => {
+    if (!sheetChangeCandidate || sheetChangeBusy) return;
+    setSheetChangeBusy(true);
+    setSheetChangeError('');
+    const result = await window.bossAPI.decidePlayerSheetChanges(
+      sheetChangeCandidate.id,
+      approved,
+    );
+    setSheetChangeBusy(false);
+    if (!result.ok) {
+      setSheetChangeError(result.error ?? 'Não foi possível concluir a revisão.');
+      return;
+    }
+    setSheetChangeCandidate(null);
+    showHostedSessionFeedback(
+      approved ? 'Alterações da ficha aprovadas.' : 'Alterações da ficha recusadas.',
+    );
+  };
+
   if (!state) return <main className="master-loading">Conectando ao encontro...</main>;
 
   const unpreparedBosses = state.bosses.filter(
@@ -1025,10 +1091,35 @@ const MasterApp = () => {
       >
         {universalMuted ? '🔇' : '🔊'}
       </button>
-      {autosaveNoticeVisible && (
-        <button className="autosave-notification" type="button" onClick={() => setAutosaveNoticeVisible(false)}>
-          Salvamento automático concluído
-        </button>
+      {masterNotifications.length > 0 && (
+        <aside className="master-notification-stack" role="status" aria-live="polite">
+          {masterNotifications.map((notification) => (
+            <button
+              className={notification.tone === 'serious' ? 'is-serious' : ''}
+              type="button"
+              key={notification.id}
+              onClick={() => {
+                if (notification.id.startsWith('sheet-change:')) {
+                  const requestId = notification.id.slice('sheet-change:'.length);
+                  const request = hostedSession?.pendingSheetChangeRequests.find(
+                    ({ id }) => id === requestId,
+                  );
+                  if (request) {
+                    setSheetChangeCandidate(request);
+                    setSheetChangeError('');
+                  }
+                }
+                const timer = masterNotificationTimers.current.get(notification.id);
+                if (timer) clearTimeout(timer);
+                masterNotificationTimers.current.delete(notification.id);
+                setMasterNotifications((current) =>
+                  current.filter(({ id }) => id !== notification.id));
+              }}
+            >
+              {notification.message}
+            </button>
+          ))}
+        </aside>
       )}
 
       <header className="master-header">
@@ -1158,6 +1249,30 @@ const MasterApp = () => {
                       type="button"
                       onClick={() => void decideHostedPlayer(request.id, false)}
                     >Recusar</button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {hostedSession.pendingSheetChangeRequests.length > 0 && (
+            <div className="hosted-sheet-requests">
+              <div className="hosted-roster-heading">
+                <span>Alterações de ficha</span>
+                <small>Aguardando revisão</small>
+              </div>
+              <ol className="hosted-request-list">
+                {hostedSession.pendingSheetChangeRequests.map((request) => (
+                  <li className="hosted-request" key={request.id}>
+                    <span title={request.username}>{request.username}</span>
+                    <small>{request.changes.length} {request.changes.length === 1 ? 'campo' : 'campos'}</small>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSheetChangeCandidate(request);
+                        setSheetChangeError('');
+                      }}
+                    >Ver alterações</button>
                   </li>
                 ))}
               </ol>
@@ -1677,6 +1792,32 @@ const MasterApp = () => {
                 type="button"
                 onClick={() => void confirmProfileDelete()}
               >Excluir conta</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {sheetChangeCandidate && (
+        <div className="modal-backdrop">
+          <section className="confirmation-modal sheet-change-review-modal" role="dialog" aria-modal="true" aria-labelledby="sheet-change-review-title">
+            <p className="modal-eyebrow">Ficha de {sheetChangeCandidate.username}</p>
+            <h2 id="sheet-change-review-title">Revisar alterações</h2>
+            <p>{sheetChangeCandidate.fileName}</p>
+            <ol className="sheet-change-list">
+              {sheetChangeCandidate.changes.map((change) => (
+                <li key={change.field}>
+                  <strong title={change.field}>{change.field}</strong>
+                  <span title={change.before || 'vazio'}>{change.before || 'vazio'}</span>
+                  <i aria-hidden="true">→</i>
+                  <span title={change.after || 'vazio'}>{change.after || 'vazio'}</span>
+                </li>
+              ))}
+            </ol>
+            {sheetChangeError && <p className="master-error" role="alert">{sheetChangeError}</p>}
+            <div className="modal-actions">
+              <button className="modal-cancel-button" type="button" disabled={sheetChangeBusy} onClick={() => setSheetChangeCandidate(null)}>Fechar</button>
+              <button className="modal-confirm-button is-delete" type="button" disabled={sheetChangeBusy} onClick={() => void decideSheetChanges(false)}>Recusar</button>
+              <button className="modal-confirm-button" type="button" disabled={sheetChangeBusy} onClick={() => void decideSheetChanges(true)}>Aprovar</button>
             </div>
           </section>
         </div>

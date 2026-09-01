@@ -127,6 +127,7 @@ import type {
 import {
   advanceEncounterTurns,
   beginEncounterTurns,
+  encounterRollSoundKind,
   emptyEncounterTurnState,
   isAreaDamageRequest,
   isDirectPlayerDamageRequest,
@@ -521,7 +522,7 @@ const captureAppUndoSnapshot = (): AppUndoSnapshot => structuredClone({
 });
 
 const rememberAppChange = (
-  snapshot = captureAppUndoSnapshot(),
+  snapshot?: AppUndoSnapshot,
   coalesceKey?: string,
 ) => {
   const recordedAt = Date.now();
@@ -530,7 +531,10 @@ const rememberAppChange = (
     lastAppUndoKey === coalesceKey &&
     recordedAt - lastAppUndoRecordedAt <= 600
   ) return;
-  appUndoHistory.push(snapshot);
+  // Capture lazily: range inputs can emit dozens of changes inside the
+  // coalescing window, and cloning the entire encounter before this guard
+  // defeats the purpose of coalescing them into one undo entry.
+  appUndoHistory.push(snapshot ?? captureAppUndoSnapshot());
   if (appUndoHistory.length > MAX_APP_UNDO_HISTORY) appUndoHistory.shift();
   lastAppUndoKey = coalesceKey ?? null;
   lastAppUndoRecordedAt = recordedAt;
@@ -1104,6 +1108,7 @@ const getHostedSessionState = (): HostedSessionState => {
       players: [],
       pendingJoinRequests: [],
       pendingActionPointRequests: [],
+      pendingSheetChangeRequests: [],
       error: null,
     };
   }
@@ -1123,6 +1128,7 @@ const getHostedSessionState = (): HostedSessionState => {
     players: presence.players.map((player) => ({ ...player })),
     pendingJoinRequests: server.getPendingJoinRequests(),
     pendingActionPointRequests: server.getPendingActionPointRequests(),
+    pendingSheetChangeRequests: server.getPendingSheetChangeRequests(),
     error: hostedSessionError,
   };
 };
@@ -1218,6 +1224,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
       },
       onJoinRequestsChanged: () => broadcastHostedSessionState(),
       onActionPointRequestsChanged: () => broadcastHostedSessionState(),
+      onSheetChangeRequestsChanged: () => broadcastHostedSessionState(),
       onPlayerHudsChanged: (huds) => {
         playerHudState = huds;
         broadcastPlayerHuds();
@@ -2440,7 +2447,7 @@ const findMissingLibraryFiles = async (
 
 const broadcastMusicState = () => {
   const nextState = getMusicState();
-  for (const window of [masterWindow, playerWindow]) {
+  for (const window of [masterWindow, playerWindow, controlWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('music:state-changed', nextState);
     }
@@ -2630,6 +2637,28 @@ const restoreMusicDuck = () => {
   publishMusicDuck(event);
 };
 
+const beginTransientMusicDuck = (
+  durationMs: number,
+  soundEffect: EncounterSoundEffect | null = null,
+) => {
+  if (activeMusicDuckId !== null) return false;
+  const event: MusicDuckEvent = {
+    id: ++musicDuckSequence,
+    phase: 'duck',
+    duration: 160,
+    targetVolume: 0.12,
+    soundEffect,
+  };
+  activeMusicDuckId = event.id;
+  publishMusicDuck(event);
+  if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
+  musicDuckRestoreTimer = setTimeout(() => {
+    musicDuckRestoreTimer = null;
+    restoreMusicDuck();
+  }, Math.max(650, Math.min(8_000, Math.ceil(durationMs) + 120)));
+  return true;
+};
+
 const sendSoundboardStop = (stop: SoundboardStop) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('soundboard:stop', stop);
@@ -2699,30 +2728,19 @@ const prepareEncounterMechanicSound = (effect: HealthEffect) =>
   prepareEncounterSound(getEncounterSoundEffectKind(effect));
 
 const publishDiceRollSound = (result?: EncounterRollResult) => {
-  // Attack damage is revealed with the impact SFX. A second dice sound here
-  // would mask the weapon hit; status checks continue to use their own rolls.
-  if (result?.category === 'damage') return;
-  // Boss critical attacks use the dedicated threat cue so the enemy-success
-  // SFX starts atomically with the three-second presentation on every client.
-  if (
-    result?.category === 'attack' &&
-    result.critical === true &&
-    result.participantId.startsWith('boss:')
-  ) return;
-  // Initiative has no automatic success/failure, even when its d20 is 1 or 20.
-  const natural = result?.category === 'initiative' ? null : result?.natural ?? (result
-    ? getEncounterRollNatural(result.expression, result.rolls, result.rollMode)
-    : null);
-  const soundKind: EncounterSoundEffectKind = natural === 1
-    ? 'natural-failure'
-    : natural === 20
-      ? result?.participantId.startsWith('boss:')
-        ? 'natural-success-enemy'
-        : 'natural-success-player'
-      : 'dice-roll';
+  const soundKind = encounterRollSoundKind(result);
+  if (!soundKind) return;
   const prepared = prepareEncounterSound(soundKind);
   if (!prepared) return;
-  sendEncounterEffect(prepared.encounterEffect);
+  const shouldDuckMusic = soundKind === 'natural-failure' ||
+    soundKind === 'natural-success-player' ||
+    soundKind === 'natural-success-enemy';
+  if (
+    !shouldDuckMusic ||
+    !beginTransientMusicDuck(prepared.durationMs, prepared.encounterEffect)
+  ) {
+    sendEncounterEffect(prepared.encounterEffect);
+  }
 };
 
 const stopSoundboardPlayback = (index?: number) => {
@@ -6084,6 +6102,25 @@ ipcMain.handle('multiplayer:open-player-sheet', async (event, playerId: unknown)
 });
 
 ipcMain.handle(
+  'multiplayer:decide-sheet-changes',
+  async (event, requestId: unknown, approved: unknown) => {
+    if (
+      !isMasterSender(event.sender.id) ||
+      !isValidJoinRequestId(requestId) ||
+      typeof approved !== 'boolean'
+    ) {
+      return { ok: false, error: 'Ação não autorizada.' };
+    }
+    const result = await hostedSessionServer?.decideCharacterSheetChanges(
+      requestId,
+      approved,
+    ) ?? { ok: false, error: 'Não há uma sala hospedada.' };
+    broadcastHostedSessionState();
+    return result;
+  },
+);
+
+ipcMain.handle(
   'multiplayer:reset-player-password',
   async (
     event,
@@ -7763,6 +7800,9 @@ const applyHealthMutation = (
       shieldTo: nextBoss.shield,
     };
     const preparedSound = prepareEncounterMechanicSound(effect);
+    if (preparedSound && effect.intensity === 'critical') {
+      beginTransientMusicDuck(preparedSound.durationMs);
+    }
     if (playerWindow && !playerWindow.isDestroyed()) {
       enqueueLocalCombatImpact(
         battleState,
@@ -7919,6 +7959,42 @@ ipcMain.handle(
       };
     }
     return await hostedSessionServer.applyDirectPlayerDamage(request);
+  },
+);
+
+ipcMain.handle(
+  'player-combat:resolve-direct-damage',
+  async (
+    event,
+    pendingDamageId: unknown,
+  ): Promise<PlayerTargetActionResult> => {
+    if (!isEncounterControllerSender(event.sender.id)) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Ação não autorizada.',
+      };
+    }
+    if (
+      typeof pendingDamageId !== 'string' ||
+      pendingDamageId.length < 8 ||
+      pendingDamageId.length > 128 ||
+      !/^[A-Za-z0-9:_-]+$/.test(pendingDamageId) ||
+      !hostedSessionServer
+    ) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: hostedSessionServer
+          ? 'Rolagem de dano pendente inválida.'
+          : 'Não há uma sessão multiplayer hospedada.',
+      };
+    }
+    return await hostedSessionServer.resolvePendingDirectPlayerDamage(
+      pendingDamageId,
+    );
   },
 );
 
@@ -8185,6 +8261,20 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     pendingHealthTimers.forEach(clearTimeout);
     pendingHealthTimers.clear();
     clearPendingLocalCombatImpacts();
+    if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
+    musicDuckRestoreTimer = null;
+    activeMusicDuckId = null;
+    musicTracks.splice(0, musicTracks.length);
+    musicState = {
+      ...musicState,
+      currentTrackId: null,
+      isPlaying: false,
+      loop: false,
+      playbackVersion: musicState.playbackVersion + 1,
+      revision: musicState.revision + 1,
+    };
+    musicPlaybackState = { trackId: null, currentTime: 0, duration: 0 };
+    broadcastMusicState();
     activeBackgroundFilePath = null;
     configuredBackgroundFilePath = null;
     configuredBackgroundName = null;

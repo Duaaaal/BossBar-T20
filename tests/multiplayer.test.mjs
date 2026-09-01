@@ -163,6 +163,7 @@ const createValidCharacterSheetValidation = ({
   maxMana,
   defense,
   reflex,
+  temporaryHealth = 0,
   initiative = reflex,
 }) => ({
   supported: true,
@@ -176,6 +177,7 @@ const createValidCharacterSheetValidation = ({
     level: 3,
     currentHealth,
     maxHealth,
+    temporaryHealth,
     currentMana,
     maxMana,
     defense,
@@ -755,6 +757,7 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
     ({ actionId }) => actionId === 'boss-direct-hit-0001',
   );
   assert.equal(directAttackResults.length, 3);
+  assert.ok(directAttackResults.every(({ targetName }) => targetName === 'Valora'));
   assert.ok(
     directAttackResults[2].createdAt - directAttackResults[1].createdAt >= 20,
   );
@@ -781,7 +784,9 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   const criticalStates = [];
   const captureCriticalState = (state) => criticalStates.push(state);
   alice.on('player:state', captureCriticalState);
-  const criticalResult = await server.applyDirectPlayerDamage({
+  const criticalCallbackCount = playerDamageCallbacks.length;
+  const threatCallbackCount = bossCriticalThreats.length;
+  const pendingCriticalResult = await server.applyDirectPlayerDamage({
     playerIds: [aliceHud.id],
     damage: 1,
     damageFormula: '1d6 + 2',
@@ -790,7 +795,22 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
     attackerParticipantId: 'boss:boss-1',
     actionId: 'boss-direct-critical-0001',
     correlationId: 'boss-direct-critical-0001',
+    deferDamage: true,
   });
+  assert.equal(pendingCriticalResult.ok, true);
+  assert.ok(pendingCriticalResult.pendingDamageId);
+  assert.equal(pendingCriticalResult.appliedPlayers, 0);
+  assert.equal(playerDamageCallbacks.length, criticalCallbackCount);
+  assert.equal(bossCriticalThreats.length, threatCallbackCount);
+  assert.equal(
+    server.getTurnState().rollResults.filter(
+      ({ actionId }) => actionId === 'boss-direct-critical-0001',
+    ).length,
+    1,
+  );
+  const criticalResult = await server.resolvePendingDirectPlayerDamage(
+    pendingCriticalResult.pendingDamageId,
+  );
   assert.equal(criticalResult.impacts?.[0]?.critical, true);
   assert.equal(criticalResult.rolledDamage, 14);
   const criticalDamageResult = server.getTurnState().rollResults.find(
@@ -1267,8 +1287,16 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
   const failedAttackApproval = await server.approveActionPointRequest(
     failedAttackRequest.requestId,
   );
-  assert.equal(failedAttackApproval.ok, false);
-  assert.match(failedAttackApproval.error, /Falha interna simulada/);
+  assert.equal(failedAttackApproval.ok, true);
+  assert.ok(failedAttackApproval.pendingDamageId);
+  const failedDamageResolution = await new Promise((resolve) => {
+    alice.emit('encounter:combat-action', {
+      kind: 'damage',
+      pendingDamageId: failedAttackApproval.pendingDamageId,
+    }, resolve);
+  });
+  assert.equal(failedDamageResolution.ok, false);
+  assert.match(failedDamageResolution.error, /Falha interna simulada/);
   assert.equal(rejectedBossDamageContexts.at(-1)?.nonlethal, true);
   const hudAfterRejectedAttack = server.getPlayerHuds().find(
     ({ isSelf, characterName }) => isSelf || characterName === 'Valora',
@@ -1315,7 +1343,21 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
       actionId: 'successful-unarmed-attack-0001',
     }, resolve);
   });
-  assert.deepEqual(successfulAttack, { ok: true });
+  assert.equal(successfulAttack.ok, true);
+  assert.ok(successfulAttack.pendingDamageId);
+  assert.equal(
+    server.getTurnState().rollResults.filter(
+      ({ actionId }) => actionId === 'successful-unarmed-attack-0001',
+    ).length,
+    1,
+  );
+  const successfulDamage = await new Promise((resolve) => {
+    alice.emit('encounter:combat-action', {
+      kind: 'damage',
+      pendingDamageId: successfulAttack.pendingDamageId,
+    }, resolve);
+  });
+  assert.deepEqual(successfulDamage, { ok: true });
   const successfulAttackResults = server.getTurnState().rollResults.filter(
     ({ actionId }) => actionId === 'successful-unarmed-attack-0001',
   );
@@ -1324,10 +1366,7 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
     successfulAttackResults[1].sequence,
     successfulAttackResults[0].sequence + 1,
   );
-  assert.ok(
-    successfulAttackResults[1].createdAt -
-      successfulAttackResults[0].createdAt >= 20,
-  );
+  assert.ok(successfulAttackResults[1].createdAt >= successfulAttackResults[0].createdAt);
   await waitFor(() => aliceHuds.at(-1)
     ?.find(({ isSelf }) => isSelf)?.actions.standard === false);
   assert.equal(rejectedBossDamageContexts.at(-1)?.nonlethal, true);

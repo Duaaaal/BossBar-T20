@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
+  BOSS_CRITICAL_DUCK_FADE_MS,
   BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
   BOSS_CRITICAL_THREAT_DURATION_MS,
   type BackgroundState,
@@ -49,7 +50,14 @@ import {
   type PlayerResourceNotice,
 } from './shared/player-combat';
 import { bundledAssetUrl, statusIconUrl } from './shared/bundled-assets';
+import {
+  clientSoundCategoryEnabled,
+  type ClientPresentationPreferences,
+  loadClientPresentationPreferences,
+  saveClientPresentationPreferences,
+} from './shared/client-presentation-preferences';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
+import { playerHudCombatValues } from './shared/player-hud-values';
 import { installUndoShortcut } from './shared/undo-shortcut';
 import {
   type ActiveBossStatus,
@@ -69,6 +77,26 @@ import './scrollbars.css';
 
 installDisabledControlTooltips();
 installUndoShortcut(() => window.bossAPI.undoLastChange());
+
+const PLAYER_NOTICE_EVENT = 'bossbar:player-notice';
+const announcePlayerNotice = (
+  message: string,
+  tone: PlayerResourceNotice['tone'] = 'info',
+  persistent = false,
+) => {
+  if (!message) return;
+  document.dispatchEvent(new CustomEvent<PlayerResourceNotice>(
+    PLAYER_NOTICE_EVENT,
+    {
+      detail: {
+        id: `local:${crypto.randomUUID()}`,
+        message,
+        tone,
+        persistent,
+      },
+    },
+  ));
+};
 
 const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
@@ -97,7 +125,10 @@ const stopPlayerCriticalThreatScreen = () => {
   playerCriticalThreatFallback = null;
 };
 
-const playPlayerCriticalThreatScreen = (targetPlayerIds: string[] = []) => {
+const playPlayerCriticalThreatScreen = (
+  targetPlayerIds: string[] = [],
+  visuals: Pick<EncounterVisualEffectSettings, 'screenShake' | 'damageEffect' | 'healthBarShake'>,
+) => {
   stopPlayerCriticalThreatScreen();
   const stage = document.querySelector<HTMLElement>('.player-stage');
   const flash = document.querySelector<HTMLElement>('.critical-screen-flash');
@@ -106,7 +137,7 @@ const playPlayerCriticalThreatScreen = (targetPlayerIds: string[] = []) => {
     easing: 'linear',
     fill: 'forwards',
   };
-  if (stage) {
+  if (stage && visuals.screenShake) {
     activePlayerCriticalThreatAnimations.push(stage.animate(
       escalatingCriticalShakeKeyframes({
         maximumX: 38,
@@ -117,7 +148,7 @@ const playPlayerCriticalThreatScreen = (targetPlayerIds: string[] = []) => {
       timing,
     ));
   }
-  if (flash) {
+  if (flash && visuals.damageEffect) {
     activePlayerCriticalThreatAnimations.push(
       flash.animate(criticalThreatRedKeyframes(), timing),
     );
@@ -138,6 +169,7 @@ const playPlayerCriticalThreatScreen = (targetPlayerIds: string[] = []) => {
     } satisfies Keyframe;
   });
   targetedPlayerCards(targetPlayerIds).forEach((card) => {
+    if (!visuals.healthBarShake) return;
     activePlayerCriticalThreatAnimations.push(card.animate(cardFrames, timing));
   });
   playerCriticalThreatFallback = setTimeout(
@@ -149,6 +181,7 @@ const playPlayerCriticalThreatScreen = (targetPlayerIds: string[] = []) => {
 const playPlayerCriticalImpactScreen = (
   targetPlayerIds: string[] = [],
   requestedDuration = BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
+  visuals: Pick<EncounterVisualEffectSettings, 'screenShake' | 'damageEffect' | 'healthBarShake'>,
 ) => {
   stopPlayerCriticalThreatScreen();
   const duration = Math.max(
@@ -157,7 +190,7 @@ const playPlayerCriticalImpactScreen = (
   );
   const stage = document.querySelector<HTMLElement>('.player-stage');
   const flash = document.querySelector<HTMLElement>('.critical-screen-flash');
-  stage?.animate(
+  if (visuals.screenShake) stage?.animate(
     [
       { transform: 'translate3d(-18px, 11px, 0) scale(1.04) rotate(-.72deg)' },
       { transform: 'translate3d(15px, -9px, 0) scale(1.026) rotate(.54deg)', offset: .1 },
@@ -171,7 +204,7 @@ const playPlayerCriticalImpactScreen = (
       easing: 'cubic-bezier(.16,.84,.24,1)',
     },
   );
-  flash?.animate(
+  if (visuals.damageEffect) flash?.animate(
     [
       { opacity: .98 },
       { opacity: 1, offset: .08 },
@@ -181,6 +214,7 @@ const playPlayerCriticalImpactScreen = (
     { duration, easing: 'ease-out' },
   );
   targetedPlayerCards(targetPlayerIds).forEach((card) => {
+    if (!visuals.healthBarShake) return;
     card.animate(
       [
         { transform: 'translate3d(0, 0, 0) scale(1)', filter: 'none' },
@@ -844,7 +878,13 @@ const AnimatedHealthBar = ({
 
 };
 
-const MusicPlayer = ({ battle }: { battle: BattleState }) => {
+const MusicPlayer = ({
+  battle,
+  clientPreferences,
+}: {
+  battle: BattleState;
+  clientPreferences: ClientPresentationPreferences;
+}) => {
   const [music, setMusic] = useState<MusicState | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -1048,7 +1088,9 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     if (!audio || !currentTrack) return;
     if (music?.isPlaying) {
       stopFade();
-      if (!ducking.current) setOutputGain(music.volume);
+      if (!ducking.current) {
+        setOutputGain(music.volume * clientPreferences.musicVolume);
+      }
       void audio.play().catch((): void => {});
     }
     else audio.pause();
@@ -1059,12 +1101,13 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   }, [outputMuted, setOutputMuted]);
 
   useEffect(() => {
-    musicVolumeRef.current = music?.volume ?? 0.8;
+    musicVolumeRef.current =
+      (music?.volume ?? 0.8) * clientPreferences.musicVolume;
     const audio = audioRef.current;
     if (audio && gainNodeRef.current && !fading.current && !ducking.current) {
-      setOutputGain(music?.volume ?? 0.8);
+      setOutputGain((music?.volume ?? 0.8) * clientPreferences.musicVolume);
     }
-  }, [music?.volume, setOutputGain]);
+  }, [clientPreferences.musicVolume, music?.volume, setOutputGain]);
 
   useEffect(
     () => window.bossAPI.subscribeMusicFadeOut(fadeOut),
@@ -1118,9 +1161,9 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
     ) return;
 
     stopFade();
-    setOutputGain(music.volume);
+    setOutputGain(music.volume * clientPreferences.musicVolume);
     void audio.play().catch((): void => {});
-  }, [allDefeated, battle.battleStarted, music?.isPlaying, music?.volume, setOutputGain, stopFade]);
+  }, [allDefeated, battle.battleStarted, clientPreferences.musicVolume, music?.isPlaying, music?.volume, setOutputGain, stopFade]);
 
   useEffect(() => () => {
     stopFade();
@@ -1150,7 +1193,11 @@ const MusicPlayer = ({ battle }: { battle: BattleState }) => {
   );
 };
 
-const SoundboardPlayer = () => {
+const SoundboardPlayer = ({
+  clientPreferences,
+}: {
+  clientPreferences: ClientPresentationPreferences;
+}) => {
   const [soundboard, setSoundboard] = useState<SoundboardState | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
@@ -1223,10 +1270,10 @@ const SoundboardPlayer = () => {
     gain.gain.setValueAtTime(
       soundboard.muted || soundboard.universalMuted
         ? 0
-        : volumeToGain(soundboard.volume),
+        : volumeToGain(soundboard.volume * clientPreferences.soundboardVolume),
       context.currentTime,
     );
-  }, [soundboard?.loop, soundboard?.muted, soundboard?.universalMuted, soundboard?.volume]);
+  }, [clientPreferences.soundboardVolume, soundboard?.loop, soundboard?.muted, soundboard?.universalMuted, soundboard?.volume]);
 
   useEffect(() => {
     const unsubscribe = window.bossAPI.subscribeSoundEffect((effect) => {
@@ -1236,7 +1283,7 @@ const SoundboardPlayer = () => {
       graph.gain.gain.setValueAtTime(
         audioSettings.muted || audioSettings.universalMuted
           ? 0
-          : volumeToGain(audioSettings.volume),
+          : volumeToGain(audioSettings.volume * clientPreferences.soundboardVolume),
         graph.context.currentTime,
       );
       const audio = new Audio();
@@ -1295,12 +1342,16 @@ const SoundboardPlayer = () => {
       audioContextRef.current = null;
       masterGainRef.current = null;
     };
-  }, [ensureAudioGraph]);
+  }, [clientPreferences.soundboardVolume, ensureAudioGraph]);
 
   return null;
 };
 
-const EncounterEffectsPlayer = () => {
+const EncounterEffectsPlayer = ({
+  clientPreferences,
+}: {
+  clientPreferences: ClientPresentationPreferences;
+}) => {
   const [settings, setSettings] = useState<EncounterEffectsState | null>(null);
   const settingsRef = useRef<EncounterEffectsState>(
     initialEncounterEffectsState,
@@ -1339,7 +1390,10 @@ const EncounterEffectsPlayer = () => {
     const updateSettings = (state: EncounterEffectsState) => {
       settingsRef.current = state;
       for (const activeSound of [...activeSounds.current.values()]) {
-        if (!isEncounterSoundEnabled(state, activeSound.kind)) {
+        if (
+          !isEncounterSoundEnabled(state, activeSound.kind) ||
+          !clientSoundCategoryEnabled(clientPreferences, activeSound.kind)
+        ) {
           activeSound.release();
         }
       }
@@ -1351,21 +1405,26 @@ const EncounterEffectsPlayer = () => {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [clientPreferences]);
 
   useEffect(() => {
     const context = audioContextRef.current;
     const gain = masterGainRef.current;
     if (!settings || !context || !gain) return;
     gain.gain.setValueAtTime(
-      settings.universalMuted ? 0 : volumeToGain(settings.volume),
+      settings.universalMuted
+        ? 0
+        : volumeToGain(settings.volume * clientPreferences.effectsVolume),
       context.currentTime,
     );
-  }, [settings?.universalMuted, settings?.volume]);
+  }, [clientPreferences.effectsVolume, settings?.universalMuted, settings?.volume]);
 
   useEffect(() => {
     const playEffect = (effect: EncounterSoundEffect) => {
-      if (!isEncounterSoundEnabled(settingsRef.current, effect.kind)) {
+      if (
+        !isEncounterSoundEnabled(settingsRef.current, effect.kind) ||
+        !clientSoundCategoryEnabled(clientPreferences, effect.kind)
+      ) {
         window.bossAPI.encounterEffectStarted(effect.id);
         window.bossAPI.encounterEffectFinished(effect.id);
         return;
@@ -1380,7 +1439,7 @@ const EncounterEffectsPlayer = () => {
       graph.gain.gain.setValueAtTime(
         currentSettings.universalMuted
           ? 0
-          : volumeToGain(currentSettings.volume),
+          : volumeToGain(currentSettings.volume * clientPreferences.effectsVolume),
         graph.context.currentTime,
       );
 
@@ -1440,7 +1499,7 @@ const EncounterEffectsPlayer = () => {
       audioContextRef.current = null;
       masterGainRef.current = null;
     };
-  }, [ensureAudioGraph]);
+  }, [clientPreferences, ensureAudioGraph]);
 
   return null;
 };
@@ -1453,6 +1512,14 @@ const formatRollResultDice = (result: EncounterRollResult) => {
     return `1d20(${originalRoll} → ${replacementRoll})`;
   }
   return formatEncounterDiceRolls(result.expression, result.rolls);
+};
+
+const highlightRelatedRolls = (relationId: string, highlighted: boolean) => {
+  document.querySelectorAll<HTMLElement>('[data-relation-id]').forEach((element) => {
+    if (element.dataset.relationId === relationId) {
+      element.classList.toggle('is-related-highlight', highlighted);
+    }
+  });
 };
 
 const RollResultStack = ({
@@ -1564,6 +1631,11 @@ const RollResultStack = ({
             }`}
             data-relation-id={relationId}
             data-roll-id={result.id}
+            onMouseEnter={() => relationId && highlightRelatedRolls(relationId, true)}
+            onMouseLeave={() => relationId && highlightRelatedRolls(relationId, false)}
+            onFocus={() => relationId && highlightRelatedRolls(relationId, true)}
+            onBlur={() => relationId && highlightRelatedRolls(relationId, false)}
+            tabIndex={relationId ? 0 : undefined}
             key={result.id}
           >
             {Number.isInteger(result.sequence) && (
@@ -1577,17 +1649,17 @@ const RollResultStack = ({
             {relationId && (
               <span
                 className="encounter-roll-relation"
-                aria-label="Teste relacionado"
-                data-app-tooltip="Teste relacionado"
+                aria-label="Testes interligados"
               >
-                ↔
+                🔗
               </span>
             )}
             <strong>
               {result.label}
               {result.critical && result.category === 'damage' && result.criticalMultiplier
                 ? ` x${result.criticalMultiplier}`
-                : ''}
+              : ''}
+              {result.targetName ? ` → ${result.targetName}` : ''}
               :
             </strong>
             {result.visibility === 'hidden' || result.visibility === 'dice-only' ? (
@@ -1664,6 +1736,21 @@ const playerBarPercent = (current: number | null, maximum: number | null) =>
     ? 0
     : Math.max(0, Math.min(100, (current / maximum) * 100));
 
+const temporaryHealthExcessPercent = (player: PlayerHudState) => {
+  if (
+    player.currentHealth === null ||
+    player.maxHealth === null ||
+    player.temporaryHealth === null ||
+    player.temporaryHealth === undefined ||
+    player.maxHealth <= 0
+  ) return 0;
+  const excess = Math.max(
+    0,
+    player.currentHealth + player.temporaryHealth - player.maxHealth,
+  );
+  return Math.max(0, Math.min(100, (excess / player.maxHealth) * 100));
+};
+
 const actionPointTooltip = (uses: number, unavailableThisTurn = false) =>
   `Ponto de Ação — melhora ou repete uma jogada com aprovação · ${uses}/5 usos restantes${
     unavailableThisTurn ? ' · disponível no seu turno' : ''
@@ -1685,9 +1772,9 @@ const PlayerHudCard = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const summary = player.summary;
-
-  const naturalMeleeDefense = summary?.defenses.melee ?? summary?.defense ?? null;
-  const naturalRangedDefense = summary?.defenses.ranged ?? summary?.defense ?? null;
+  const combatValues = playerHudCombatValues(player);
+  const naturalMeleeDefense = combatValues.naturalDefenseMelee;
+  const naturalRangedDefense = combatValues.naturalDefenseRanged;
   const defenseTone = (current: number | null, natural: number | null) =>
     current === null || natural === null || current === natural
       ? ''
@@ -1716,7 +1803,32 @@ const PlayerHudCard = ({
         })}
       </div>
       <header>
-        <strong title={player.characterName}>{player.characterName}</strong>
+        <div className="party-player-heading">
+          <strong title={player.characterName}>{player.characterName}</strong>
+          <div className="party-player-actions" aria-label="Ações disponíveis">
+            <span
+              className={player.actions.free ? 'is-ready' : ''}
+              data-app-tooltip={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
+              aria-label={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
+              role="img"
+              tabIndex={0}
+            />
+            <span
+              className={player.actions.movement ? 'is-ready' : ''}
+              data-app-tooltip={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
+              aria-label={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
+              role="img"
+              tabIndex={0}
+            />
+            <span
+              className={player.actions.standard ? 'is-ready' : ''}
+              data-app-tooltip={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
+              aria-label={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
+              role="img"
+              tabIndex={0}
+            />
+          </div>
+        </div>
         <button
           type="button"
           disabled={player.redacted}
@@ -1731,12 +1843,20 @@ const PlayerHudCard = ({
       <div className="party-player-bars">
         <div className="party-player-bar is-health">
           <span
+            className="is-current"
             style={{
               width: player.redacted
                 ? '100%'
                 : `${playerBarPercent(player.currentHealth, player.maxHealth)}%`,
             }}
           />
+          {!player.redacted && temporaryHealthExcessPercent(player) > 0 && (
+            <span
+              className="is-temporary"
+              style={{ width: `${temporaryHealthExcessPercent(player)}%` }}
+              data-app-tooltip={`PV temporários: ${player.temporaryHealth ?? 0}`}
+            />
+          )}
           <output>
             {player.redacted
               ? '???'
@@ -1758,16 +1878,23 @@ const PlayerHudCard = ({
           </output>
         </div>
       </div>
-      <div className="party-player-defense">
-        <strong>Defesa:</strong>
-        <span className={defenseTone(player.defenseMelee, naturalMeleeDefense)}>
-          <img src={bundledAssetUrl('ui/defense-melee.png')} alt="Corpo a corpo" />
-          {player.redacted ? '???' : player.defenseMelee ?? '—'}
+      <div className="party-player-combat-values">
+        <span className={defenseTone(combatValues.melee, combatValues.naturalMelee)} data-app-tooltip="Luta">
+          <img src={bundledAssetUrl('ui/corpo-a-corpo.png')} alt="Luta" />
+          {player.redacted ? '???' : combatValues.melee ?? '—'}
         </span>
-        <span className="party-player-defense-divider" aria-hidden="true">/</span>
-        <span className={defenseTone(player.defenseRanged, naturalRangedDefense)}>
-          <img src={bundledAssetUrl('ui/defense-ranged.png')} alt="À distância" />
-          {player.redacted ? '???' : player.defenseRanged ?? '—'}
+        <span className={defenseTone(combatValues.ranged, combatValues.naturalRanged)} data-app-tooltip="Pontaria">
+          <img src={bundledAssetUrl('ui/a-distancia.png')} alt="Pontaria" />
+          {player.redacted ? '???' : combatValues.ranged ?? '—'}
+        </span>
+        <span
+          className="party-player-defense-combined"
+          data-app-tooltip={`Defesa corpo a corpo ${player.redacted ? '???' : combatValues.defenseMelee ?? '—'} / à distância ${player.redacted ? '???' : combatValues.defenseRanged ?? '—'}`}
+        >
+          <img src={bundledAssetUrl('shield-icon.png')} alt="Defesa" />
+          <b className={defenseTone(combatValues.defenseMelee, naturalMeleeDefense)}>{player.redacted ? '???' : combatValues.defenseMelee ?? '—'}</b>
+          <i aria-hidden="true">/</i>
+          <b className={defenseTone(combatValues.defenseRanged, naturalRangedDefense)}>{player.redacted ? '???' : combatValues.defenseRanged ?? '—'}</b>
         </span>
       </div>
       {(player.dead || (player.currentHealth !== null && player.currentHealth <= 0)) && (
@@ -1777,46 +1904,12 @@ const PlayerHudCard = ({
             : player.stabilized ? 'Inconsciente · estável' : 'Inconsciente · sangrando'}
         </small>
       )}
-      <div className="party-player-actions" aria-label="Ações disponíveis">
-        <span
-          className={player.actions.free ? 'is-ready' : ''}
-          data-app-tooltip={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
-          aria-label={`Ação livre ${player.actions.free ? 'disponível' : 'não disponível'}`}
-          role="img"
-          tabIndex={0}
-        />
-        <span
-          className={player.actions.movement ? 'is-ready' : ''}
-          data-app-tooltip={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
-          aria-label={`Ação de movimento ${player.actions.movement ? 'disponível' : 'não disponível'}`}
-          role="img"
-          tabIndex={0}
-        />
-        <span
-          className={player.actions.standard ? 'is-ready' : ''}
-          data-app-tooltip={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
-          aria-label={`Ação padrão ${player.actions.standard ? 'disponível' : 'não disponível'}`}
-          role="img"
-          tabIndex={0}
-        />
-      </div>
       {expanded && summary && !player.redacted && (
         <section className="party-player-details">
           <p className="party-player-details-summary">
             <span>{summary.characterClass || 'Classe não informada'} · Nível {summary.level ?? '—'}</span>
             <span>PV <b>{player.currentHealth ?? '—'}/{player.maxHealth ?? '—'}</b></span>
             <span>PM <b>{player.currentMana ?? '—'}/{player.maxMana ?? '—'}</b></span>
-            <span className="is-defense-summary">
-              Defesa
-              <img src={bundledAssetUrl('ui/defense-melee.png')} alt="Corpo a corpo" />
-              <b className={defenseTone(player.defenseMelee, naturalMeleeDefense)}>
-                {player.defenseMelee ?? '—'}
-              </b>/
-              <img src={bundledAssetUrl('ui/defense-ranged.png')} alt="À distância" />
-              <b className={defenseTone(player.defenseRanged, naturalRangedDefense)}>
-                {player.defenseRanged ?? '—'}
-              </b>
-            </span>
           </p>
           <strong>Atributos</strong>
           <div>
@@ -1890,12 +1983,25 @@ const PartyHud = ({
   );
 };
 
-const EncounterTurnHud = ({ turn }: { turn: EncounterTurnState }) => {
+const EncounterTurnHud = ({
+  turn,
+  players,
+}: {
+  turn: EncounterTurnState;
+  players: PlayerHudState[];
+}) => {
   const active = turn.participants.find(
     ({ id }) => id === turn.activeParticipantId,
   );
   const canEndOwnTurn = Boolean(
     window.__BOSS_WEB_PLAYER__ && active?.kind === 'player' && active.isSelf,
+  );
+  const self = players.find(({ isSelf }) => isSelf);
+  const sheetLocked = Boolean(
+    self?.sheetInteractionState && self.sheetInteractionState !== 'idle',
+  );
+  const allActionsUsed = Boolean(
+    self && !self.actions.free && !self.actions.movement && !self.actions.standard,
   );
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -1913,7 +2019,7 @@ const EncounterTurnHud = ({ turn }: { turn: EncounterTurnState }) => {
     setInitiativeBusyId(null);
   };
   const endTurn = async () => {
-    if (!canEndOwnTurn || busy) return;
+    if (!canEndOwnTurn || busy || sheetLocked) return;
     setBusy(true);
     await window.bossAPI.advanceEncounterTurn(active?.id ?? null);
     setBusy(false);
@@ -1959,8 +2065,16 @@ const EncounterTurnHud = ({ turn }: { turn: EncounterTurnState }) => {
         {canEndOwnTurn && (
           <button
             type="button"
-            disabled={busy}
-            onClick={() => setConfirming(true)}
+            disabled={busy || sheetLocked}
+            data-app-tooltip={sheetLocked
+              ? self?.sheetInteractionState === 'editing'
+                ? 'Feche a ficha antes de encerrar o turno'
+                : 'Aguarde a decisão do mestre sobre a ficha'
+              : undefined}
+            onClick={() => {
+              if (allActionsUsed) void endTurn();
+              else setConfirming(true);
+            }}
           >
             {busy ? 'Encerrando…' : 'Encerrar turno'}
           </button>
@@ -2066,6 +2180,9 @@ const SelfCombatControls = ({
   );
   const unarmedStrikeEnabled = self?.unarmedStrikeEnabled !== false;
   const incapacitated = Boolean(self && (self.dead || (self.currentHealth ?? 1) <= 0));
+  const sheetLocked = Boolean(
+    self?.sheetInteractionState && self.sheetInteractionState !== 'idle',
+  );
   const bleedingAllies = players.filter((player) =>
     !player.isSelf &&
     player.faction === 'players' &&
@@ -2101,7 +2218,6 @@ const SelfCombatControls = ({
       : 'melee',
   );
   const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState('');
   const [linkToPreviousRoll, setLinkToPreviousRoll] = useState(false);
   const [stabilizeTargetId, setStabilizeTargetId] = useState('');
   const actionAttemptRef = useRef<CombatActionAttempt | null>(null);
@@ -2158,12 +2274,6 @@ const SelfCombatControls = ({
   }, [bosses, targetBossId]);
 
   useEffect(() => {
-    if (!feedback) return;
-    const timer = setTimeout(() => setFeedback(''), 5_000);
-    return () => clearTimeout(timer);
-  }, [feedback]);
-
-  useEffect(() => {
     const attempt = actionAttemptRef.current;
     if (
       attempt &&
@@ -2200,7 +2310,7 @@ const SelfCombatControls = ({
   };
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || sheetLocked) return;
     const rollingInitiative =
       modal === 'skill' &&
       initiativePending &&
@@ -2216,7 +2326,7 @@ const SelfCombatControls = ({
         undefined,
         resource === 'hero-advantage',
       );
-      setFeedback(
+      announcePlayerNotice(
         result.ok
           ? ''
           : result.error ?? 'Não foi possível rolar a iniciativa.',
@@ -2290,7 +2400,7 @@ const SelfCombatControls = ({
     }
     if (result.ok) setLinkToPreviousRoll(false);
     const isTestAction = request.kind === 'skill' || request.kind === 'attack';
-    setFeedback(
+    announcePlayerNotice(
       result.pendingApproval
         ? ''
         : result.ok
@@ -2301,8 +2411,16 @@ const SelfCombatControls = ({
   };
 
   const openTestModal = (next: 'skill' | 'attack') => {
+    if (sheetLocked) {
+      announcePlayerNotice(
+        self?.sheetInteractionState === 'editing'
+          ? 'Feche a ficha antes de realizar ações com este personagem.'
+          : 'Aguarde o mestre avaliar as alterações da ficha.',
+      );
+      return;
+    }
     if (!active && !(next === 'skill' && initiativePending)) {
-      setFeedback('Aguarde o seu turno para realizar testes.');
+      announcePlayerNotice('Aguarde o seu turno para realizar testes.');
       return;
     }
     setResource('none');
@@ -2328,11 +2446,39 @@ const SelfCombatControls = ({
     setModal(null);
   };
 
+  const resolvePendingDamage = async () => {
+    if (!self.pendingDamage || busy) return;
+    setBusy(true);
+    const result = await window.bossAPI.requestPlayerCombatAction({
+      kind: 'damage',
+      pendingDamageId: self.pendingDamage.id,
+    });
+    if (!result.ok) {
+      announcePlayerNotice(
+        result.error ?? 'Não foi possível realizar a rolagem de dano.',
+      );
+    }
+    setBusy(false);
+  };
+
   const hudControls = (
     <div className="self-combat-shortcuts" aria-label="Ações e recursos">
+      {self.pendingDamage && (
+        <button
+          className={`is-pending-damage ${self.pendingDamage.critical ? 'is-critical' : ''}`}
+          type="button"
+          disabled={busy || sheetLocked}
+          data-app-tooltip={`Rolar dano de ${self.pendingDamage.label} contra ${self.pendingDamage.targetName}`}
+          aria-label={`Rolar dano de ${self.pendingDamage.label}`}
+          onClick={() => void resolvePendingDamage()}
+        >
+          🎯
+        </button>
+      )}
       <button
         className={initiativePending ? 'is-initiative-pending' : undefined}
         type="button"
+        disabled={sheetLocked}
         data-app-tooltip={
           initiativePending
             ? 'Rodar iniciativa'
@@ -2345,6 +2491,7 @@ const SelfCombatControls = ({
       </button>
       <button
         type="button"
+        disabled={sheetLocked}
         data-app-tooltip={
           !active
             ? 'Disponível no seu turno'
@@ -2364,7 +2511,7 @@ const SelfCombatControls = ({
           '--player-resource-image':
             `url("${bundledAssetUrl('player-resource-points.png')}")`,
         } as CSSProperties}
-        disabled={actionPoints <= 0 || !active || incapacitated}
+        disabled={actionPoints <= 0 || !active || incapacitated || sheetLocked}
         data-app-tooltip={actionPointTooltip(
           actionPoints,
           !active && actionPoints > 0,
@@ -2385,7 +2532,7 @@ const SelfCombatControls = ({
           '--player-resource-image':
             `url("${bundledAssetUrl('player-resource-points.png')}")`,
         } as CSSProperties}
-        disabled={heroPoints <= 0 || !active || incapacitated}
+        disabled={heroPoints <= 0 || !active || incapacitated || sheetLocked}
         data-app-tooltip={heroPointTooltip(
           heroPoints,
           !active && heroPoints > 0,
@@ -2398,18 +2545,6 @@ const SelfCombatControls = ({
       />
     </div>
   );
-
-  const feedbackNotice = feedback ? (
-    <button
-      className="self-combat-feedback"
-      type="button"
-      role="status"
-      aria-live="polite"
-      onClick={() => setFeedback('')}
-    >
-      {feedback}
-    </button>
-  ) : null;
 
   const modalLayer = modal ? (
     <div className="player-combat-modal-layer" role="presentation">
@@ -2677,7 +2812,6 @@ const SelfCombatControls = ({
   return (
     <>
       {selfHud ? createPortal(hudControls, selfHud) : hudControls}
-      {feedbackNotice && createPortal(feedbackNotice, document.body)}
       {modalLayer && createPortal(modalLayer, document.body)}
     </>
   );
@@ -2908,6 +3042,97 @@ const SceneTransitionPlayer = () => {
   ) : null;
 };
 
+const PlayerClientSettings = ({
+  preferences,
+  onChange,
+}: {
+  preferences: ClientPresentationPreferences;
+  onChange: (next: ClientPresentationPreferences) => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!window.__BOSS_WEB_PLAYER__) return;
+    const show = () => setOpen(true);
+    document.addEventListener('bossbar:open-player-settings', show);
+    return () => document.removeEventListener('bossbar:open-player-settings', show);
+  }, []);
+  if (!window.__BOSS_WEB_PLAYER__ || !open) return null;
+  const setVolume = (
+    key: 'musicVolume' | 'effectsVolume' | 'soundboardVolume',
+    value: number,
+  ) => onChange({ ...preferences, [key]: value });
+  const setSound = (
+    key: keyof ClientPresentationPreferences['sounds'],
+    value: boolean,
+  ) => onChange({
+    ...preferences,
+    sounds: { ...preferences.sounds, [key]: value },
+  });
+  const setVisual = (
+    key: keyof ClientPresentationPreferences['visuals'],
+    value: boolean,
+  ) => onChange({
+    ...preferences,
+    visuals: { ...preferences.visuals, [key]: value },
+  });
+  const volumeRows = [
+    ['musicVolume', 'Música'],
+    ['effectsVolume', 'Efeitos sonoros'],
+    ['soundboardVolume', 'Soundboard'],
+  ] as const;
+  const soundRows = [
+    ['damage', 'Dano e dados'],
+    ['heal', 'Cura'],
+    ['shield', 'Escudo'],
+  ] as const;
+  const visualRows = [
+    ['screenShake', 'Tremor da tela'],
+    ['healthBarShake', 'Tremor do HUD'],
+    ['damageEffect', 'Efeito de dano'],
+    ['healEffect', 'Efeito de cura'],
+    ['particles', 'Partículas'],
+    ['floatingDamageNumbers', 'Números flutuantes'],
+  ] as const;
+  return createPortal(
+    <div className="player-client-settings-layer" role="presentation">
+      <section className="player-client-settings" role="dialog" aria-modal="true" aria-labelledby="player-client-settings-title">
+        <header>
+          <h2 id="player-client-settings-title">Configurações pessoais</h2>
+          <button type="button" aria-label="Fechar" onClick={() => setOpen(false)}>×</button>
+        </header>
+        <h3>Volume</h3>
+        {volumeRows.map(([key, label]) => (
+          <label className="player-client-volume" key={key}>
+            <span>{label}</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(preferences[key] * 100)}
+              onChange={(event) => setVolume(key, Number(event.target.value) / 100)}
+            />
+            <output>{Math.round(preferences[key] * 100)}%</output>
+          </label>
+        ))}
+        <h3>Sons</h3>
+        <div className="player-client-settings-grid">
+          {soundRows.map(([key, label]) => (
+            <label key={key}><input type="checkbox" checked={preferences.sounds[key]} onChange={(event) => setSound(key, event.target.checked)} />{label}</label>
+          ))}
+        </div>
+        <h3>Efeitos</h3>
+        <div className="player-client-settings-grid">
+          {visualRows.map(([key, label]) => (
+            <label key={key}><input type="checkbox" checked={preferences.visuals[key]} onChange={(event) => setVisual(key, event.target.checked)} />{label}</label>
+          ))}
+        </div>
+        <p>Estas opções afetam somente este navegador.</p>
+      </section>
+    </div>,
+    document.body,
+  );
+};
+
 const PlayerApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [playerHuds, setPlayerHuds] = useState<PlayerHudState[]>([]);
@@ -2920,6 +3145,26 @@ const PlayerApp = () => {
   const [encounterEffects, setEncounterEffects] = useState(
     initialEncounterEffectsState,
   );
+  const [clientPreferences, setClientPreferences] = useState(
+    loadClientPresentationPreferences,
+  );
+  const effectiveVisuals = useMemo<EncounterVisualEffectSettings>(() => ({
+    ...encounterEffects.visuals,
+    screenShake: encounterEffects.visuals.screenShake && clientPreferences.visuals.screenShake,
+    healthBarShake: encounterEffects.visuals.healthBarShake && clientPreferences.visuals.healthBarShake,
+    damageEffect: encounterEffects.visuals.damageEffect && clientPreferences.visuals.damageEffect,
+    healEffect: encounterEffects.visuals.healEffect && clientPreferences.visuals.healEffect,
+    particles: encounterEffects.visuals.particles && clientPreferences.visuals.particles,
+    floatingDamageNumbers: encounterEffects.visuals.floatingDamageNumbers && clientPreferences.visuals.floatingDamageNumbers,
+  }), [clientPreferences.visuals, encounterEffects.visuals]);
+  const effectiveVisualsRef = useRef(effectiveVisuals);
+  useEffect(() => {
+    effectiveVisualsRef.current = effectiveVisuals;
+  }, [effectiveVisuals]);
+  const updateClientPreferences = useCallback((next: ClientPresentationPreferences) => {
+    setClientPreferences(next);
+    saveClientPresentationPreferences(next);
+  }, []);
   const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
   const encounterEffectsRef = useRef(initialEncounterEffectsState);
   const [background, setBackground] = useState<BackgroundState>({
@@ -2953,10 +3198,18 @@ const PlayerApp = () => {
 
   useEffect(() => {
     return window.bossAPI.subscribeMusicDuck((event) => {
+      const isBossCritical = event.phase === 'impact' || (
+        event.phase === 'duck' &&
+        event.duration >= BOSS_CRITICAL_DUCK_FADE_MS
+      );
       if (event.phase === 'duck') {
-        playPlayerCriticalThreatScreen(event.targetPlayerIds);
+        if (isBossCritical) {
+          playPlayerCriticalThreatScreen(event.targetPlayerIds, effectiveVisualsRef.current);
+        }
       } else if (event.phase === 'impact') {
-        playPlayerCriticalImpactScreen(event.targetPlayerIds, event.duration);
+        if (isBossCritical) {
+          playPlayerCriticalImpactScreen(event.targetPlayerIds, event.duration, effectiveVisualsRef.current);
+        }
       } else {
         stopPlayerCriticalThreatScreen();
       }
@@ -2965,23 +3218,33 @@ const PlayerApp = () => {
 
   useEffect(() => {
     if (!window.bossAPI.subscribePlayerResourceNotice) return;
-    const timers = new Set<ReturnType<typeof setTimeout>>();
-    const unsubscribe = window.bossAPI.subscribePlayerResourceNotice((notice) => {
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const enqueue = (notice: PlayerResourceNotice) => {
       setResourceNotices((current) => [
         ...current.filter(({ id }) => id !== notice.id),
         notice,
-      ].slice(-4));
+      ].slice(-8));
+      const previousTimer = timers.get(notice.id);
+      if (previousTimer) clearTimeout(previousTimer);
+      timers.delete(notice.id);
       if (notice.persistent) return;
       const timer = setTimeout(() => {
         setResourceNotices((current) =>
           current.filter(({ id }) => id !== notice.id));
-        timers.delete(timer);
+        timers.delete(notice.id);
       }, 5_000);
-      timers.add(timer);
-    });
+      timers.set(notice.id, timer);
+    };
+    const handleLocalNotice = (event: Event) => {
+      enqueue((event as CustomEvent<PlayerResourceNotice>).detail);
+    };
+    document.addEventListener(PLAYER_NOTICE_EVENT, handleLocalNotice);
+    const unsubscribe = window.bossAPI.subscribePlayerResourceNotice(enqueue);
     return () => {
       unsubscribe();
+      document.removeEventListener(PLAYER_NOTICE_EVENT, handleLocalNotice);
       timers.forEach(clearTimeout);
+      timers.clear();
     };
   }, []);
 
@@ -3098,7 +3361,7 @@ const PlayerApp = () => {
     const removalTimers = new Set<ReturnType<typeof setTimeout>>();
     const unsubscribe = window.bossAPI.subscribeHealthEffect((effect) => {
       if (isHeavyDamageEffect(effect)) {
-        playHeavyScreenImpact(encounterEffectsRef.current.visuals);
+        playHeavyScreenImpact(effectiveVisualsRef.current);
       }
       setHealthEffects((currentEffects) => ({
         ...currentEffects,
@@ -3265,9 +3528,10 @@ const PlayerApp = () => {
 
   return (
     <>
-      <MusicPlayer battle={state} />
-      <SoundboardPlayer />
-      <EncounterEffectsPlayer />
+      <MusicPlayer battle={state} clientPreferences={clientPreferences} />
+      <SoundboardPlayer clientPreferences={clientPreferences} />
+      <EncounterEffectsPlayer clientPreferences={clientPreferences} />
+      <PlayerClientSettings preferences={clientPreferences} onChange={updateClientPreferences} />
       <SceneTransitionPlayer />
       <main className="player-stage" style={backgroundStyle}>
         {activeVideoUrl && (
@@ -3315,8 +3579,10 @@ const PlayerApp = () => {
             ))}
           </aside>
         )}
-        <EncounterTurnHud turn={turnState} />
-        <FightHistory turn={turnState} />
+        <div className="encounter-turn-tools">
+          <EncounterTurnHud turn={turnState} players={playerHuds} />
+          <FightHistory turn={turnState} />
+        </div>
         <div className="ambient ambient-one" />
         <div className="ambient ambient-two" />
 
@@ -3352,7 +3618,7 @@ const PlayerApp = () => {
                     ))
                     .filter((percent) => percent > 0 && percent < 100))]
                 : []}
-              visuals={encounterEffects.visuals}
+              visuals={effectiveVisuals}
               turnActive={
                 turnState.activeParticipantId === `boss:${boss.id}`
               }

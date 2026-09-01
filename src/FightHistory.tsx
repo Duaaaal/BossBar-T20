@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { EncounterHistoryEntry } from './shared/encounter-history';
 import {
   formatEncounterDiceRolls,
@@ -32,7 +33,7 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
       >
         Histórico
       </button>
-      {open && (
+      {open && createPortal(
         <div className="fight-history-layer" role="presentation">
           <section
             className="fight-history-dialog"
@@ -88,7 +89,8 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
               })}
             </div>
           </section>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

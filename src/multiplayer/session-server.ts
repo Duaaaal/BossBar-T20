@@ -15,7 +15,12 @@ import { z } from 'zod';
 import {
   BLANK_CHARACTER_SHEET_ASSET_PATH,
   MAX_CHARACTER_SHEET_BYTES,
+  type CharacterSheetEditorField,
+  type CharacterSheetEditorResult,
+  type CharacterSheetInteractionState,
   type PlayerAuthenticationRequest,
+  type PlayerSheetChangeDecisionResult,
+  type PlayerSheetChangeRequest,
 } from '../shared/character-sheet.ts';
 import {
   BOSS_CRITICAL_THREAT_DURATION_MS,
@@ -126,7 +131,12 @@ import {
   playerDeathThreshold,
   stabilizePlayer,
 } from '../shared/player-survival.ts';
-import { inspectCharacterSheetPdf } from './character-sheet-pdf.ts';
+import {
+  applyCharacterSheetEditorFields,
+  inspectCharacterSheetPdf,
+  readCharacterSheetEditorFields,
+  validateCharacterSheetEditorUpdates,
+} from './character-sheet-pdf.ts';
 import { PlayerProfileStore } from './player-profile-store.ts';
 import { SessionRoster, normalizePlayerName } from './session-roster.ts';
 import {
@@ -204,6 +214,9 @@ export type MultiplayerSessionServerOptions = {
   onJoinRequestsChanged?: (requests: MultiplayerJoinRequest[]) => void;
   onActionPointRequestsChanged?: (
     requests: PendingActionPointRequest[],
+  ) => void;
+  onSheetChangeRequestsChanged?: (
+    requests: PlayerSheetChangeRequest[],
   ) => void;
   onPlayerHudsChanged?: (huds: PlayerHudState[]) => void;
   onTurnStateChanged?: (state: EncounterTurnState) => void;
@@ -285,6 +298,49 @@ type PendingActionPointRequestInternal = {
   approvesMissingStandardAction: boolean;
 };
 
+type PendingSheetChangeRequestInternal = {
+  request: PlayerSheetChangeRequest;
+  profileId: string;
+  clientId: string;
+  bytes: Uint8Array;
+  validation: Awaited<ReturnType<typeof inspectCharacterSheetPdf>>['validation'];
+  fields: CharacterSheetEditorField[];
+};
+
+type PendingPlayerDamageInternal = {
+  id: string;
+  profileId: string;
+  playerId: string;
+  targetBossId: string;
+  targetBossName: string;
+  attackName: string;
+  damageFormula: string;
+  critical: boolean;
+  criticalMultiplier: number;
+  nonlethal: boolean;
+  actionId: string;
+  correlationId?: string;
+  resourceEffect?: EncounterRollResult['resourceEffect'];
+  stateBefore: PlayerEncounterState;
+  actionsBefore: PlayerHudActionState;
+  retainedByParticipantId: string | null;
+  createdAt: number;
+};
+
+type PendingDirectPlayerDamageInternal = {
+  id: string;
+  request: DirectPlayerDamageRequest;
+  targets: Array<{
+    socketId: string;
+    playerId: string;
+    playerName: string;
+    hits: Array<{ hit: boolean; critical: boolean }>;
+  }>;
+  skippedPlayers: string[];
+  missedPlayers: string[];
+  createdAt: number;
+};
+
 type SnapshotReference = {
   current: MultiplayerSessionSnapshot;
 };
@@ -337,6 +393,26 @@ const accountAuthenticationSchema = z.object({
 
 const notesSchema = z.object({
   content: z.string().max(100_000),
+}).strict();
+
+const sheetEditorFieldSchema = z.object({
+  name: z.string().min(1).max(180),
+  label: z.string().min(1).max(120),
+  section: z.string().min(1).max(80),
+  group: z.string().min(1).max(80).optional(),
+  kind: z.enum(['text', 'checkbox', 'choice']),
+  value: z.string().max(2_000),
+  options: z.array(z.string().max(500)).max(100).optional(),
+  validation: z.object({
+    kind: z.enum(['integer', 'decimal', 'formula', 'text']),
+    min: z.number().finite().optional(),
+    max: z.number().finite().optional(),
+    maxLength: z.number().int().min(1).max(2_000).optional(),
+  }).strict().optional(),
+}).strict();
+
+const sheetEditorUpdateSchema = z.object({
+  fields: z.array(sheetEditorFieldSchema).max(1_500),
 }).strict();
 
 const mediaIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
@@ -516,6 +592,14 @@ export class MultiplayerSessionServer {
     PendingActionPointRequestInternal
   >();
 
+  private readonly pendingSheetChangeRequests = new Map<
+    string,
+    PendingSheetChangeRequestInternal
+  >();
+
+  /** Tracks the socket that currently owns each unsaved sheet-editing session. */
+  private readonly activeSheetEditors = new Map<string, string>();
+
   /** Late entrants become eligible to roll only after the current actor ends. */
   private readonly deferredInitiativeActors = new Map<
     string,
@@ -546,7 +630,12 @@ export class MultiplayerSessionServer {
 
   private readonly actionPointActionIds = new Map<string, Set<string>>();
 
-  private readonly pendingPlayerAttacks = new Set<string>();
+  private readonly pendingPlayerDamages = new Map<string, PendingPlayerDamageInternal>();
+
+  private readonly pendingDirectPlayerDamages = new Map<
+    string,
+    PendingDirectPlayerDamageInternal
+  >();
 
   private encounterTurnState = emptyEncounterTurnState();
 
@@ -852,6 +941,38 @@ export class MultiplayerSessionServer {
         .header('Content-Length', sheet.bytes.byteLength)
         .send(sheet.bytes);
     });
+    app.get('/api/player/sheet/editor', {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    }, async (request, reply): Promise<CharacterSheetEditorResult> => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account || !serverReference) {
+        reply.code(401);
+        return { ok: false, error: 'Entre novamente para ajustar a ficha.' };
+      }
+      return serverReference.getCharacterSheetEditor(account.session.profileId);
+    });
+    app.put('/api/player/sheet/editor', {
+      bodyLimit: 512 * 1024,
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    }, async (request, reply): Promise<CharacterSheetEditorResult> => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account || !serverReference) {
+        reply.code(401);
+        return { ok: false, error: 'Entre novamente para ajustar a ficha.' };
+      }
+      const parsed = sheetEditorUpdateSchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.code(400);
+        return { ok: false, error: 'Os campos enviados são inválidos.' };
+      }
+      return serverReference.proposeCharacterSheetChanges(
+        account.session.profileId,
+        account.session.clientId,
+        parsed.data.fields,
+      );
+    });
     app.delete('/api/player/sheet', {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     }, async (request, reply) => {
@@ -859,6 +980,7 @@ export class MultiplayerSessionServer {
       const account = authenticatedAccount(request.headers);
       if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
       try {
+        serverReference?.discardCharacterSheetChanges(account.session.profileId);
         const profile = await options.playerProfileStore.removeSheet(account.session.profileId);
         serverReference?.refreshCharacterSheet(account.session.clientId, false);
         return { ok: true, sheet: profile.sheet };
@@ -1293,6 +1415,12 @@ export class MultiplayerSessionServer {
         error: 'O participante recém-chegado deve rolar Iniciativa primeiro.',
       };
     }
+    if (this.pendingPlayerDamages.size > 0 || this.pendingDirectPlayerDamages.size > 0) {
+      return {
+        ok: false,
+        error: 'Resolva a rolagem de dano pendente antes de avançar o turno.',
+      };
+    }
     const currentActiveId = this.encounterTurnState.activeParticipantId;
     const releasedLateActors = currentActiveId
       ? [...this.deferredInitiativeActors.entries()]
@@ -1366,6 +1494,10 @@ export class MultiplayerSessionServer {
     const socket = [...this.io.sockets.sockets.values()].find(
       (candidate) => candidate.data.playerId === playerId,
     );
+    const sheetLockError = socket
+      ? this.characterSheetLockError(socket.data.profileId)
+      : null;
+    if (sheetLockError) return { ok: false, error: sheetLockError };
     const combatState = socket
       ? this.playerCombatStates.get(socket.data.clientId)
       : null;
@@ -1636,6 +1768,7 @@ export class MultiplayerSessionServer {
       resolvedRequest.damage,
       request.hits ?? 1,
     ).filter((damage) => damage > 0);
+    const areaTargetNames = targets.map(({ state }) => state.characterName).join(', ');
     let playerDamageSoundPublished = false;
     if (
       damageRoll &&
@@ -1656,6 +1789,7 @@ export class MultiplayerSessionServer {
         retainedByParticipantId: this.encounterTurnState.activeParticipantId,
         actionId: request.actionId,
         correlationId: request.correlationId,
+        targetName: areaTargetNames,
       });
     }
     for (const { socket, state } of targets) {
@@ -1698,6 +1832,10 @@ export class MultiplayerSessionServer {
             this.encounterTurnState.activeParticipantId,
           actionId: request.actionId,
           correlationId: request.correlationId,
+          targetParticipantId: request.attackerParticipantId,
+          targetName: this.encounterTurnState.participants.find(
+            ({ id }) => id === request.attackerParticipantId,
+          )?.name ?? 'Atacante',
           natural: impact.check.natural,
         });
       }
@@ -1714,7 +1852,9 @@ export class MultiplayerSessionServer {
         )?.name ?? 'Mestre',
         targetParticipantId: `player:${socket.data.playerId}`,
         targetName: currentState.characterName,
-        amount: state.currentHealth - currentState.currentHealth,
+        amount:
+          state.currentHealth + state.temporaryHealth -
+          currentState.currentHealth - currentState.temporaryHealth,
         detail: 'dano em área',
       }));
       appliedPlayers += 1;
@@ -1754,6 +1894,10 @@ export class MultiplayerSessionServer {
 
   async applyDirectPlayerDamage(
     request: DirectPlayerDamageRequest,
+    precomputedHits?: ReadonlyMap<
+      string,
+      ReadonlyArray<{ hit: boolean; critical: boolean }>
+    >,
   ): Promise<PlayerTargetActionResult> {
     if (!isDirectPlayerDamageRequest(request)) {
       return {
@@ -1802,7 +1946,10 @@ export class MultiplayerSessionServer {
     for (const target of targets) {
       const { socket, state } = target;
       const hitResults: Array<{ hit: boolean; critical: boolean }> = [];
-      for (let hitIndex = 0; hitIndex < requestedHits; hitIndex += 1) {
+      const preparedHits = precomputedHits?.get(socket.data.playerId);
+      if (preparedHits) {
+        hitResults.push(...preparedHits.map(({ hit, critical }) => ({ hit, critical })));
+      } else for (let hitIndex = 0; hitIndex < requestedHits; hitIndex += 1) {
         if (
           request.attackType &&
           request.attackBonus !== undefined &&
@@ -1850,6 +1997,8 @@ export class MultiplayerSessionServer {
             // Threat range never changes the natural d20. It only upgrades an
             // attack that already hit; only a real/effective 20 auto-hits.
             natural: check.natural,
+            targetParticipantId: `player:${socket.data.playerId}`,
+            targetName: state.characterName,
           });
           hitResults.push({
             hit: check.success,
@@ -1867,6 +2016,37 @@ export class MultiplayerSessionServer {
       targetOutcomes.push({ socket, state, hits: hitResults });
     }
     if (rollResults.length > 0) this.appendRollResults(rollResults);
+    if (request.deferDamage && hasSuccessfulHit && !precomputedHits) {
+      const pendingDamageId = `boss-damage:${randomUUID()}`;
+      this.pendingDirectPlayerDamages.set(pendingDamageId, {
+        id: pendingDamageId,
+        request: { ...request, deferDamage: false },
+        targets: targetOutcomes.map(({ socket, state, hits }) => ({
+          socketId: socket.id,
+          playerId: socket.data.playerId,
+          playerName: state.characterName,
+          hits: hits.map(({ hit, critical }) => ({ hit, critical })),
+        })),
+        skippedPlayers: [...skippedPlayers],
+        missedPlayers: [...missedPlayers],
+        createdAt: Date.now(),
+      });
+      return {
+        ok: true,
+        appliedPlayers: 0,
+        skippedPlayers,
+        ...(missedPlayers.length > 0 ? { missedPlayers } : {}),
+        pendingDamageId,
+        impacts: targetOutcomes.map(({ socket, state, hits }) => ({
+          playerId: socket.data.playerId,
+          hit: hits.some(({ hit }) => hit),
+          appliedDamage: 0,
+          healthBefore: state.currentHealth,
+          healthAfter: state.currentHealth,
+          critical: hits.some(({ critical }) => critical),
+        })),
+      };
+    }
     if (hasCriticalHit) {
       let warned = false;
       for (const outcome of targetOutcomes) {
@@ -1890,7 +2070,7 @@ export class MultiplayerSessionServer {
         });
       }
     }
-    if (hasSuccessfulHit && rollResults.length > 0) {
+    if (hasSuccessfulHit && (hasCriticalHit || !precomputedHits)) {
       await this.waitForCombatRollDelay(hasCriticalHit ? 'dramatic' : 'normal');
     }
 
@@ -1921,6 +2101,10 @@ export class MultiplayerSessionServer {
       requestedHits,
     );
     const damageRollResults: EncounterRollResult[] = [];
+    const hitTargetNames = targetOutcomes
+      .filter(({ hits }) => hits.some(({ hit }) => hit))
+      .map(({ state }) => state.characterName)
+      .join(', ');
     if (normalDamageRoll && request.attackerParticipantId) {
       damageRollResults.push({
         id: `damage:${request.attackerParticipantId}:${randomUUID()}`,
@@ -1936,6 +2120,7 @@ export class MultiplayerSessionServer {
         retainedByParticipantId: this.encounterTurnState.activeParticipantId,
         actionId: request.actionId,
         correlationId: request.correlationId,
+        targetName: hitTargetNames,
       });
     }
     if (criticalDamageRoll && request.attackerParticipantId) {
@@ -1957,6 +2142,7 @@ export class MultiplayerSessionServer {
         correlationId: request.correlationId,
         critical: true,
         criticalMultiplier: request.criticalMultiplier ?? 2,
+        targetName: hitTargetNames,
       });
     }
     if (hasSuccessfulHit) {
@@ -1999,14 +2185,18 @@ export class MultiplayerSessionServer {
           )?.name ?? 'Mestre',
           targetParticipantId: `player:${socket.data.playerId}`,
           targetName: currentState.characterName,
-          amount: state.currentHealth - currentState.currentHealth,
+          amount:
+            state.currentHealth + state.temporaryHealth -
+            currentState.currentHealth - currentState.temporaryHealth,
           detail: request.attackType === 'ranged' ? 'à distância' : 'corpo a corpo',
         }));
       }
       impacts.push({
         playerId: socket.data.playerId,
         hit: targetWasHit,
-        appliedDamage: state.currentHealth - currentState.currentHealth,
+        appliedDamage:
+          state.currentHealth + state.temporaryHealth -
+          currentState.currentHealth - currentState.temporaryHealth,
         healthBefore: state.currentHealth,
         healthAfter: currentState.currentHealth,
         critical: targetWasCritical,
@@ -2040,6 +2230,29 @@ export class MultiplayerSessionServer {
         ? resolvedCriticalDamage
         : resolvedNormalDamage,
     };
+  }
+
+  async resolvePendingDirectPlayerDamage(
+    pendingDamageId: string,
+  ): Promise<PlayerTargetActionResult> {
+    const pending = this.pendingDirectPlayerDamages.get(pendingDamageId);
+    if (!pending) {
+      return {
+        ok: false,
+        appliedPlayers: 0,
+        skippedPlayers: [],
+        error: 'Esta rolagem de dano não está mais disponível.',
+      };
+    }
+    const hitMap = new Map(
+      pending.targets.map(({ playerId, hits }) => [playerId, hits] as const),
+    );
+    const result = await this.applyDirectPlayerDamage(
+      { ...pending.request, deferDamage: false },
+      hitMap,
+    );
+    if (result.ok) this.pendingDirectPlayerDamages.delete(pendingDamageId);
+    return result;
   }
 
   applyPlayerStatus(request: PlayerStatusRequest): PlayerTargetActionResult {
@@ -2102,6 +2315,8 @@ export class MultiplayerSessionServer {
     if (!isPlayerCombatActionRequest(request)) {
       return { ok: false, error: 'A ação de combate é inválida.' };
     }
+    const sheetLockError = this.characterSheetLockError(socket.data.profileId);
+    if (sheetLockError) return { ok: false, error: sheetLockError };
     const active = this.encounterTurnState.participants.find(
       ({ id }) => id === this.encounterTurnState.activeParticipantId,
     );
@@ -2124,6 +2339,9 @@ export class MultiplayerSessionServer {
     const state = this.playerCombatStates.get(socket.data.clientId);
     if (!state) {
       return { ok: false, error: 'Vincule uma ficha válida antes de agir.' };
+    }
+    if (request.kind === 'damage') {
+      return this.executePlayerCombatAction(socket, request);
     }
     if (state.dead) {
       return { ok: false, error: 'Este personagem morreu e não pode agir.' };
@@ -2510,6 +2728,7 @@ export class MultiplayerSessionServer {
         ? 'ataque'
         : summary?.attacks[index]?.name || 'ataque';
     }
+    if (request.kind === 'damage') return 'rolagem de dano';
     return request.ability;
   }
 
@@ -2525,6 +2744,10 @@ export class MultiplayerSessionServer {
     )?.sheet.validation?.summary;
     if (!state || !summary) {
       return { ok: false, error: 'A ficha do jogador não está disponível.' };
+    }
+
+    if (request.kind === 'damage') {
+      return this.resolvePendingPlayerDamage(socket, request.pendingDamageId);
     }
 
     const actionId = request.actionId ?? randomUUID();
@@ -2897,7 +3120,9 @@ export class MultiplayerSessionServer {
     if (!actions.standard) {
       return { ok: false, error: 'A ação padrão deste turno já foi usada.' };
     }
-    if (this.pendingPlayerAttacks.has(socket.data.profileId)) {
+    if ([...this.pendingPlayerDamages.values()].some(
+      ({ profileId }) => profileId === socket.data.profileId,
+    )) {
       return { ok: false, error: 'Aguarde a resolução do ataque anterior.' };
     }
     const { baseDice, chosenDie, interventionDie, rollMode } = rollTestDice();
@@ -2923,6 +3148,9 @@ export class MultiplayerSessionServer {
       criticalProfile.threat,
     );
     const retainedBy = this.encounterTurnState.activeParticipantId;
+    const targetBossName = this.currentSnapshot.battle.bosses.find(
+      ({ id }) => id === request.targetBossId,
+    )?.bossName ?? 'Chefão';
     const attackResult: EncounterRollResult = {
       id: `attack:${socket.data.playerId}:${randomUUID()}`,
       participantId: `player:${socket.data.playerId}`,
@@ -2951,6 +3179,8 @@ export class MultiplayerSessionServer {
       critical,
       criticalMultiplier: critical ? criticalProfile.multiplier : undefined,
       natural: chosenDie === 1 || chosenDie === 20 ? chosenDie : null,
+      targetParticipantId: `boss:${request.targetBossId}`,
+      targetName: targetBossName,
     };
     if (!success) {
       this.commitPlayerAttackCosts(
@@ -2964,41 +3194,6 @@ export class MultiplayerSessionServer {
       return { ok: true };
     }
 
-    this.pendingPlayerAttacks.add(socket.data.profileId);
-    try {
-      this.appendRollResult(attackResult);
-      await this.waitForCombatRollDelay(
-        attackResult.natural === 20 ? 'player-natural' : 'normal',
-      );
-    } finally {
-      this.pendingPlayerAttacks.delete(socket.data.profileId);
-    }
-
-    // Damage dice are intentionally generated only after every validation,
-    // approval, attack check and the presentation interval have completed.
-    const damage = critical
-      ? rollCriticalDamageFormulaDetailed(
-        damageFormula,
-        criticalProfile.multiplier,
-        (minimum, maximum) => this.randomInteger(minimum, maximum),
-      )
-      : rollDamageFormulaDetailed(
-        damageFormula,
-        (minimum, maximum) => this.randomInteger(minimum, maximum),
-      );
-    const applied = this.options.applyBossDamage?.(
-      request.targetBossId,
-      damage.total,
-      {
-        critical,
-        actionId,
-        sourceParticipantId: `player:${socket.data.playerId}`,
-        nonlethal: unarmed?.nonlethal === true,
-      },
-    );
-    if (!applied?.ok) {
-      return { ok: false, error: applied?.error ?? 'Não foi possível aplicar o dano.' };
-    }
     this.commitPlayerAttackCosts(
       socket,
       state,
@@ -3006,26 +3201,101 @@ export class MultiplayerSessionServer {
       resourceEffect,
       actionId,
     );
-    this.appendRollResult({
-        id: `damage:${socket.data.playerId}:${randomUUID()}`,
-        participantId: `player:${socket.data.playerId}`,
-        label: `${critical ? 'Dano crítico' : 'Dano'}: ${attack.name || 'Ataque'}`,
-        expression: critical
-          ? criticalDamageExpression(damageFormula, criticalProfile.multiplier)
-          : selectedDamageFormula,
-        rolls: damage.rolls,
-        modifier: damage.modifier,
-        total: applied.appliedDamage,
-        outcome: 'success',
-        category: 'damage',
-        createdAt: Date.now(),
-        retainedByParticipantId: retainedBy,
-        resourceEffect,
-        actionId,
-        correlationId,
-        critical,
-        criticalMultiplier: critical ? criticalProfile.multiplier : undefined,
+    this.appendRollResult(attackResult);
+    const pendingDamageId = `player-damage:${randomUUID()}`;
+    this.pendingPlayerDamages.set(pendingDamageId, {
+      id: pendingDamageId,
+      profileId: socket.data.profileId,
+      playerId: socket.data.playerId,
+      targetBossId: request.targetBossId,
+      targetBossName,
+      attackName: attack.name || 'Ataque',
+      damageFormula: selectedDamageFormula,
+      critical,
+      criticalMultiplier: criticalProfile.multiplier,
+      nonlethal: unarmed?.nonlethal === true,
+      actionId,
+      correlationId,
+      resourceEffect,
+      stateBefore: state,
+      actionsBefore: actions,
+      retainedByParticipantId: retainedBy,
+      createdAt: Date.now(),
+    });
+    this.publishPlayerHuds();
+    return { ok: true, pendingDamageId };
+  }
+
+  private resolvePendingPlayerDamage(
+    socket: MultiplayerPlayerSocket,
+    pendingDamageId: string,
+  ): PlayerCombatActionResult {
+    const pending = this.pendingPlayerDamages.get(pendingDamageId);
+    if (!pending || pending.profileId !== socket.data.profileId) {
+      return { ok: false, error: 'Esta rolagem de dano não está mais disponível.' };
+    }
+    const formula = parseDamageFormula(pending.damageFormula);
+    if (!formula) {
+      this.pendingPlayerDamages.delete(pendingDamageId);
+      this.publishPlayerHuds();
+      return { ok: false, error: 'A fórmula de dano pendente é inválida.' };
+    }
+    const damage = pending.critical
+      ? rollCriticalDamageFormulaDetailed(
+        formula,
+        pending.criticalMultiplier,
+        (minimum, maximum) => this.randomInteger(minimum, maximum),
+      )
+      : rollDamageFormulaDetailed(
+        formula,
+        (minimum, maximum) => this.randomInteger(minimum, maximum),
+      );
+    const applied = this.options.applyBossDamage?.(
+      pending.targetBossId,
+      damage.total,
+      {
+        critical: pending.critical,
+        actionId: pending.actionId,
+        sourceParticipantId: `player:${pending.playerId}`,
+        nonlethal: pending.nonlethal,
+      },
+    );
+    if (!applied?.ok) {
+      this.pendingPlayerDamages.delete(pendingDamageId);
+      this.playerActions.set(pending.profileId, pending.actionsBefore);
+      if (pending.resourceEffect === 'action-point') {
+        this.actionPointActionIds.get(pending.profileId)?.delete(pending.actionId);
+      }
+      this.updatePlayerCombatState(socket.data.clientId, {
+        ...pending.stateBefore,
+        revision: pending.stateBefore.revision + 1,
       });
+      return { ok: false, error: applied?.error ?? 'Não foi possível aplicar o dano.' };
+    }
+    this.pendingPlayerDamages.delete(pendingDamageId);
+    this.appendRollResult({
+      id: `damage:${pending.playerId}:${randomUUID()}`,
+      participantId: `player:${pending.playerId}`,
+      label: `${pending.critical ? 'Dano crítico' : 'Dano'}: ${pending.attackName}`,
+      expression: pending.critical
+        ? criticalDamageExpression(formula, pending.criticalMultiplier)
+        : pending.damageFormula,
+      rolls: damage.rolls,
+      modifier: damage.modifier,
+      total: applied.appliedDamage,
+      outcome: 'success',
+      category: 'damage',
+      createdAt: Date.now(),
+      retainedByParticipantId: pending.retainedByParticipantId,
+      resourceEffect: pending.resourceEffect,
+      actionId: pending.actionId,
+      correlationId: pending.correlationId,
+      critical: pending.critical,
+      criticalMultiplier: pending.critical ? pending.criticalMultiplier : undefined,
+      targetParticipantId: `boss:${pending.targetBossId}`,
+      targetName: pending.targetBossName,
+    });
+    this.publishPlayerHuds();
     return { ok: true };
   }
 
@@ -3196,6 +3466,232 @@ export class MultiplayerSessionServer {
     }
   }
 
+  private notifySheetChangeRequestsChanged() {
+    this.options.onSheetChangeRequestsChanged?.(
+      this.getPendingSheetChangeRequests(),
+    );
+  }
+
+  private characterSheetInteractionState(
+    profileId: string,
+  ): CharacterSheetInteractionState {
+    if (this.pendingSheetChangeRequests.has(profileId)) return 'pending-approval';
+    if (this.activeSheetEditors.has(profileId)) return 'editing';
+    return 'idle';
+  }
+
+  private publishCharacterSheetInteractionState(profileId: string) {
+    const interactionState = this.characterSheetInteractionState(profileId);
+    const clientIds = new Set(
+      [...this.io.sockets.sockets.values()]
+        .filter((socket) => socket.data.profileId === profileId)
+        .map((socket) => socket.data.clientId),
+    );
+    for (const clientId of clientIds) {
+      const current = this.playerCombatStates.get(clientId);
+      if (!current || current.sheetInteractionState === interactionState) continue;
+      this.playerCombatStates.set(clientId, {
+        ...current,
+        sheetInteractionState: interactionState,
+        revision: current.revision + 1,
+      });
+      this.publishPlayerState(clientId);
+    }
+    if (clientIds.size > 0) this.publishPlayerHuds();
+  }
+
+  private characterSheetLockError(profileId: string) {
+    const state = this.characterSheetInteractionState(profileId);
+    if (state === 'editing') {
+      return 'Feche a ficha antes de realizar ações com este personagem.';
+    }
+    if (state === 'pending-approval') {
+      return 'Aguarde o mestre aprovar ou recusar as alterações da ficha.';
+    }
+    return null;
+  }
+
+  setCharacterSheetEditorOpen(
+    profileId: string,
+    socketId: string,
+    open: boolean,
+  ) {
+    if (open) {
+      if (this.pendingSheetChangeRequests.has(profileId)) {
+        return {
+          ok: false,
+          error: 'Aguarde o mestre avaliar as alterações já enviadas.',
+        };
+      }
+      if (!this.options.playerProfileStore.profileById(profileId)?.sheet.hasSheet) {
+        return { ok: false, error: 'Nenhuma ficha foi enviada.' };
+      }
+      this.activeSheetEditors.set(profileId, socketId);
+    } else if (this.activeSheetEditors.get(profileId) === socketId) {
+      this.activeSheetEditors.delete(profileId);
+    }
+    this.publishCharacterSheetInteractionState(profileId);
+    return { ok: true };
+  }
+
+  getPendingSheetChangeRequests() {
+    return [...this.pendingSheetChangeRequests.values()]
+      .map(({ request }) => request)
+      .sort((left, right) => left.requestedAt - right.requestedAt);
+  }
+
+  discardCharacterSheetChanges(profileId: string) {
+    this.activeSheetEditors.delete(profileId);
+    if (this.pendingSheetChangeRequests.delete(profileId)) {
+      this.notifySheetChangeRequestsChanged();
+    }
+    this.publishCharacterSheetInteractionState(profileId);
+  }
+
+  async getCharacterSheetEditor(
+    profileId: string,
+  ): Promise<CharacterSheetEditorResult> {
+    const sheet = await this.options.playerProfileStore.readSheet(profileId);
+    if (!sheet) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
+    const pending = this.pendingSheetChangeRequests.get(profileId);
+    return {
+      ok: true,
+      document: {
+        fileName: sheet.fileName,
+        fields: pending?.fields ?? await readCharacterSheetEditorFields(sheet.bytes),
+        pendingApproval: Boolean(pending),
+        requestId: pending?.request.id ?? null,
+      },
+    };
+  }
+
+  async proposeCharacterSheetChanges(
+    profileId: string,
+    clientId: string,
+    fields: CharacterSheetEditorField[],
+  ): Promise<CharacterSheetEditorResult> {
+    const sheet = await this.options.playerProfileStore.readSheet(profileId);
+    const profile = this.options.playerProfileStore.profileById(profileId);
+    if (!sheet || !profile) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
+    const invalidUpdate = validateCharacterSheetEditorUpdates(fields);
+    if (invalidUpdate) return { ok: false, error: invalidUpdate };
+    const originalFields = await readCharacterSheetEditorFields(sheet.bytes);
+    const originalByName = new Map(originalFields.map((field) => [field.name, field.value]));
+    let applied: Awaited<ReturnType<typeof applyCharacterSheetEditorFields>>;
+    try {
+      applied = await applyCharacterSheetEditorFields(sheet.bytes, fields);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Os valores da ficha são inválidos.',
+      };
+    }
+    const appliedByName = new Map(applied.fields.map((field) => [field.name, field.value]));
+    const changes = fields.flatMap((field) => {
+      const before = originalByName.get(field.name);
+      const after = appliedByName.get(field.name) ?? field.value;
+      return (before ?? '') === after
+        ? []
+        : [{ field: field.name, before: before ?? '', after }];
+    }).slice(0, 600);
+    if (changes.length === 0) {
+      this.activeSheetEditors.delete(profileId);
+      if (this.pendingSheetChangeRequests.delete(profileId)) {
+        this.notifySheetChangeRequestsChanged();
+      }
+      this.publishCharacterSheetInteractionState(profileId);
+      return {
+        ok: true,
+        document: {
+          fileName: sheet.fileName,
+          fields: originalFields,
+          pendingApproval: false,
+          requestId: null,
+        },
+      };
+    }
+    const previous = this.pendingSheetChangeRequests.get(profileId);
+    const request: PlayerSheetChangeRequest = {
+      id: previous?.request.id ?? randomUUID(),
+      profileId,
+      username: profile.username,
+      fileName: sheet.fileName,
+      requestedAt: previous?.request.requestedAt ?? Date.now(),
+      changes,
+    };
+    this.pendingSheetChangeRequests.set(profileId, {
+      request,
+      profileId,
+      clientId,
+      bytes: applied.bytes,
+      validation: applied.validation,
+      fields: applied.fields,
+    });
+    this.activeSheetEditors.delete(profileId);
+    this.notifySheetChangeRequestsChanged();
+    this.publishCharacterSheetInteractionState(profileId);
+    this.emitResourceNotice(clientId, {
+      id: `sheet-change:${request.id}`,
+      tone: 'info',
+      message: 'Alterações da ficha aguardam aprovação do mestre.',
+      persistent: true,
+    });
+    return {
+      ok: true,
+      document: {
+        fileName: sheet.fileName,
+        fields: applied.fields,
+        pendingApproval: true,
+        requestId: request.id,
+      },
+    };
+  }
+
+  async decideCharacterSheetChanges(
+    requestId: string,
+    approved: boolean,
+  ): Promise<PlayerSheetChangeDecisionResult> {
+    const pending = [...this.pendingSheetChangeRequests.values()]
+      .find(({ request }) => request.id === requestId);
+    if (!pending) return { ok: false, error: 'A proposta de ficha não está mais pendente.' };
+    if (approved) {
+      const profile = await this.options.playerProfileStore.saveSheet(
+        pending.profileId,
+        pending.request.fileName,
+        pending.bytes,
+        pending.validation,
+      );
+      // Clear the review lock before rebuilding the approved combat state.
+      this.pendingSheetChangeRequests.delete(pending.profileId);
+      const affectedClientIds = new Set(
+        [...this.io.sockets.sockets.values()]
+          .filter((socket) => socket.data.profileId === pending.profileId)
+          .map((socket) => socket.data.clientId),
+      );
+      affectedClientIds.forEach((clientId) => {
+        this.refreshCharacterSheet(clientId, true);
+        this.emitResourceNotice(clientId, {
+          id: `sheet-change:${requestId}`,
+          tone: 'approved',
+          message: 'O mestre aprovou as alterações da sua ficha.',
+        });
+      });
+      if (!profile.sheet.hasSheet) {
+        return { ok: false, error: 'A ficha aprovada não pôde ser salva.' };
+      }
+    } else {
+      this.emitResourceNotice(pending.clientId, {
+        id: `sheet-change:${requestId}`,
+        tone: 'rejected',
+        message: 'O mestre recusou as alterações da sua ficha.',
+      });
+    }
+    this.pendingSheetChangeRequests.delete(pending.profileId);
+    this.notifySheetChangeRequestsChanged();
+    this.publishCharacterSheetInteractionState(pending.profileId);
+    return { ok: true };
+  }
+
   async playerSheet(playerId: string) {
     const socket = [...this.io.sockets.sockets.values()]
       .find((candidate) => candidate.data.playerId === playerId);
@@ -3229,6 +3725,10 @@ export class MultiplayerSessionServer {
   }
 
   async deleteProfile(profileId: string) {
+    this.activeSheetEditors.delete(profileId);
+    if (this.pendingSheetChangeRequests.delete(profileId)) {
+      this.notifySheetChangeRequestsChanged();
+    }
     await this.options.playerProfileStore.deleteProfile(profileId);
     for (const [token, session] of this.accountSessions) {
       if (session.profileId === profileId) this.accountSessions.delete(token);
@@ -3446,13 +3946,16 @@ export class MultiplayerSessionServer {
     this.io.disconnectSockets(true);
     this.pendingJoinRequests.clear();
     this.pendingActionPointRequests.clear();
+    this.pendingSheetChangeRequests.clear();
+    this.activeSheetEditors.clear();
     this.accountSessions.clear();
     this.playerCombatStates.clear();
     this.playerPrivacy.clear();
     this.playerActions.clear();
     this.unarmedStrikeEnabled.clear();
     this.actionPointActionIds.clear();
-    this.pendingPlayerAttacks.clear();
+    this.pendingPlayerDamages.clear();
+    this.pendingDirectPlayerDamages.clear();
     this.encounterRollSequence = 0;
     this.encounterTurnState = emptyEncounterTurnState();
     if (this.fastify.server.listening) await this.fastify.close();
@@ -3480,6 +3983,7 @@ export class MultiplayerSessionServer {
       characterName: summary.characterName || 'Personagem',
       currentHealth: Math.min(summary.maxHealth, summary.currentHealth),
       maxHealth: Math.max(1, summary.maxHealth),
+      temporaryHealth: Math.max(0, Math.floor(summary.temporaryHealth ?? 0)),
       currentMana: Math.max(0, Math.min(summary.maxMana, summary.currentMana)),
       maxMana: Math.max(0, summary.maxMana),
       defenseMelee: Math.max(0, summary.defenses?.melee ?? summary.defense ?? 0),
@@ -3497,6 +4001,7 @@ export class MultiplayerSessionServer {
       criticalThreatId: null,
       stabilized: false,
       dead: false,
+      sheetInteractionState: this.characterSheetInteractionState(profileId),
       revision: 0,
     } satisfies PlayerEncounterState;
     return state.currentHealth <= 0
@@ -3531,6 +4036,10 @@ export class MultiplayerSessionServer {
         removedActionPointRequest = true;
       }
       if (removedActionPointRequest) this.notifyActionPointRequestsChanged();
+      if (this.activeSheetEditors.get(socket.data.profileId) === socket.id) {
+        this.activeSheetEditors.delete(socket.data.profileId);
+        this.publishCharacterSheetInteractionState(socket.data.profileId);
+      }
       if (this.roster.unregisterSocket(socket.id)) {
         this.notifyPresenceChanged();
         this.syncTurnParticipants();
@@ -3576,6 +4085,15 @@ export class MultiplayerSessionServer {
       return;
     }
     socket.data.playerId = result.player.id;
+    if (
+      result.replacedSocketId &&
+      this.activeSheetEditors.get(socket.data.profileId) === result.replacedSocketId
+    ) {
+      // A reload preserves the client id and the draft in localStorage. Release
+      // only the transient editor ownership before the replacement socket is
+      // initialized, otherwise it receives a stale, permanently locked HUD.
+      this.activeSheetEditors.delete(socket.data.profileId);
+    }
     const alreadyInTurnOrder = this.encounterTurnState.participants.some(
       ({ kind, sourceId }) => kind === 'player' && sourceId === result.player.id,
     );
@@ -3602,12 +4120,32 @@ export class MultiplayerSessionServer {
       }));
     }
     socket.emit('session:snapshot', this.currentSnapshot);
-    const playerState = this.playerCombatStates.get(socket.data.clientId) ??
-      this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
+    const existingPlayerState = this.playerCombatStates.get(socket.data.clientId);
+    const interactionState = this.characterSheetInteractionState(socket.data.profileId);
+    const playerState = existingPlayerState
+      ? {
+          ...existingPlayerState,
+          sheetInteractionState: interactionState,
+          revision: existingPlayerState.sheetInteractionState === interactionState
+            ? existingPlayerState.revision
+            : existingPlayerState.revision + 1,
+        }
+      : this.createPlayerEncounterState(socket.data.clientId, socket.data.profileId);
     if (playerState) {
       this.playerCombatStates.set(socket.data.clientId, playerState);
       socket.emit('player:state', playerState);
     }
+    socket.on('player:set-sheet-editor-open', (open, acknowledge) => {
+      if (typeof open !== 'boolean') {
+        acknowledge({ ok: false, error: 'Estado do editor de ficha inválido.' });
+        return;
+      }
+      acknowledge(this.setCharacterSheetEditorOpen(
+        socket.data.profileId,
+        socket.id,
+        open,
+      ));
+    });
     socket.on('player:set-private', (privateMode, acknowledge) => {
       if (typeof privateMode !== 'boolean') {
         acknowledge({ ok: false, error: 'Preferência de privacidade inválida.' });
@@ -3620,6 +4158,11 @@ export class MultiplayerSessionServer {
     socket.on('player:use-action', (action, acknowledge) => {
       if (!['free', 'movement', 'standard'].includes(action)) {
         acknowledge({ ok: false, error: 'Tipo de ação inválido.' });
+        return;
+      }
+      const sheetLockError = this.characterSheetLockError(socket.data.profileId);
+      if (sheetLockError) {
+        acknowledge({ ok: false, error: sheetLockError });
         return;
       }
       const active = this.encounterTurnState.participants.find(
@@ -3669,6 +4212,11 @@ export class MultiplayerSessionServer {
       acknowledge({ ok: true });
     });
     socket.on('encounter:end-own-turn', (acknowledge) => {
+      const sheetLockError = this.characterSheetLockError(socket.data.profileId);
+      if (sheetLockError) {
+        acknowledge({ ok: false, error: sheetLockError });
+        return;
+      }
       const active = this.encounterTurnState.participants.find(
         ({ id }) => id === this.encounterTurnState.activeParticipantId,
       );
@@ -3826,7 +4374,11 @@ export class MultiplayerSessionServer {
           movement: true,
           standard: true,
         };
-      const actions = encounter && isPlayerIncapacitated(encounter)
+      const sheetInteractionState = profile && isSelf
+        ? this.characterSheetInteractionState(profile.data.profileId)
+        : 'idle';
+      const actions = sheetInteractionState !== 'idle' ||
+        (encounter ? isPlayerIncapacitated(encounter) : false)
         ? { free: false, movement: false, standard: false }
         : storedActions;
       const redacted = !revealAll && privateMode && !isSelf;
@@ -3841,6 +4393,11 @@ export class MultiplayerSessionServer {
       const effectiveDefenses = encounter
         ? effectivePlayerDefenses(encounter)
         : null;
+      const pendingDamage = profile && (isSelf || revealAll)
+        ? [...this.pendingPlayerDamages.values()].find(
+          ({ profileId }) => profileId === profile.data.profileId,
+        ) ?? null
+        : null;
       return {
         id: player.id,
         faction: 'players',
@@ -3851,6 +4408,9 @@ export class MultiplayerSessionServer {
         redacted,
         currentHealth: redacted ? null : encounter?.currentHealth ?? summary?.currentHealth ?? null,
         maxHealth: redacted ? null : encounter?.maxHealth ?? summary?.maxHealth ?? null,
+        temporaryHealth: redacted
+          ? null
+          : encounter?.temporaryHealth ?? summary?.temporaryHealth ?? 0,
         currentMana: redacted ? null : encounter?.currentMana ?? summary?.currentMana ?? null,
         maxMana: redacted ? null : encounter?.maxMana ?? summary?.maxMana ?? null,
         defenseMelee: redacted
@@ -3883,6 +4443,18 @@ export class MultiplayerSessionServer {
           : playerDeathThreshold(encounter.maxHealth),
         summary: redacted ? null : summary,
         actions,
+        pendingDamage: pendingDamage
+          ? {
+            id: pendingDamage.id,
+            attackerKind: 'player',
+            attackerParticipantId: `player:${pendingDamage.playerId}`,
+            label: pendingDamage.attackName,
+            targetName: pendingDamage.targetBossName,
+            critical: pendingDamage.critical,
+            createdAt: pendingDamage.createdAt,
+          }
+          : null,
+        sheetInteractionState,
         revision: encounter?.revision ?? 0,
       };
     });
@@ -4160,7 +4732,9 @@ export class MultiplayerSessionServer {
             actorName: 'Sangramento',
             targetParticipantId: participant.id,
             targetName: nextState.characterName,
-            amount: state.currentHealth - nextState.currentHealth,
+            amount:
+              state.currentHealth + state.temporaryHealth -
+              nextState.currentHealth - nextState.temporaryHealth,
           })]
           : []),
       ],

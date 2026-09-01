@@ -45,6 +45,7 @@ import type {
   NotesSaveResult,
   PlayerProfileDeleteResult,
   PlayerProfileSummary,
+  PlayerSheetChangeDecisionResult,
 } from './shared/character-sheet';
 import type {
   CustomStatusLibraryMutationResult,
@@ -216,6 +217,10 @@ const bossAPI = {
     request: DirectPlayerDamageRequest,
   ): Promise<PlayerTargetActionResult> =>
     ipcRenderer.invoke('player-combat:direct-damage', request),
+  resolveDirectPlayerDamage: (
+    pendingDamageId: string,
+  ): Promise<PlayerTargetActionResult> =>
+    ipcRenderer.invoke('player-combat:resolve-direct-damage', pendingDamageId),
   applyPlayerStatus: (
     request: PlayerStatusRequest,
   ): Promise<PlayerTargetActionResult> =>
@@ -413,6 +418,11 @@ const bossAPI = {
     profileId: string,
   ): Promise<PlayerProfileDeleteResult> =>
     ipcRenderer.invoke('multiplayer:delete-profile', profileId),
+  decidePlayerSheetChanges: (
+    requestId: string,
+    approved: boolean,
+  ): Promise<PlayerSheetChangeDecisionResult> =>
+    ipcRenderer.invoke('multiplayer:decide-sheet-changes', requestId, approved),
   getMasterNotes: (): Promise<string> => ipcRenderer.invoke('notes:get-master'),
   saveMasterNotes: (content: string): Promise<NotesSaveResult> =>
     ipcRenderer.invoke('notes:save-master', content),

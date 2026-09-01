@@ -7,6 +7,7 @@ import {
   PDFTextField,
 } from 'pdf-lib';
 import type {
+  CharacterSheetEditorField,
   CharacterSheetIssue,
   CharacterSheetSummary,
   CharacterSheetValidation,
@@ -65,6 +66,373 @@ const skillRules: SkillRule[] = [
   { code: '290', name: 'Sobrevivência', modifierField: 'ModAtribSobr', trainedField: 'Mar Trei sobre' },
   { code: '300', name: 'Vontade', modifierField: 'ModAtribVont', trainedField: 'Mar Trei vonta' },
 ];
+
+type EditorFieldDescriptor = {
+  name: string;
+  label: string;
+  section: string;
+  group?: string;
+  valueFrom?: (values: FieldValues) => string;
+  defaultValue?: string;
+  validation?: CharacterSheetEditorField['validation'];
+};
+
+const editorField = (
+  name: string,
+  label: string,
+  section: string,
+  group?: string,
+  valueFrom?: EditorFieldDescriptor['valueFrom'],
+  options?: Pick<EditorFieldDescriptor, 'defaultValue' | 'validation'>,
+): EditorFieldDescriptor => ({ name, label, section, group, valueFrom, ...options });
+
+const integerValidation = (min: number, max: number) => ({
+  kind: 'integer' as const,
+  min,
+  max,
+});
+
+const formulaValidation = (maxLength = 120) => ({
+  kind: 'formula' as const,
+  maxLength,
+});
+
+const decimalValidation = (min: number, max: number) => ({
+  kind: 'decimal' as const,
+  min,
+  max,
+});
+
+const textValidation = (maxLength: number) => ({
+  kind: 'text' as const,
+  maxLength,
+});
+
+const MAX_SPELL_ROWS = 100;
+const MIN_ITEM_ROWS = 3;
+const MAX_ITEM_ROWS = 100;
+const MAX_ARMOR_ROWS = 20;
+const MAX_SHIELD_ROWS = 20;
+const spellFields = [
+  ['Nome', 'Nome'],
+  ['Escola', 'Escola'],
+  ['Execucao', 'Execução'],
+  ['Alcance', 'Alcance'],
+  ['Area', 'Área'],
+  ['Duracao', 'Duração'],
+  ['Resistencia', 'Resistência'],
+  ['Efeito', 'Efeito'],
+] as const;
+
+const skillComponentFields = (rule: SkillRule) => {
+  const suffix = rule.code === '110' ? 11 : Number.parseInt(rule.code, 10) / 10;
+  return {
+    halfLevel: rule.code === '300' ? '301' : `${String(suffix).padStart(2, '0')}1`,
+    training: rule.code === '300' ? '303' : `${String(suffix).padStart(2, '0')}3`,
+    other: rule.code === '300' ? '304' : `${String(suffix).padStart(2, '0')}4`,
+  };
+};
+
+const parseCritical = (value: string | undefined) => {
+  const normalized = (value ?? '').trim();
+  const margin = normalized.match(/(?:^|\D)(\d{1,2})(?=\D|$)/)?.[1] ?? '';
+  const multiplier = normalized.match(/[x×]\s*(\d{1,2})/i)?.[1] ?? '';
+  return { margin, multiplier };
+};
+
+const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
+  const descriptors: EditorFieldDescriptor[] = [
+    editorField('NOME DO PERSONAGEM', 'Nome', 'Identidade'),
+    editorField('RAÇA', 'Raça', 'Identidade'),
+    editorField('ORIGEM', 'Origem', 'Identidade'),
+    editorField('CLASSE', 'Classe', 'Identidade'),
+    editorField('Lv', 'Nível', 'Identidade', undefined, undefined, {
+      validation: integerValidation(1, 20),
+    }),
+    editorField('DIVINDADE', 'Divindade', 'Identidade'),
+  ];
+
+  for (const [name, label, modifierName] of [
+    ['For', 'Força', 'ModFor'],
+    ['Des', 'Destreza', 'ModDes'],
+    ['Con', 'Constituição', 'ModCon'],
+    ['Int', 'Inteligência', 'ModInt'],
+    ['Sab', 'Sabedoria', 'ModSab'],
+    ['Car', 'Carisma', 'ModCar'],
+  ] as const) {
+    descriptors.push(
+      editorField(name, 'Atributo', 'Atributos e modificadores', label, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+      editorField(modifierName, 'Modificador', 'Atributos e modificadores', label, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+    );
+  }
+
+  descriptors.push(
+    editorField('PVs Totais', 'PV máximo', 'Pontos de vida e mana'),
+    editorField('PVs Atuais', 'PV atual', 'Pontos de vida e mana'),
+    editorField(
+      'BossBar.PVs Temporarios',
+      'PV temporário',
+      'Pontos de vida e mana',
+      undefined,
+      undefined,
+      { defaultValue: '0', validation: integerValidation(0, 1_000_000) },
+    ),
+    editorField('PMs Totais', 'PM máximo', 'Pontos de vida e mana'),
+    editorField('PMs Atuais', 'PM atual', 'Pontos de vida e mana'),
+  );
+
+  for (const rule of skillRules) {
+    const components = skillComponentFields(rule);
+    if (rule.code === '230') {
+      descriptors.push(editorField('Ofício 1', 'Nome', 'Perícias', rule.name));
+    } else if (rule.code === '240') {
+      descriptors.push(editorField('Ofício_2', 'Nome', 'Perícias', rule.name));
+    }
+    descriptors.push(
+      editorField(rule.trainedField, 'Treinada', 'Perícias', rule.name),
+      editorField(components.halfLevel, '1/2 do nível', 'Perícias', rule.name, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+      editorField(rule.modifierField, 'Mod. de atributo', 'Perícias', rule.name, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+      editorField(components.training, 'Treino', 'Perícias', rule.name, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+      editorField(
+        components.other,
+        'Outros',
+        'Perícias',
+        rule.name,
+        undefined,
+        { defaultValue: '0', validation: integerValidation(-999, 999) },
+      ),
+      editorField(rule.code, 'Total', 'Perícias', rule.name, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+    );
+  }
+
+  for (let index = 1; index <= 5; index += 1) {
+    const group = `Ataque ${index}`;
+    const criticalField = `Crítico ${index}`;
+    const marginField = `BossBar.Ataque.${index}.MargemCritico`;
+    const multiplierField = `BossBar.Ataque.${index}.MultiplicadorCritico`;
+    descriptors.push(
+      editorField(`Ataque ${index}`, 'Nome', 'Ataques', group),
+      editorField(
+        `Bônus Atq ${index}`,
+        'Teste de ataque',
+        'Ataques',
+        group,
+        undefined,
+        { validation: formulaValidation() },
+      ),
+      editorField(
+        `Dano ${index}`,
+        'Dano',
+        'Ataques',
+        group,
+        undefined,
+        { validation: formulaValidation() },
+      ),
+      editorField(
+        marginField,
+        'Margem de crítico',
+        'Ataques',
+        group,
+        (values) => values[marginField] ?? parseCritical(values[criticalField]).margin,
+        { validation: integerValidation(2, 20) },
+      ),
+      editorField(
+        multiplierField,
+        'Multiplicador de crítico',
+        'Ataques',
+        group,
+        (values) => values[multiplierField] ?? parseCritical(values[criticalField]).multiplier,
+        { defaultValue: '2', validation: integerValidation(1, 20) },
+      ),
+      editorField(`Tipo ${index}`, 'Tipo', 'Ataques', group),
+      editorField(`Alcance ${index}`, 'Alcance', 'Ataques', group),
+    );
+  }
+
+  descriptors.push(
+    editorField('ModAtribDefe', 'Mod. de Destreza', 'Defesa'),
+    editorField('B.Arm', 'Bônus de armadura', 'Defesa'),
+    editorField('B.Esc', 'Bônus de escudo', 'Defesa'),
+    editorField('Outros B.CA', 'Outros', 'Defesa'),
+    editorField('PArmTotal', 'Penalidade de armadura', 'Defesa'),
+    editorField('CA', 'Total', 'Defesa'),
+    editorField('Proficiências', 'Proficiências', 'Proficiências'),
+  );
+
+  for (let index = 1; index <= MAX_ARMOR_ROWS; index += 1) {
+    const group = `Armadura ${index}`;
+    descriptors.push(
+      editorField(index === 1 ? 'Armadura' : `BossBar.Armadura.${index}.Nome`, 'Nome', 'Armadura e escudo', group),
+      editorField(index === 1 ? 'B.Arm1' : `BossBar.Armadura.${index}.Defesa`, 'Defesa', 'Armadura e escudo', group, undefined, {
+        validation: integerValidation(0, 999),
+      }),
+      editorField(index === 1 ? 'Pa' : `BossBar.Armadura.${index}.Penalidade`, 'Penalidade', 'Armadura e escudo', group, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+    );
+  }
+  for (let index = 1; index <= MAX_SHIELD_ROWS; index += 1) {
+    const group = `Escudo ${index}`;
+    descriptors.push(
+      editorField(index === 1 ? 'Escudo' : `BossBar.Escudo.${index}.Nome`, 'Nome', 'Armadura e escudo', group),
+      editorField(index === 1 ? 'B.Esc2' : `BossBar.Escudo.${index}.Defesa`, 'Defesa', 'Armadura e escudo', group, undefined, {
+        validation: integerValidation(0, 999),
+      }),
+      editorField(index === 1 ? 'Pe' : `BossBar.Escudo.${index}.Penalidade`, 'Penalidade', 'Armadura e escudo', group, undefined, {
+        validation: integerValidation(-99, 99),
+      }),
+    );
+  }
+
+  descriptors.push(
+    editorField('SeleTamanho', 'Tamanho', 'Características'),
+    editorField(
+      'Exp',
+      'Pontos de experiência',
+      'Características',
+      undefined,
+      undefined,
+      { defaultValue: '0', validation: integerValidation(0, 1_000_000_000) },
+    ),
+    editorField('Desloc', 'Deslocamento', 'Características'),
+  );
+
+  for (let index = 1; index <= MAX_ITEM_ROWS; index += 1) {
+    const group = `Item ${index}`;
+    descriptors.push(
+      editorField(
+        index <= 15 ? `Item${index}` : `BossBar.Item.${index}.Nome`,
+        'Item',
+        'Itens',
+        group,
+      ),
+      editorField(
+        `BossBar.Item.${index}.Quantidade`,
+        'Quantidade',
+        'Itens',
+        group,
+        undefined,
+        { defaultValue: '0', validation: integerValidation(0, 9_999) },
+      ),
+      editorField(
+        index <= 15 ? `PesoItem${index}` : `BossBar.Item.${index}.Peso`,
+        'Peso',
+        'Itens',
+        group,
+        undefined,
+        { validation: decimalValidation(0, 1_000_000) },
+      ),
+    );
+  }
+  descriptors.push(
+    editorField('CargaTotal', 'Carga atual', 'Itens', 'Carga', undefined, {
+      defaultValue: '0',
+      validation: decimalValidation(0, 100_000_000),
+    }),
+    editorField('CargaMax', 'Carga máxima', 'Itens', 'Carga', undefined, {
+      validation: decimalValidation(0, 100_000_000),
+    }),
+    editorField('Levantar', 'Levantar', 'Itens', 'Carga'),
+  );
+
+  descriptors.push(
+    editorField('SeleAtribMagia', 'Atributo-chave', 'Magias'),
+    editorField('ModAtribMagia', 'Modificador', 'Magias'),
+    editorField('TesteResist', 'Teste de resistência', 'Magias'),
+  );
+  for (let index = 1; index <= MAX_SPELL_ROWS; index += 1) {
+    for (const [fieldName, label] of spellFields) {
+      const name = `BossBar.Magia.${index}.${fieldName}`;
+      descriptors.push(editorField(
+        name,
+        label,
+        'Magias',
+        `Magia ${index}`,
+        index === 1 && fieldName === 'Efeito'
+          ? (values) => values[name] ?? values.Magias ?? ''
+          : undefined,
+        { validation: textValidation(fieldName === 'Efeito' ? 1_000 : 160) },
+      ));
+    }
+  }
+  descriptors.push(
+    editorField('Descrição', 'Descrição', 'Descrição', undefined, undefined, {
+      validation: textValidation(2_000),
+    }),
+    editorField('HabRaçasOrigem', 'Habilidades de raça e origem', 'Habilidades'),
+    editorField('HabClassePoderes', 'Habilidades de classe e poderes', 'Habilidades'),
+  );
+  return descriptors;
+};
+
+const CHARACTER_SHEET_EDITOR_DESCRIPTORS = characterSheetEditorDescriptors();
+const CHARACTER_SHEET_EDITOR_FIELD_NAMES = new Set(
+  CHARACTER_SHEET_EDITOR_DESCRIPTORS.map(({ name }) => name),
+);
+const CHARACTER_SHEET_EDITOR_DESCRIPTOR_BY_NAME = new Map(
+  CHARACTER_SHEET_EDITOR_DESCRIPTORS.map((descriptor) => [descriptor.name, descriptor]),
+);
+const DICE_FORMULA_PATTERN = /^[+-]?\s*(?:\d+d\d+|\d+)(?:\s*[+-]\s*(?:\d+d\d+|\d+))*$/i;
+
+export const validateCharacterSheetEditorUpdates = (
+  updates: readonly CharacterSheetEditorField[],
+): string | null => {
+  const names = new Set<string>();
+  for (const update of updates) {
+    if (names.has(update.name)) return 'A ficha contém campos duplicados.';
+    names.add(update.name);
+    const descriptor = CHARACTER_SHEET_EDITOR_DESCRIPTOR_BY_NAME.get(update.name);
+    if (!descriptor) return `O campo ${update.label || update.name} não é reconhecido.`;
+    const value = update.value.trim();
+    const validation = descriptor.validation;
+    if (!value || !validation) continue;
+    if (validation.maxLength !== undefined && value.length > validation.maxLength) {
+      return `${descriptor.label} aceita no máximo ${validation.maxLength} caracteres.`;
+    }
+    if (validation.kind === 'formula' && !DICE_FORMULA_PATTERN.test(value)) {
+      return `${descriptor.label} deve usar apenas números, dados, + e - (ex.: 2d6 + 3).`;
+    }
+    if (validation.kind === 'decimal') {
+      const normalized = value.replace(',', '.');
+      if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) {
+        return `${descriptor.label} deve ser um número válido.`;
+      }
+      const parsed = Number(normalized);
+      if (validation.min !== undefined && parsed < validation.min) {
+        return `${descriptor.label} deve ser no mínimo ${validation.min}.`;
+      }
+      if (validation.max !== undefined && parsed > validation.max) {
+        return `${descriptor.label} deve ser no máximo ${validation.max}.`;
+      }
+    }
+    if (validation.kind === 'integer') {
+      if (!/^[+-]?\d+$/.test(value)) return `${descriptor.label} deve ser um número inteiro.`;
+      const parsed = Number.parseInt(value, 10);
+      if (validation.min !== undefined && parsed < validation.min) {
+        return `${descriptor.label} deve ser no mínimo ${validation.min}.`;
+      }
+      if (validation.max !== undefined && parsed > validation.max) {
+        return `${descriptor.label} deve ser no máximo ${validation.max}.`;
+      }
+    }
+  }
+  if (updates.length > CHARACTER_SHEET_EDITOR_DESCRIPTORS.length) {
+    return 'A ficha contém campos demais.';
+  }
+  return null;
+};
 
 const classProgression: Record<string, {
   initialHealth: number;
@@ -126,7 +494,7 @@ const numericOrZero = (value: string | undefined) => numberValue(value) ?? 0;
 const emptySummary = (): CharacterSheetSummary => ({
   characterName: '', playerName: '', race: '', origin: '', characterClass: '',
   level: null, currentHealth: null, maxHealth: null, currentMana: null,
-  maxMana: null, defense: null,
+  maxMana: null, temporaryHealth: 0, defense: null,
   attributes: { for: null, des: null, con: null, int: null, sab: null, car: null },
   defenses: { melee: null, ranged: null, calculation: '' },
   skills: [], attacks: [], movement: '', size: '', currentLoad: null, maxLoad: null,
@@ -241,6 +609,7 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
 
   const maxHealth = integerValue(fields['PVs Totais']);
   const currentHealth = integerValue(fields['PVs Atuais']);
+  const temporaryHealth = Math.max(0, integerValue(fields['BossBar.PVs Temporarios']) ?? 0);
   const maxMana = integerValue(fields['PMs Totais']);
   const currentMana = integerValue(fields['PMs Atuais']);
   for (const [field, value] of [
@@ -290,10 +659,10 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
   const halfLevel = Math.floor(validLevel / 2);
   const skills: CharacterSheetSummary['skills'] = [];
   for (const rule of skillRules) {
-    const suffix = rule.code === '110' ? 11 : Number.parseInt(rule.code, 10) / 10;
-    const halfField = rule.code === '300' ? '301' : `${String(suffix).padStart(2, '0')}1`;
-    const trainingField = rule.code === '300' ? '303' : `${String(suffix).padStart(2, '0')}3`;
-    const otherField = rule.code === '300' ? '304' : `${String(suffix).padStart(2, '0')}4`;
+    const components = skillComponentFields(rule);
+    const halfField = components.halfLevel;
+    const trainingField = components.training;
+    const otherField = components.other;
     const trained = isChecked(fields[rule.trainedField]);
     const expectedTraining = trainingBonus(validLevel, trained);
     addFormulaIssue(issues, halfField, integerValue(fields[halfField]), halfLevel, `A metade do nível em ${rule.code}`);
@@ -366,6 +735,7 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
       level,
       currentHealth,
       maxHealth,
+      temporaryHealth,
       currentMana,
       maxMana,
       defense,
@@ -421,4 +791,244 @@ export const inspectCharacterSheetPdf = async (
   });
   validation = validateFields(readFieldValues(document), document.getForm().getFields().length);
   return { validation, bytes: correctedBytes };
+};
+
+const editorFields = (document: PDFDocument): CharacterSheetEditorField[] => {
+  const values = readFieldValues(document);
+  const fields = new Map(document.getForm().getFields().map((field) => [field.getName(), field]));
+  const activeSpellRows = new Set<number>();
+  for (let index = 1; index <= MAX_SPELL_ROWS; index += 1) {
+    if (spellFields.some(([fieldName]) => (
+      values[`BossBar.Magia.${index}.${fieldName}`]?.trim()
+    ))) activeSpellRows.add(index);
+  }
+  if (activeSpellRows.size === 0 && values.Magias?.trim()) activeSpellRows.add(1);
+  const activeItemRows = new Set<number>(
+    Array.from({ length: MIN_ITEM_ROWS }, (_, index) => index + 1),
+  );
+  for (let index = 1; index <= MAX_ITEM_ROWS; index += 1) {
+    const names = [
+      index <= 15 ? `Item${index}` : `BossBar.Item.${index}.Nome`,
+      `BossBar.Item.${index}.Quantidade`,
+      index <= 15 ? `PesoItem${index}` : `BossBar.Item.${index}.Peso`,
+    ];
+    if (names.some((name) => values[name]?.trim())) activeItemRows.add(index);
+  }
+  const activeArmorRows = new Set<number>([1]);
+  for (let index = 2; index <= MAX_ARMOR_ROWS; index += 1) {
+    if (['Nome', 'Defesa', 'Penalidade'].some((fieldName) => (
+      values[`BossBar.Armadura.${index}.${fieldName}`]?.trim()
+    ))) activeArmorRows.add(index);
+  }
+  const activeShieldRows = new Set<number>([1]);
+  for (let index = 2; index <= MAX_SHIELD_ROWS; index += 1) {
+    if (['Nome', 'Defesa', 'Penalidade'].some((fieldName) => (
+      values[`BossBar.Escudo.${index}.${fieldName}`]?.trim()
+    ))) activeShieldRows.add(index);
+  }
+  return CHARACTER_SHEET_EDITOR_DESCRIPTORS.filter((descriptor) => {
+    const spellMatch = /^BossBar\.Magia\.(\d+)\./.exec(descriptor.name);
+    if (spellMatch) return activeSpellRows.has(Number(spellMatch[1]));
+    const itemMatch = /^Item (\d+)$/.exec(descriptor.group ?? '');
+    if (itemMatch) return activeItemRows.has(Number(itemMatch[1]));
+    const armorMatch = /^Armadura (\d+)$/.exec(descriptor.group ?? '');
+    if (armorMatch) return activeArmorRows.has(Number(armorMatch[1]));
+    const shieldMatch = /^Escudo (\d+)$/.exec(descriptor.group ?? '');
+    if (shieldMatch) return activeShieldRows.has(Number(shieldMatch[1]));
+    return true;
+  }).map((descriptor) => {
+    const field = fields.get(descriptor.name);
+    const base = {
+      name: descriptor.name,
+      label: descriptor.label,
+      section: descriptor.section,
+      ...(descriptor.group ? { group: descriptor.group } : {}),
+      ...(descriptor.validation ? { validation: descriptor.validation } : {}),
+    };
+    const sourceValue = descriptor.valueFrom?.(values) ?? values[descriptor.name];
+    const fallbackValue = sourceValue === undefined || sourceValue === ''
+      ? descriptor.defaultValue ?? ''
+      : sourceValue;
+    try {
+      if (field instanceof PDFTextField) {
+        return { ...base, kind: 'text' as const, value: fallbackValue };
+      }
+      if (field instanceof PDFCheckBox) {
+        return { ...base, kind: 'checkbox' as const, value: field.isChecked() ? 'Yes' : 'Off' };
+      }
+      if (field instanceof PDFDropdown || field instanceof PDFOptionList) {
+        return {
+          ...base,
+          kind: 'choice',
+          value: field.getSelected()[0] ?? '',
+          options: field.getOptions().slice(0, 100),
+        } as CharacterSheetEditorField;
+      }
+      if (field instanceof PDFRadioGroup) {
+        return {
+          ...base,
+          kind: 'choice',
+          value: field.getSelected() ?? '',
+          options: field.getOptions().slice(0, 100),
+        } as CharacterSheetEditorField;
+      }
+    } catch {
+      // A malformed widget remains editable as plain text in the semantic editor.
+    }
+    return { ...base, kind: 'text' as const, value: fallbackValue };
+  });
+};
+
+export const readCharacterSheetEditorFields = async (bytes: Uint8Array) => {
+  const document = await PDFDocument.load(bytes, {
+    ignoreEncryption: false,
+    updateMetadata: false,
+    throwOnInvalidObject: true,
+  });
+  return editorFields(document);
+};
+
+export const applyCharacterSheetEditorFields = async (
+  bytes: Uint8Array,
+  updates: readonly CharacterSheetEditorField[],
+) => {
+  const invalidUpdate = validateCharacterSheetEditorUpdates(updates);
+  if (invalidUpdate) throw new Error(invalidUpdate);
+  const document = await PDFDocument.load(bytes, {
+    ignoreEncryption: false,
+    updateMetadata: false,
+    throwOnInvalidObject: true,
+  });
+  const form = document.getForm();
+  const originalValues = readFieldValues(document);
+  const byName = new Map(updates.map((field) => [field.name, field]));
+  for (const field of form.getFields()) {
+    const update = byName.get(field.getName());
+    if (!update) continue;
+    const value = update.value.slice(0, 2_000);
+    try {
+      if (field instanceof PDFTextField && update.kind === 'text') {
+        field.setText(value);
+      } else if (field instanceof PDFCheckBox && update.kind === 'checkbox') {
+        if (value === 'Yes') field.check();
+        else field.uncheck();
+      } else if (
+        (field instanceof PDFDropdown || field instanceof PDFOptionList) &&
+        update.kind === 'choice' &&
+        field.getOptions().includes(value)
+      ) {
+        field.select(value);
+      } else if (
+        field instanceof PDFRadioGroup &&
+        update.kind === 'choice' &&
+        field.getOptions().includes(value)
+      ) {
+        field.select(value);
+      }
+    } catch {
+      // Unsupported/malformed fields are retained unchanged and remain visible
+      // in validation instead of invalidating the complete player proposal.
+    }
+  }
+
+  const existingNames = new Set(form.getFields().map((field) => field.getName()));
+  for (const update of updates) {
+    const descriptor = CHARACTER_SHEET_EDITOR_DESCRIPTOR_BY_NAME.get(update.name);
+    const normalizedValue = update.value.trim();
+    if (
+      existingNames.has(update.name) ||
+      !CHARACTER_SHEET_EDITOR_FIELD_NAMES.has(update.name) ||
+      update.kind !== 'text' ||
+      !normalizedValue ||
+      normalizedValue === descriptor?.defaultValue
+    ) continue;
+    try {
+      form.createTextField(update.name).setText(update.value.slice(0, 2_000));
+      existingNames.add(update.name);
+    } catch {
+      // Supplemental BossBar fields never invalidate the original PDF.
+    }
+  }
+
+  for (let index = 1; index <= 5; index += 1) {
+    const marginFieldName = `BossBar.Ataque.${index}.MargemCritico`;
+    const multiplierFieldName = `BossBar.Ataque.${index}.MultiplicadorCritico`;
+    const margin = byName.get(marginFieldName)?.value.trim();
+    const multiplier = byName
+      .get(multiplierFieldName)
+      ?.value.trim();
+    if (margin === undefined && multiplier === undefined) continue;
+    const criticalName = `Crítico ${index}`;
+    let previousCritical = '';
+    try {
+      previousCritical = form.getTextField(criticalName).getText() ?? '';
+    } catch {
+      // The source PDF may not include every attack slot.
+    }
+    const attackConfigured = [
+      `Ataque ${index}`,
+      `Bônus Atq ${index}`,
+      `Dano ${index}`,
+    ].some((name) => Boolean(byName.get(name)?.value.trim()));
+    if (
+      !previousCritical.trim() &&
+      !attackConfigured &&
+      !existingNames.has(marginFieldName) &&
+      !existingNames.has(multiplierFieldName)
+    ) continue;
+    if (!margin && !multiplier && !previousCritical.trim()) continue;
+    const criticalValue = !margin && !multiplier
+      ? ''
+        : [margin || '20', `x${multiplier || '2'}`].join('/');
+    try {
+      form.getTextField(criticalName).setText(criticalValue);
+    } catch {
+      try {
+        form.createTextField(criticalName).setText(criticalValue);
+      } catch {
+        // A malformed critical field remains unchanged.
+      }
+    }
+  }
+
+  const spells = Array.from({ length: MAX_SPELL_ROWS }, (_, zeroBasedIndex) => {
+    const index = zeroBasedIndex + 1;
+    return Object.fromEntries(spellFields.map(([fieldName, label]) => [
+      label,
+      byName.get(`BossBar.Magia.${index}.${fieldName}`)?.value.trim() ?? '',
+    ]));
+  }).filter((spell) => Object.values(spell).some(Boolean));
+  const hadStructuredSpells = Object.keys(originalValues)
+    .some((name) => name.startsWith('BossBar.Magia.'));
+  const legacySpellText = originalValues.Magias?.trim() ?? '';
+  const isUnchangedLegacySpell = !hadStructuredSpells && spells.length === 1 &&
+    Object.entries(spells[0] ?? {}).every(([label, value]) => (
+      label === 'Efeito' ? value === legacySpellText : !value
+    ));
+  if (!isUnchangedLegacySpell && (hadStructuredSpells || spells.length > 0)) {
+    const serializedSpells = spells.map((spell) => Object.entries(spell)
+      .filter(([, value]) => value)
+      .map(([label, value]) => `${label}: ${value}`)
+      .join(' | '))
+      .join('\n');
+    try {
+      form.getTextField('Magias').setText(serializedSpells.slice(0, 8_000));
+    } catch {
+      // The structured BossBar fields remain authoritative when the source PDF has no legacy field.
+    }
+  }
+  const updatedBytes = await document.save({
+    addDefaultPage: false,
+    updateFieldAppearances: true,
+    useObjectStreams: false,
+  });
+  const validation = validateFields(
+    readFieldValues(document),
+    document.getForm().getFields().length,
+  );
+  return {
+    bytes: updatedBytes,
+    validation,
+    fields: editorFields(document),
+  };
 };

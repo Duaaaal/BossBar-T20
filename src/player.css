@@ -410,7 +410,7 @@ body {
   text-align: left;
   text-transform: none;
   text-shadow: 0 1px 2px #000;
-  pointer-events: none;
+  pointer-events: auto;
   transform: translateY(4px);
   transition:
     visibility 0s linear 120ms,
@@ -1373,7 +1373,7 @@ body {
   box-shadow: 0 5px 16px rgb(0 0 0 / 58%);
   color: #e6d4b7;
   font: 700 11px/1.2 Inter, "Segoe UI", sans-serif;
-  pointer-events: none;
+  pointer-events: auto;
   text-shadow: 0 1px 2px #000;
   animation: encounter-roll-float 3s cubic-bezier(.2, .8, .2, 1) both;
 }
@@ -1422,6 +1422,13 @@ body {
   background: rgb(7 6 7 / 54%);
   color: #bfa77f;
   font: 850 9px/1 Inter, "Segoe UI", sans-serif;
+}
+
+.encounter-roll-result.is-related-highlight {
+  z-index: 3;
+  border-color: #f2bf65;
+  filter: brightness(1.18);
+  box-shadow: 0 0 0 1px rgb(255 218 139 / 34%), 0 0 22px rgb(222 139 43 / 62%);
 }
 
 .encounter-roll-relation {
@@ -1590,24 +1597,19 @@ body {
   animation: self-initiative-pulse 1.15s ease-in-out infinite alternate;
 }
 
-.self-combat-feedback {
-  position: fixed;
-  z-index: 2147483647;
-  top: 58px;
-  left: 50%;
-  width: max-content;
-  max-width: min(460px, calc(100vw - 30px));
-  border: 1px solid rgb(201 152 82 / 58%);
-  border-radius: 7px;
-  padding: 9px 14px;
-  background: rgb(16 11 12 / 91%);
-  color: #ead5b4;
-  box-shadow: 0 8px 22px rgb(0 0 0 / 50%);
-  cursor: pointer;
-  font: 750 12px/1.35 Inter, "Segoe UI", sans-serif;
-  text-align: center;
-  transform: translateX(-50%);
-  animation: self-combat-notice-in 180ms ease-out both;
+.self-combat-shortcuts button.is-pending-damage {
+  border-color: #f7b05a;
+  background: linear-gradient(145deg, #733213, #bd6420);
+  color: #fff0bd;
+  animation: pending-player-damage 900ms ease-in-out infinite alternate;
+}
+.self-combat-shortcuts button.is-pending-damage.is-critical {
+  border-color: #ffdf72;
+  background: linear-gradient(145deg, #83251c, #d54b25);
+}
+@keyframes pending-player-damage {
+  from { box-shadow: 0 0 5px rgb(237 132 44 / 40%); }
+  to { box-shadow: 0 0 17px rgb(255 178 62 / 92%), inset 0 0 6px rgb(255 235 157 / 26%); }
 }
 
 .player-combat-modal-layer {
@@ -1892,13 +1894,53 @@ body {
   transform: translateX(-50%);
 }
 
+.player-client-settings-layer {
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 18%);
+}
+
+.player-client-settings {
+  width: min(520px, calc(100vw - 32px));
+  border: 1px solid rgb(201 146 71 / 62%);
+  border-radius: 12px;
+  padding: 18px;
+  background: linear-gradient(145deg, rgb(24 18 18 / 98%), rgb(8 8 10 / 98%));
+  color: #eadbc3;
+  box-shadow: 0 22px 70px rgb(0 0 0 / 68%), inset 0 0 24px rgb(130 50 24 / 12%);
+}
+
+.player-client-settings > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.player-client-settings h2,
+.player-client-settings h3,
+.player-client-settings p { margin: 0; }
+.player-client-settings h2 { color: #f4d7a4; font: 800 20px/1.1 Cinzel, Georgia, serif; }
+.player-client-settings h3 { margin-top: 16px; color: #d79c52; font: 800 11px/1 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+.player-client-settings > header button { border: 0; background: transparent; color: #f0d8b2; font-size: 25px; cursor: pointer; }
+.player-client-settings p { margin-top: 14px; color: #a99477; font-size: 11px; }
+.player-client-volume { display: grid; grid-template-columns: 112px 1fr 42px; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; font-weight: 700; }
+.player-client-volume input { width: 100%; accent-color: #c45730; }
+.player-client-volume output { color: #e3c18a; text-align: right; }
+.player-client-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin-top: 10px; }
+.player-client-settings-grid label { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.player-client-settings-grid input { accent-color: #b7472f; }
+
 .player-resource-notices button {
-  border: 1px solid rgb(201 152 82 / 58%);
+  border: 1px solid rgb(239 191 103 / 78%);
   border-radius: 7px;
   padding: 9px 14px;
-  background: rgb(16 11 12 / 91%);
-  color: #ead5b4;
-  box-shadow: 0 8px 22px rgb(0 0 0 / 50%);
+  background: linear-gradient(135deg, rgb(130 82 20 / 99%), rgb(48 27 12 / 99%));
+  color: #fff4d2;
+  box-shadow: 0 9px 25px rgb(0 0 0 / 58%), inset 0 1px rgb(255 225 163 / 24%);
   cursor: pointer;
   font: 750 12px/1.35 Inter, "Segoe UI", sans-serif;
   text-align: center;
@@ -1906,8 +1948,9 @@ body {
 }
 
 .player-resource-notices button.is-rejected {
-  border-color: #a64751;
-  color: #f0a1a8;
+  border-color: #e46b65;
+  background: linear-gradient(135deg, rgb(145 31 38 / 99%), rgb(57 10 17 / 99%));
+  color: #ffd4d0;
 }
 
 .player-resource-notices button.is-heroic {
@@ -2067,7 +2110,17 @@ body {
   margin-bottom: 6px;
 }
 
+.party-player-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.party-player-heading .party-player-actions { flex: 0 0 auto; }
+
 .party-player-card header strong {
+  min-width: 0;
   overflow: hidden;
   color: #ffe6ba;
   font: 700 clamp(11px, .9vw, 14px)/1.1 Georgia, "Times New Roman", serif;
@@ -2135,13 +2188,20 @@ body {
   transition: width 420ms ease;
 }
 
+.party-player-bar.is-health > span.is-temporary {
+  inset: 0 0 0 auto;
+  z-index: 1;
+  background: linear-gradient(270deg, #16477f, #3197e8);
+  box-shadow: 0 0 7px rgb(55 157 255 / 52%);
+}
+
 .party-player-bar.is-mana > span {
   background: linear-gradient(90deg, #10275f, #2879d7);
 }
 
 .party-player-bar output {
   position: absolute;
-  z-index: 1;
+  z-index: 2;
   inset: 0;
   color: #fff7e8;
   font: 800 10px/13px Inter, "Segoe UI", sans-serif;
@@ -2149,33 +2209,30 @@ body {
   text-shadow: 0 1px 3px #000, 0 0 3px #000;
 }
 
-.party-player-defense {
+.party-player-combat-values {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 7px;
   margin-top: 5px;
   color: #d8c5a6;
   font: 750 9px/1 Inter, "Segoe UI", sans-serif;
 }
 
-.party-player-defense strong {
-  color: #ead8b8;
-  font: inherit;
-}
-
-.party-player-defense span {
+.party-player-combat-values span {
   display: inline-flex;
   align-items: center;
   gap: 2px;
 }
 
-.party-player-defense span.is-bonus { color: #68d68d; }
-.party-player-defense span.is-penalty { color: #ef6969; }
+.party-player-combat-values span.is-bonus,
+.party-player-combat-values b.is-bonus { color: #68d68d; }
+.party-player-combat-values span.is-penalty,
+.party-player-combat-values b.is-penalty { color: #ef6969; }
 .party-player-details-summary b.is-bonus { color: #68d68d; }
 .party-player-details-summary b.is-penalty { color: #ef6969; }
 
-.party-player-defense img,
+.party-player-combat-values img,
 .party-player-details-summary img {
   width: 13px;
   height: 13px;
@@ -2183,16 +2240,16 @@ body {
   object-fit: contain;
 }
 
-.party-player-defense .party-player-defense-divider {
-  display: inline;
+.party-player-defense-combined i {
   color: #8e7b62;
+  font-style: normal;
 }
 
 .party-player-actions {
   display: flex;
   justify-content: center;
   gap: 8px;
-  margin-top: 6px;
+  margin: 0;
 }
 
 .party-player-actions > span {
@@ -2363,10 +2420,8 @@ body {
 .party-player-survival-state.is-dead { color: #d16b64; }
 
 .fight-history-button {
-  position: fixed;
-  z-index: 89;
-  right: 22px;
-  bottom: 142px;
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid rgb(192 139 68 / 58%);
   border-radius: 7px;
   padding: 7px 10px;
@@ -2435,12 +2490,11 @@ body {
 .fight-history-entry.is-heal span { color: #82e5ae; }
 
 .encounter-turn-hud {
-  position: fixed;
-  z-index: 88;
-  right: 22px;
-  bottom: 22px;
+  position: relative;
   display: grid;
-  min-width: 118px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 10px 14px;
   border: 1px solid rgb(192 139 68 / 46%);
   border-radius: 9px;
@@ -2449,6 +2503,16 @@ body {
   font-family: Inter, "Segoe UI", sans-serif;
   text-align: center;
   box-shadow: 0 9px 26px rgb(0 0 0 / 44%);
+}
+
+.encounter-turn-tools {
+  position: fixed;
+  z-index: 88;
+  right: 22px;
+  bottom: 22px;
+  display: grid;
+  width: 112px;
+  gap: 7px;
 }
 
 .encounter-turn-hud > span {
@@ -2542,7 +2606,7 @@ body {
 
 .boss-hud:has(.boss-status-icon:hover),
 .boss-hud:has(.boss-status-icon:focus-visible),
-.encounter-turn-hud:has(.encounter-turn-order-tooltip) {
+.encounter-turn-tools:has(.encounter-turn-order-tooltip) {
   z-index: 2147483646;
 }
 
@@ -2591,15 +2655,17 @@ body {
     margin-bottom: 4px;
   }
 
-  .party-player-defense,
-  .party-player-actions {
+  .party-player-combat-values {
     margin-top: 4px;
   }
 
-  .encounter-turn-hud {
+  .encounter-turn-tools {
     right: 10px;
     bottom: 10px;
-    min-width: 92px;
+    width: 98px;
+  }
+
+  .encounter-turn-hud {
     padding: 7px 9px;
   }
 
@@ -2640,12 +2706,11 @@ body {
     padding-block: 5px;
   }
 
-  .party-player-actions {
-    margin-top: 3px;
+  .encounter-turn-tools {
+    bottom: 8px;
   }
 
   .encounter-turn-hud {
-    bottom: 8px;
     padding-block: 6px;
   }
 }

@@ -127,6 +127,12 @@ export const normalizeDebugPlayer = (
       text(value.characterName, current.characterName, 100) || current.characterName,
     currentHealth: integer(value.currentHealth, current.currentHealth, -1_000_000, maxHealth),
     maxHealth,
+    temporaryHealth: integer(
+      value.temporaryHealth,
+      current.temporaryHealth,
+      0,
+      1_000_000,
+    ),
     currentMana: integer(value.currentMana, current.currentMana, 0, maxMana),
     maxMana,
     defenseMelee: integer(value.defenseMelee, current.defenseMelee, -999, 999),

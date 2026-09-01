@@ -22,6 +22,7 @@ export type CharacterSheetSummary = {
   level: number | null;
   currentHealth: number | null;
   maxHealth: number | null;
+  temporaryHealth: number;
   currentMana: number | null;
   maxMana: number | null;
   defense: number | null;
@@ -100,6 +101,60 @@ export type CharacterSheetUploadResult = {
   ok: boolean;
   sheet?: PlayerCharacterSheetStatus;
   corrected?: boolean;
+  error?: string;
+};
+
+export type CharacterSheetEditorField = {
+  name: string;
+  label: string;
+  section: string;
+  group?: string;
+  kind: 'text' | 'checkbox' | 'choice';
+  value: string;
+  options?: string[];
+  validation?: {
+    kind: 'integer' | 'decimal' | 'formula' | 'text';
+    min?: number;
+    max?: number;
+    maxLength?: number;
+  };
+};
+
+export type CharacterSheetEditorDocument = {
+  fileName: string;
+  fields: CharacterSheetEditorField[];
+  pendingApproval: boolean;
+  requestId: string | null;
+};
+
+export type CharacterSheetInteractionState =
+  | 'idle'
+  | 'editing'
+  | 'pending-approval';
+
+export type CharacterSheetFieldChange = {
+  field: string;
+  before: string;
+  after: string;
+};
+
+export type PlayerSheetChangeRequest = {
+  id: string;
+  profileId: string;
+  username: string;
+  fileName: string;
+  requestedAt: number;
+  changes: CharacterSheetFieldChange[];
+};
+
+export type CharacterSheetEditorResult = {
+  ok: boolean;
+  document?: CharacterSheetEditorDocument;
+  error?: string;
+};
+
+export type PlayerSheetChangeDecisionResult = {
+  ok: boolean;
   error?: string;
 };
 

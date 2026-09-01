@@ -147,7 +147,7 @@ button { cursor: pointer; }
     minmax(104px, .72fr)
     minmax(106px, .75fr)
     minmax(116px, .82fr)
-    minmax(142px, 1.05fr);
+    minmax(250px, 1.65fr);
   gap: 7px;
   align-items: end;
 }
@@ -245,6 +245,16 @@ button { cursor: pointer; }
   background: linear-gradient(145deg, #982139, #db3f58) !important;
   color: #fff0f3 !important;
 }
+.control-target-damage.is-pending-damage {
+  border-color: rgba(255, 201, 100, .95) !important;
+  background: linear-gradient(145deg, #8c3b16, #d77824) !important;
+  color: #fff4cd !important;
+  animation: pending-damage-ready 900ms ease-in-out infinite alternate;
+}
+@keyframes pending-damage-ready {
+  from { box-shadow: 0 0 4px rgb(255 157 52 / 32%); }
+  to { box-shadow: 0 0 15px rgb(255 167 47 / 78%), inset 0 0 8px rgb(255 226 142 / 20%); }
+}
 .control-target-area {
   border-color: rgba(255, 139, 85, .82) !important;
   color: #fff1e9 !important;
@@ -307,30 +317,103 @@ button { cursor: pointer; }
   background: linear-gradient(145deg, #5c3a25, #84502c) !important;
   color: #ffead0 !important;
 }
-.control-selected-attack {
-  display: inline-flex;
+.control-attack-selection {
+  position: relative;
+  display: grid;
   grid-column: 6;
   grid-row: 1;
-  min-width: 0;
-  align-self: center;
+  grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+}
+.control-attack-arrow {
+  color: #f2a95c;
+  font-size: .88rem;
+  font-weight: 900;
+  text-align: center;
+}
+.control-selected-attack {
+  display: grid;
+  min-width: 0;
+  min-height: 46px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 5px;
   overflow: hidden;
   border: 1px solid rgb(169 119 64 / 48%);
   border-radius: 7px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   background: rgb(24 16 15 / 72%);
   color: #eac99d;
   font: 800 .61rem/1.15 Inter, "Segoe UI", sans-serif;
   text-align: left;
+}
+.control-selected-attack > strong {
+  grid-column: 1;
+  overflow: hidden;
+  color: #f1d5aa;
+  font-size: .62rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.control-selected-attack > small {
+  display: -webkit-box;
+  grid-column: 1;
+  overflow: hidden;
+  color: #a99173;
+  font-size: .46rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .control-selected-attack i {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   color: #f2a95c;
-  font-size: .88rem;
+  font-size: .7rem;
   font-style: normal;
 }
+.control-attack-options {
+  position: absolute;
+  z-index: 2147483646;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  width: max(310px, calc(100% - 19px));
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid rgb(184 131 72 / 68%);
+  border-radius: 8px;
+  padding: 4px;
+  background: rgb(17 11 12 / 97%);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 62%);
+}
+.control-attack-options > button {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 0 !important;
+  border-radius: 5px !important;
+  padding: 6px 7px !important;
+  background: transparent !important;
+  color: #e7cfaa !important;
+  text-align: left;
+}
+.control-attack-options > button:hover,
+.control-attack-options > button.is-selected {
+  background: rgb(113 66 35 / 48%) !important;
+}
+.control-attack-options span,
+.control-attack-options small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.control-attack-options small { color: #a99173; font-size: .51rem; }
 .control-target-damage { grid-column: 5; grid-row: 1; }
 .control-skill-test-button.is-initiative-pending {
   animation: control-initiative-pulse 1.35s ease-in-out infinite;

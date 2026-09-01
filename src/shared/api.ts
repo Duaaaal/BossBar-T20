@@ -37,6 +37,7 @@ import type {
 import type {
   HostedPlayerPasswordResetResult,
   NotesSaveResult,
+  PlayerSheetChangeDecisionResult,
   PlayerProfileDeleteResult,
   PlayerProfileSummary,
 } from './character-sheet';
@@ -98,6 +99,9 @@ export type BossAPI = {
   applyAreaDamage: (request: AreaDamageRequest) => Promise<AreaDamageResult>;
   applyDirectPlayerDamage: (
     request: DirectPlayerDamageRequest,
+  ) => Promise<PlayerTargetActionResult>;
+  resolveDirectPlayerDamage: (
+    pendingDamageId: string,
   ) => Promise<PlayerTargetActionResult>;
   applyPlayerStatus: (
     request: PlayerStatusRequest,
@@ -219,6 +223,10 @@ export type BossAPI = {
   deletePlayerProfile: (
     profileId: string,
   ) => Promise<PlayerProfileDeleteResult>;
+  decidePlayerSheetChanges: (
+    requestId: string,
+    approved: boolean,
+  ) => Promise<PlayerSheetChangeDecisionResult>;
   getMasterNotes: () => Promise<string>;
   saveMasterNotes: (content: string) => Promise<NotesSaveResult>;
   getBossLibraryEntries: () => Promise<BossLibraryEntrySummary[]>;

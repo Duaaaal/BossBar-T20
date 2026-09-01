@@ -93,6 +93,7 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
           kind: 'natural-success-enemy',
           url: 'data:audio/mpeg;base64,//uQxAA=',
         },
+        targetPlayerIds: ['fixture-player'],
       });
     });
     await expect.poll(() => player.evaluate(() => (
@@ -113,11 +114,40 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
         phase: 'impact',
         duration: 1_100,
         soundEffect: null,
+        targetPlayerIds: ['fixture-player'],
       });
     });
     await expect.poll(() => player.evaluate(() => (
       window as typeof window & { __bossCriticalCueAnimations?: number }
     ).__bossCriticalCueAnimations ?? 0)).toBeGreaterThan(threatAnimationCount);
+    const criticalAnimationCount = await player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAnimations?: number }
+    ).__bossCriticalCueAnimations ?? 0);
+    const criticalAudioCount = await player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAudio?: number }
+    ).__bossCriticalCueAudio ?? 0);
+    await application.evaluate(({ BrowserWindow }) => {
+      const presentation = BrowserWindow.getAllWindows().find(
+        (window) => window.getTitle() === 'Apresentação do Chefão - BossBar T20',
+      );
+      presentation?.webContents.send('music:duck', {
+        id: 2,
+        phase: 'duck',
+        duration: 160,
+        targetVolume: 0.12,
+        soundEffect: {
+          id: 2,
+          kind: 'natural-failure',
+          url: 'data:audio/mpeg;base64,//uQxAA=',
+        },
+      });
+    });
+    await expect.poll(() => player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAudio?: number }
+    ).__bossCriticalCueAudio ?? 0)).toBeGreaterThan(criticalAudioCount);
+    await expect.poll(() => player.evaluate(() => (
+      window as typeof window & { __bossCriticalCueAnimations?: number }
+    ).__bossCriticalCueAnimations ?? 0)).toBe(criticalAnimationCount);
 
     await expect(master.getByRole('button', { name: 'Abrir bloco de notas' })).toHaveText('📝');
     await expect(master.locator('.master-header')).toHaveCSS('text-align', 'left');
@@ -257,13 +287,34 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     );
     await skillDialog.getByRole('button', { name: 'Rolar Iniciativa' }).click();
     await expect(control.getByRole('button', { name: 'Iniciar turno' })).toBeEnabled();
-    await expect(control.locator('.control-selected-attack')).toContainText('→');
+    await expect(control.locator('.control-attack-arrow')).toHaveText('→');
     await control.getByRole('button', { name: 'Armas/Ataques' }).click();
     const arsenalDialog = control.getByRole('dialog', {
       name: 'Armas e ataques',
     });
     await arsenalDialog.getByLabel('Dano', { exact: true }).fill('1d2 + 3');
     await arsenalDialog.getByRole('button', { name: 'Aplicar' }).click();
+    await expect(control.locator('.control-selected-attack')).toContainText('Golpe');
+    await expect(control.locator('.control-selected-attack')).toContainText(/Dano 1d2\s*\+\s*3/);
+    await expect(control.locator('.control-selected-attack')).toContainText('Tipo corpo a corpo');
+    await expect(control.locator('.control-selected-attack')).toContainText('Margem 20');
+    await expect(control.locator('.control-selected-attack')).toContainText('Mult. x2');
+    await expect(control.locator('.control-selected-attack')).toContainText('Alcance Adjacente');
+    await control.locator('.control-selected-attack').click();
+    const attackOptions = control.getByRole('listbox', { name: 'Ataque atual do chefão' });
+    await expect(attackOptions).toBeVisible();
+    await expect(attackOptions.getByRole('option', { name: /Golpe/ })).toBeVisible();
+    await control.locator('.control-selected-attack').click();
+    await control.getByRole('button', { name: 'Armas/Ataques' }).click();
+    await arsenalDialog.getByRole('button', { name: '+ Novo ataque' }).click();
+    await arsenalDialog.getByLabel('Nome', { exact: true }).fill('Rajada sombria');
+    await arsenalDialog.getByLabel('Dano', { exact: true }).fill('1d4');
+    await arsenalDialog.getByRole('button', { name: 'Aplicar' }).click();
+    await control.locator('.control-selected-attack').click();
+    await control.getByRole('option', { name: /Rajada sombria/ }).click();
+    await expect(control.locator('.control-selected-attack')).toContainText('Rajada sombria');
+    await control.locator('.control-selected-attack').click();
+    await control.getByRole('option', { name: /Golpe/ }).click();
     await expect(control.locator('.control-selected-attack')).toContainText('Golpe');
     await control.getByRole('button', { name: 'Dano em jogador' }).click();
     const activeDamageTargets = control.getByRole('dialog', {
@@ -287,11 +338,11 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(control.locator('.health-difference strong')).toHaveText('550/600');
     await expect(player.locator('.health-bar-fill')).toHaveAttribute('style', /91\.666/);
 
-    const panelToggle = control.getByRole('button', { name: 'Minimizar painel' });
+    const panelToggle = control.locator('.control-minimize-button');
     await panelToggle.click();
-    await expect(control.getByRole('button', { name: 'Expandir painel' })).toHaveAttribute('aria-expanded', 'false');
-    await control.getByRole('button', { name: 'Expandir painel' }).click();
-    await expect(control.getByRole('button', { name: 'Minimizar painel' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(panelToggle).toHaveAttribute('aria-expanded', 'false');
+    await panelToggle.click();
+    await expect(panelToggle).toHaveAttribute('aria-expanded', 'true');
 
     await control.getByRole('button', { name: 'Status personalizado' }).click();
     await expect(control.getByRole('heading', { name: 'Biblioteca de status' })).toBeVisible();

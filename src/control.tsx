@@ -116,12 +116,36 @@ type StatusTooltipState = {
   annotationText?: string;
 };
 
+const bossAttackSummary = (attack: BossAttack) => {
+  const modifier = attack.attackModifier >= 0
+    ? `+${attack.attackModifier}`
+    : String(attack.attackModifier);
+  return [
+    `Dano ${attack.damageFormula}`,
+    `Tipo ${attack.attackType === 'melee' ? 'corpo a corpo' : 'à distância'}`,
+    `Mod. ${modifier}`,
+    `Margem ${attack.criticalThreat}`,
+    `Mult. x${attack.criticalMultiplier}`,
+    `Tipo de dano ${attack.damageType || 'não definido'}`,
+    `Alcance ${attack.range || 'não definido'}`,
+  ].join(' · ');
+};
+
 type EncounterTarget = {
   id: string;
   sourceId: string;
   kind: 'player' | 'boss' | 'npc';
   name: string;
   faction: EncounterFaction;
+};
+
+type PendingBossDamage = {
+  id: string;
+  bossId: string;
+  attackName: string;
+  bossTargetIds: string[];
+  fallbackDamage: number;
+  hits: number;
 };
 
 type TargetSelectionGroup = 'all' | 'characters' | 'bosses';
@@ -369,10 +393,13 @@ const ControlApp = () => {
     useState<'damage' | null>(null);
   const [targetAreaDamage, setTargetAreaDamage] = useState(false);
   const [targetActionError, setTargetActionError] = useState('');
+  const [pendingBossDamage, setPendingBossDamage] =
+    useState<PendingBossDamage | null>(null);
   const [bossAttacks, setBossAttacks] = useState<BossAttack[]>([]);
   const [selectedBossAttackId, setSelectedBossAttackId] = useState('');
   const [bossArsenalOpen, setBossArsenalOpen] = useState(false);
   const [bossArsenalSelectedId, setBossArsenalSelectedId] = useState('');
+  const [attackQuickPickerOpen, setAttackQuickPickerOpen] = useState(false);
   const [bossExtremeAdvantage, setBossExtremeAdvantage] = useState(false);
   const [extremeAdvantageWarning, setExtremeAdvantageWarning] =
     useState<ExtremeAdvantageWarning | null>(null);
@@ -596,6 +623,7 @@ const ControlApp = () => {
     setBossSkillPickerOpen(false);
     setLinkBossSkillToPrevious(false);
     setBossArsenalOpen(false);
+    setAttackQuickPickerOpen(false);
     setBossExtremeAdvantage(false);
     setExtremeAdvantageWarning(null);
   }, [activeBoss?.id]);
@@ -1332,6 +1360,7 @@ const ControlApp = () => {
           attackerParticipantId: `boss:${activeBoss.id}`,
           actionId,
           correlationId: actionId,
+          deferDamage: true,
         });
         const anyPlayerHit = result.impacts?.some(({ hit }) => hit) ?? false;
         resolvedDamageForBosses =
@@ -1341,6 +1370,17 @@ const ControlApp = () => {
         skipped.push(...result.skippedPlayers);
         if (!result.ok) {
           setFormError(result.error ?? 'Falha ao aplicar o dano.');
+          return;
+        }
+        if (result.pendingDamageId) {
+          setPendingBossDamage({
+            id: result.pendingDamageId,
+            bossId: activeBoss.id,
+            attackName: selectedAttack.name,
+            bossTargetIds: bosses.map(({ sourceId }) => sourceId),
+            fallbackDamage: fixedValue,
+            hits: requestedHits,
+          });
           return;
         }
       }
@@ -1398,6 +1438,28 @@ const ControlApp = () => {
     if (skipped.length > 0) {
       setFormError(`Sem dados de combate para: ${[...new Set(skipped)].join(', ')}.`);
     }
+  };
+
+  const resolveBossDamage = async () => {
+    const pending = pendingBossDamage;
+    if (!pending) return;
+    setFormError('');
+    const result = await window.bossAPI.resolveDirectPlayerDamage(pending.id);
+    if (!result.ok) {
+      setFormError(result.error ?? 'Não foi possível calcular o dano pendente.');
+      return;
+    }
+    const resolvedDamage = result.rolledDamage ?? pending.fallbackDamage;
+    for (const bossId of pending.bossTargetIds) {
+      await window.bossAPI.applyHealthSequence({
+        bossId,
+        type: 'damage',
+        total: resolvedDamage,
+        hits: pending.hits,
+        ignoreDamageReduction: true,
+      });
+    }
+    setPendingBossDamage(null);
   };
 
   const executeStatusTargetAction = async () => {
@@ -1769,24 +1831,71 @@ const ControlApp = () => {
             Armas/Ataques
           </button>
           <button
-            className="control-target-damage"
+            className={`control-target-damage ${
+              pendingBossDamage?.bossId === activeBoss.id ? 'is-pending-damage' : ''
+            }`}
             type="button"
             onClick={() => {
+              if (pendingBossDamage?.bossId === activeBoss.id) {
+                void resolveBossDamage();
+                return;
+              }
               setSelectedTargetIds(new Set());
               setTargetActionError('');
               setTargetAreaDamage(false);
               setTargetDamagePicker('damage');
             }}
           >
-            Dano em jogador
+            {pendingBossDamage?.bossId === activeBoss.id
+              ? `Rolar dano · ${pendingBossDamage.attackName}`
+              : 'Dano em jogador'}
           </button>
-          <span
-            className="control-selected-attack"
-            data-app-tooltip="Ataque pré-selecionado"
+          <div
+            className="control-attack-selection"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                setAttackQuickPickerOpen(false);
+              }
+            }}
           >
-            <i aria-hidden="true">→</i>
-            {activeSelectedAttack?.name ?? 'Sem ataque'}
-          </span>
+            <span className="control-attack-arrow" aria-hidden="true">→</span>
+            <button
+              className="control-selected-attack"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded={attackQuickPickerOpen}
+              data-app-tooltip={activeSelectedAttack
+                ? bossAttackSummary(activeSelectedAttack)
+                : undefined}
+              disabled={bossAttacks.length === 0}
+              data-disabled-reason="Crie um ataque no arsenal do chefão"
+              onClick={() => setAttackQuickPickerOpen((open) => !open)}
+            >
+              <strong>{activeSelectedAttack?.name ?? 'Sem ataque'}</strong>
+              {activeSelectedAttack && <small>{bossAttackSummary(activeSelectedAttack)}</small>}
+              <i aria-hidden="true">▾</i>
+            </button>
+            {attackQuickPickerOpen && (
+              <div className="control-attack-options" role="listbox" aria-label="Ataque atual do chefão">
+                {bossAttacks.map((attackEntry) => (
+                  <button
+                    className={attackEntry.id === activeSelectedAttack?.id ? 'is-selected' : ''}
+                    type="button"
+                    role="option"
+                    aria-selected={attackEntry.id === activeSelectedAttack?.id}
+                    key={attackEntry.id}
+                    onClick={() => {
+                      persistBossArsenal(bossAttacks, attackEntry.id);
+                      setAttackQuickPickerOpen(false);
+                    }}
+                  >
+                    <span>{attackEntry.name}</span>
+                    <small>{bossAttackSummary(attackEntry)}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             className={`control-skill-test-button ${
               bossInitiativePending ? 'is-initiative-pending' : ''

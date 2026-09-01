@@ -7,6 +7,7 @@ import {
   createUnarmedAttack,
   criticalDamageExpression,
   emptyEncounterTurnState,
+  encounterRollSoundKind,
   formatEncounterDiceRolls,
   getEncounterRollNatural,
   isAreaDamageRequest,
@@ -65,6 +66,27 @@ test('identifica resultados naturais em fórmulas simples e vantagem extrema', (
   assert.equal(getEncounterRollNatural('3d6 + 4', [1, 1, 1]), null);
 });
 
+test('reserva o sucesso natural inimigo para ataques de chefão', () => {
+  const result = {
+    id: 'sound-roll',
+    participantId: 'boss:1',
+    label: 'Percepção',
+    expression: '1d20 + 5',
+    rolls: [20],
+    modifier: 5,
+    total: 25,
+    outcome: 'success',
+    category: 'test',
+    createdAt: 1,
+    retainedByParticipantId: 'boss:1',
+    natural: 20,
+  };
+  assert.equal(encounterRollSoundKind(result), 'dice-roll');
+  assert.equal(encounterRollSoundKind({ ...result, category: 'attack' }), 'natural-success-enemy');
+  assert.equal(encounterRollSoundKind({ ...result, category: 'initiative' }), 'dice-roll');
+  assert.equal(encounterRollSoundKind({ ...result, category: 'damage' }), null);
+});
+
 test('valida ações de perícia, ataque e recursos especiais sem aceitar fórmulas perigosas', () => {
   assert.equal(isPlayerCombatActionRequest({
     kind: 'skill',
@@ -84,6 +106,14 @@ test('valida ações de perícia, ataque e recursos especiais sem aceitar fórmu
     resource: 'action-point',
     ability: 'recovery',
   }), true);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'damage',
+    pendingDamageId: 'player-damage:12345678',
+  }), true);
+  assert.equal(isPlayerCombatActionRequest({
+    kind: 'damage',
+    pendingDamageId: '<script>',
+  }), false);
   assert.equal(isPlayerCombatActionRequest({
     kind: 'attack',
     attackIndex: 0,
@@ -404,6 +434,7 @@ test('parcela dano sem inflar nem perder o total autoritativo', () => {
     playerIds: ['player-1'],
     damage: 100,
     hits: 5,
+    deferDamage: true,
   }), true);
   assert.equal(isDirectPlayerDamageRequest({
     playerIds: ['player-1'],

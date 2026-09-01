@@ -270,22 +270,29 @@ export const joinHostedSession = async (
   playerName: string,
 ) => {
   await page.goto(inviteUrl);
-  await page.locator('#web-player-name').fill(playerName);
-  await page.locator('#web-player-password').fill('test-password');
   await page.getByRole('button', { name: 'Criar acesso' }).click();
-  const confirmationDialog = page.getByRole('dialog', { name: 'Confirmar usuário' });
-  const creating = await confirmationDialog
+  const createDialog = page.locator('#web-player-create-account');
+  await expect(createDialog).toBeVisible();
+  await page.locator('#web-player-create-name').fill(playerName);
+  await page.locator('#web-player-create-password').fill('test-password');
+  await page.locator('#web-player-create-password-confirm').fill('test-password');
+  await createDialog.getByRole('button', { name: 'Criar acesso' }).click();
+  const joined = await page.locator('.player-stage')
     .waitFor({ state: 'visible', timeout: 1_500 })
     .then(() => true)
     .catch(() => false);
-  if (!creating) {
+  if (!joined) {
+    if (await createDialog.isVisible()) {
+      await page.locator('#web-player-create-back').click();
+    }
+    await page.locator('#web-player-name').fill(playerName);
+    await page.locator('#web-player-password').fill('test-password');
     await page.getByRole('button', { name: 'Entrar' }).click();
+    const confirmationDialog = page.getByRole('dialog', { name: 'Confirmar usuário' });
+    await expect(confirmationDialog).toBeVisible();
+    await expect(page.locator('#web-player-confirmed-name')).toHaveText(playerName);
+    await page.getByRole('button', { name: 'Confirmar' }).click();
   }
-  await expect(confirmationDialog).toBeVisible();
-  await expect(page.locator('#web-player-confirmed-name')).toHaveText(playerName);
-  const passwordConfirmation = page.locator('#web-player-password-confirm');
-  if (await passwordConfirmation.isVisible()) await passwordConfirmation.fill('test-password');
-  await page.getByRole('button', { name: 'Confirmar' }).click();
   await expect(page.locator('.player-stage')).toBeVisible();
 };
 

@@ -6,7 +6,10 @@ import {
 } from '../support/hosted-session';
 
 test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, testInfo) => {
-  test.skip(testInfo.project.name !== 'chromium', 'Fluxo persistente executado uma vez no Chromium.');
+  test.skip(
+    !['chromium', 'firefox'].includes(testInfo.project.name),
+    'Fluxo persistente executado no Chromium e Firefox.',
+  );
   const session = await startHostedTestSession();
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();
@@ -19,6 +22,60 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       }
     });
     await joinHostedSession(firstPage, session.inviteUrl, 'Jogador Ferramentas');
+
+    const playerTools = firstPage.locator('#web-player-tools > button');
+    await expect(playerTools.nth(0)).toHaveAccessibleName('Configurações');
+    await expect(playerTools.nth(1)).toHaveText('Ficha');
+    await expect.poll(() => firstPage.evaluate(async () => ({
+      hidden: document.getElementById('web-player-change-name')?.hasAttribute('hidden'),
+      battleStarted: (await window.bossAPI.getState()).battleStarted,
+    }))).toEqual({ hidden: false, battleStarted: false });
+    await firstPage.getByRole('button', { name: 'Trocar usuário' }).click();
+    await expect(firstPage.locator('#web-player-change-name-close')).toBeVisible();
+    const changeUserCard = firstPage.locator('.web-player-join-card');
+    const changeUserClose = firstPage.locator('#web-player-change-name-close');
+    const [changeUserCardBounds, changeUserCloseBounds] = await Promise.all([
+      changeUserCard.boundingBox(),
+      changeUserClose.boundingBox(),
+    ]);
+    expect(changeUserCloseBounds?.x ?? 0).toBeGreaterThan(changeUserCardBounds?.x ?? 0);
+    expect(changeUserCloseBounds?.y ?? 0).toBeGreaterThanOrEqual(changeUserCardBounds?.y ?? 0);
+    expect(changeUserCloseBounds?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      (changeUserCardBounds?.x ?? 0) + (changeUserCardBounds?.width ?? 0),
+    );
+    await firstPage.locator('#web-player-change-name-close').click();
+    await expect(firstPage.getByRole('button', { name: 'Trocar usuário' })).toBeVisible();
+
+    await firstPage.getByRole('button', { name: 'Configurações' }).click();
+    const settingsDialog = firstPage.getByRole('dialog', { name: 'Configurações pessoais' });
+    await expect(settingsDialog).toBeVisible();
+    await settingsDialog.getByLabel('Música').fill('37');
+    await settingsDialog.getByLabel('Tremor da tela').uncheck();
+    await expect.poll(() => firstPage.evaluate(() => {
+      const stored = JSON.parse(localStorage.getItem('bossbar.player.presentation-settings.v1') ?? '{}');
+      return [stored.musicVolume, stored.visuals?.screenShake];
+    })).toEqual([0.37, false]);
+    await settingsDialog.getByRole('button', { name: 'Fechar' }).click();
+
+    await firstPage.evaluate(() => {
+      document.dispatchEvent(new CustomEvent('bossbar:player-notice', {
+        detail: { id: 'queue-1', message: 'Primeiro aviso', tone: 'info', persistent: false },
+      }));
+      document.dispatchEvent(new CustomEvent('bossbar:player-notice', {
+        detail: { id: 'queue-2', message: 'Aviso grave', tone: 'rejected', persistent: false },
+      }));
+    });
+    const queuedNotices = firstPage.locator('.player-resource-notices button');
+    await expect(queuedNotices).toHaveText(['Primeiro aviso', 'Aviso grave']);
+    const noticeBoxes = await queuedNotices.evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { top: bounds.top, bottom: bounds.bottom, background: getComputedStyle(element).backgroundImage };
+      }));
+    expect(noticeBoxes[0].bottom).toBeLessThan(noticeBoxes[1].top);
+    expect(noticeBoxes[0].background).not.toBe(noticeBoxes[1].background);
+    await queuedNotices.first().click();
+    await queuedNotices.first().click();
 
     await firstPage.getByRole('button', { name: 'Bloco de notas' }).click();
     const notesDialog = firstPage.getByRole('dialog', { name: 'Bloco de notas' });
@@ -130,21 +187,121 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     );
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
     await expect.poll(() => sheetTicketRequests).toBe(2);
-    await firstPage.locator('#web-player-sheet-close').click();
+    await firstPage.locator('#web-player-sheet-open').click();
+    const initialSheetEditor = firstPage.getByRole('dialog', { name: 'Ajustar ficha' });
+    await expect(initialSheetEditor).toBeVisible();
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section > h2')).toContainText([
+      'Identidade',
+      'Atributos e modificadores',
+      'Pontos de vida e mana',
+      'Perícias',
+      'Ataques',
+      'Defesa',
+    ]);
+    await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"]')).toContainText('PV temporário');
+    await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input')).toHaveValue('0');
+    const reflexSkillGroup = initialSheetEditor.locator('.web-player-sheet-editor-group').filter({ hasText: 'Reflexos' });
+    await expect(reflexSkillGroup.locator('.web-player-sheet-editor-group-heading [type="checkbox"]')).toHaveCount(1);
+    await expect(reflexSkillGroup.locator('.web-player-sheet-editor-group-fields [type="checkbox"]')).toHaveCount(0);
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section.is-skills')).toHaveCount(1);
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-office select')).toHaveCount(2);
+    const identityFieldTops = await initialSheetEditor
+      .locator('.web-player-sheet-editor-section.is-identity .web-player-sheet-editor-section-body > label')
+      .evaluateAll((fields) => fields.map((field) => field.getBoundingClientRect().top));
+    expect(Math.max(...identityFieldTops) - Math.min(...identityFieldTops)).toBeLessThan(2);
+    const itemRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-item-row');
+    await expect(itemRows).toHaveCount(3);
+    await initialSheetEditor.getByRole('button', { name: /Adicionar item/ }).click();
+    await expect(itemRows).toHaveCount(4);
+    await itemRows.getByRole('button', { name: 'Remover Item 4' }).click();
+    await expect(itemRows).toHaveCount(3);
+    const firstItemRow = itemRows.filter({ hasText: 'Item 1' });
+    await firstItemRow.locator('[data-field-name="BossBar.Item.1.Quantidade"] input').fill('2');
+    await firstItemRow.locator('[data-field-name="PesoItem1"] input').fill('1,5');
+    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] input')).toHaveValue('3');
+    await firstItemRow.locator('[data-field-name="BossBar.Item.1.Quantidade"] input').fill('0');
+    await firstItemRow.locator('[data-field-name="PesoItem1"] input').fill('');
+    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] input')).toHaveValue('0');
+    const armorRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-armor-row');
+    const shieldRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-shield-row');
+    await expect(armorRows).toHaveCount(1);
+    await expect(shieldRows).toHaveCount(1);
+    await initialSheetEditor.getByRole('button', { name: '+ Armadura' }).click();
+    await expect(armorRows).toHaveCount(2);
+    await armorRows.getByRole('button', { name: 'Remover Armadura 2' }).click();
+    await expect(armorRows).toHaveCount(1);
+    const spellRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-spell-row');
+    await expect(spellRows).toHaveCount(0);
+    await initialSheetEditor.getByRole('button', { name: /Adicionar magia/ }).click();
+    await expect(spellRows).toHaveCount(1);
+    await spellRows.getByRole('button', { name: 'Remover Magia 1' }).click();
+    await expect(spellRows).toHaveCount(0);
+    await expect(initialSheetEditor.locator('[data-field-name="JOGADOR"]')).toHaveCount(0);
+    await initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input').fill('7');
+    await expect(firstPage.locator('#web-player-sheet-editor-status'))
+      .toContainText('Rascunho local');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+    await expect.poll(() => firstPage.evaluate(async () =>
+      (await window.bossAPI.getPlayerHuds()).find(({ isSelf }) => isSelf)
+        ?.sheetInteractionState,
+    )).toBe('editing');
+    expect(await firstPage.locator('[data-player-action]').evaluateAll(
+      (buttons) => buttons.map((button) => (button as HTMLButtonElement).disabled),
+    )).toEqual([true, true, true]);
+    expect(await firstPage.evaluate(() => window.bossAPI.usePlayerAction('free')))
+      .toMatchObject({ ok: false, error: expect.stringContaining('Feche a ficha') });
+    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await expect(initialSheetEditor).toBeHidden();
+    await expect.poll(() => session.server.getPendingSheetChangeRequests().length)
+      .toBe(1);
+    await expect.poll(() => firstPage.evaluate(async () =>
+      (await window.bossAPI.getPlayerHuds()).find(({ isSelf }) => isSelf)
+        ?.sheetInteractionState,
+    )).toBe('pending-approval');
+    const temporaryHealthRequest = session.server.getPendingSheetChangeRequests()[0];
+    expect(temporaryHealthRequest?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'BossBar.PVs Temporarios', after: '7' }),
+      expect.objectContaining({ field: 'CargaTotal', after: '0' }),
+    ]));
+    expect(await firstPage.evaluate(() => window.bossAPI.usePlayerAction('free')))
+      .toMatchObject({ ok: false, error: expect.stringContaining('Aguarde o mestre') });
+    expect(await session.server.decideCharacterSheetChanges(temporaryHealthRequest!.id, true))
+      .toEqual({ ok: true });
+    await expect.poll(() => firstPage.evaluate(async () =>
+      (await window.bossAPI.getPlayerHuds()).find(({ isSelf }) => isSelf)
+        ?.sheetInteractionState,
+    )).toBe('idle');
 
     const characterHud = firstPage.locator('#web-player-character-hud');
     await expect(characterHud).toBeVisible();
     await expect(firstPage.locator('#web-player-character-name')).toHaveText('Valora');
     await expect(firstPage.locator('#web-player-character-health-value')).toHaveText('21/21');
+    await expect(firstPage.locator('#web-player-character-temporary-health-fill')).toBeVisible();
+    expect(await firstPage.locator('#web-player-character-temporary-health-fill').evaluate(
+      (element) => Number.parseFloat((element as HTMLElement).style.width),
+    )).toBeGreaterThan(30);
     await expect(firstPage.locator('#web-player-character-mana-value')).toHaveText('3/3');
     await expect(firstPage.locator('#web-player-character-defense-melee')).toHaveText('10');
     await expect(firstPage.locator('#web-player-character-defense-ranged')).toHaveText('10');
-    await expect(firstPage.locator('.web-player-character-defenses img')).toHaveCount(2);
-    await expect(firstPage.locator('.web-player-character-defenses')).toContainText('Defesa:');
+    await expect(firstPage.locator('.web-player-character-defenses img')).toHaveCount(3);
+    await expect(firstPage.locator('.web-player-character-actions').locator('xpath=..')).toHaveClass(/web-player-character-defenses/);
+    const selfActionsAlignment = await firstPage.locator('.web-player-character-defenses').evaluate((row) => {
+      const actionsBounds = row.querySelector('.web-player-character-actions')?.getBoundingClientRect();
+      const actionButtons = [...row.querySelectorAll('.web-player-character-actions button')];
+      const firstAction = actionButtons[0]?.getBoundingClientRect();
+      const lastAction = actionButtons.at(-1)?.getBoundingClientRect();
+      if (!actionsBounds || !firstAction || !lastAction) return Number.POSITIVE_INFINITY;
+      const dotsCenter = (firstAction.left + lastAction.right) / 2;
+      return Math.abs(dotsCenter - (actionsBounds.left + actionsBounds.width / 2));
+    });
+    expect(selfActionsAlignment).toBeLessThan(1);
+    await expect(firstPage.locator('#web-player-character-melee')).toHaveText('0');
+    await expect(firstPage.locator('#web-player-character-ranged')).toHaveText('0');
     await firstPage.locator('#web-player-character-expand').click();
     await expect(firstPage.locator('#web-player-character-details')).toBeVisible();
     await expect(characterHud).toHaveCSS('z-index', '2147483647');
     await expect(firstPage.locator('#web-player-character-class-level')).toContainText('Guerreiro');
+    await expect(firstPage.locator('#web-player-character-class-level')).not.toContainText('Defesa:');
     await expect(firstPage.locator('#web-player-character-class-level')).not.toHaveAttribute('data-calculation');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('Modificadores de atributo');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('FOR');
@@ -195,35 +352,39 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
 
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
-    const sheetRequestPromise = firstContext.waitForEvent('request', {
-      predicate: (request) => /\/api\/player\/sheet\/view\?ticket=/.test(request.url()),
-    });
-    const sheetPopupPromise = firstPage.waitForEvent('popup');
     await firstPage.locator('#web-player-sheet-open').click();
-    const [sheetPopup, sheetRequest] = await Promise.all([
-      sheetPopupPromise,
-      sheetRequestPromise,
-    ]);
-    const pdfUrl = sheetRequest.url();
-    expect(sheetRequest.isNavigationRequest()).toBe(true);
-    expect(pdfUrl).not.toMatch(/^(?:about:blank|blob:|chrome-extension:)/);
-    const pdfResponse = await firstContext.request.get(pdfUrl);
-    expect(pdfResponse.status()).toBe(200);
-    expect(pdfResponse.headers()['content-type']).toContain('application/pdf');
-    await sheetPopup.close();
-
-    const renewedSheetRequestPromise = firstContext.waitForEvent('request', {
-      predicate: (request) => /\/api\/player\/sheet\/view\?ticket=/.test(request.url()),
+    const sheetEditor = firstPage.getByRole('dialog', { name: 'Ajustar ficha' });
+    await expect(sheetEditor).toBeVisible();
+    const originField = sheetEditor.locator('[data-field-name="ORIGEM"] input');
+    await originField.fill('Marinheira');
+    await expect(firstPage.locator('#web-player-sheet-editor-status'))
+      .toContainText('Rascunho local');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+    await originField.fill('Guarda');
+    await expect(firstPage.locator('#web-player-sheet-editor-status'))
+      .toContainText('Rascunho local');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+    await originField.fill('Marinheira');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await expect(sheetEditor).toBeHidden();
+    await expect.poll(() => session.server.getPendingSheetChangeRequests().length)
+      .toBe(1);
+    const pendingRequest = session.server.getPendingSheetChangeRequests()[0];
+    expect(pendingRequest?.changes).toContainEqual({
+      field: 'ORIGEM',
+      before: 'Guarda',
+      after: 'Marinheira',
     });
-    const renewedSheetPopupPromise = firstPage.waitForEvent('popup');
+    expect(await session.server.decideCharacterSheetChanges(pendingRequest!.id, true))
+      .toEqual({ ok: true });
+    await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await firstPage.locator('#web-player-sheet-open').click();
-    const [renewedSheetPopup, renewedSheetRequest] = await Promise.all([
-      renewedSheetPopupPromise,
-      renewedSheetRequestPromise,
-    ]);
-    expect(renewedSheetRequest.url()).toBe(pdfUrl);
+    await expect(sheetEditor).toBeVisible();
+    await expect(originField).toHaveValue('Marinheira');
     expect(sheetTicketRequests).toBe(2);
-    await renewedSheetPopup.close();
+    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await firstPage.locator('#web-player-sheet-selection-remove').click();
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeHidden();
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
@@ -268,6 +429,49 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
   } finally {
     await firstContext.close().catch(() => undefined);
     await secondContext.close().catch(() => undefined);
+    await session.close();
+  }
+});
+
+test('recupera localmente o rascunho da ficha após fechar o navegador', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Recuperação local validada no Chromium.');
+  const session = await startHostedTestSession();
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await joinHostedSession(page, session.inviteUrl, 'Jogador Rascunho');
+    await page.getByRole('button', { name: 'Ficha', exact: true }).click();
+    await page.locator('#web-player-sheet-input').setInputFiles({
+      name: 'ficha-rascunho.pdf',
+      mimeType: 'application/pdf',
+      buffer: await createEditableCharacterSheet({ playerName: 'Jogador Rascunho' }),
+    });
+    await expect(page.locator('#web-player-sheet-open')).toBeEnabled();
+    await page.locator('#web-player-sheet-open').click();
+    const editor = page.getByRole('dialog', { name: 'Ajustar ficha' });
+    await expect(editor).toBeVisible();
+    await editor.locator('[data-field-name="ORIGEM"] input').fill('Sobrevivente');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await joinHostedSession(page, session.inviteUrl, 'Jogador Rascunho');
+    await page.getByRole('button', { name: 'Ficha', exact: true }).click();
+    await page.locator('#web-player-sheet-open').click();
+    await expect(editor).toBeVisible();
+    await expect(editor.locator('[data-field-name="ORIGEM"] input'))
+      .toHaveValue('Sobrevivente');
+    await expect(page.locator('#web-player-sheet-editor-status'))
+      .toContainText('Rascunho local recuperado');
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
+
+    await page.locator('#web-player-sheet-editor-close').click();
+    await expect.poll(() => session.server.getPendingSheetChangeRequests().length).toBe(1);
+    await expect.poll(() => page.evaluate(() =>
+      Object.keys(localStorage).some((key) =>
+        key.startsWith('bossbar.character-sheet-draft.v1:')),
+    )).toBe(false);
+  } finally {
+    await context.close().catch(() => undefined);
     await session.close();
   }
 });

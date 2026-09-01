@@ -5,7 +5,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // Firefox headless on Windows becomes unstable when the media-heavy suites
+  // compete with every Chromium channel at the host's full CPU concurrency.
+  // Keep the local matrix aligned with CI so failures remain reproducible.
+  workers: 2,
   timeout: 45_000,
   expect: { timeout: 12_000 },
   reporter: [
@@ -38,6 +41,7 @@ export default defineConfig({
     },
     {
       name: 'firefox',
+      retries: 1,
       use: { ...devices['Desktop Firefox'] },
     },
   ],

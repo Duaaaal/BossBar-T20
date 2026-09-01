@@ -7,6 +7,7 @@ export const FIRST_AID_CURE_DC = 15;
 type PlayerVitalState = Readonly<{
   currentHealth: number;
   maxHealth: number;
+  temporaryHealth?: number;
   statuses: ActiveBossStatus[];
   stabilized: boolean;
   dead: boolean;
@@ -57,7 +58,9 @@ export const applyPlayerDamage = <T extends PlayerVitalState>(
     };
   }
   const applied = Math.max(0, Math.ceil(damage));
-  const currentHealth = state.currentHealth - applied;
+  const temporaryHealth = Math.max(0, Math.floor(state.temporaryHealth ?? 0));
+  const absorbedByTemporaryHealth = Math.min(temporaryHealth, applied);
+  const currentHealth = state.currentHealth - (applied - absorbedByTemporaryHealth);
   const becameUnconscious = state.currentHealth > 0 && currentHealth <= 0;
   const dead = currentHealth <= playerDeathThreshold(state.maxHealth);
   const statuses = currentHealth <= 0
@@ -66,6 +69,7 @@ export const applyPlayerDamage = <T extends PlayerVitalState>(
   const nextState = {
     ...state,
     currentHealth,
+    temporaryHealth: temporaryHealth - absorbedByTemporaryHealth,
     statuses: dead
       ? withoutStatuses(statuses, new Set<StatusId>(['sangrando']))
       : statuses,

@@ -22,8 +22,9 @@ import type {
   PlayerHudState,
   PlayerResourceNotice,
 } from './player-combat';
+import type { PlayerSheetChangeRequest } from './character-sheet';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 11;
+export const MULTIPLAYER_PROTOCOL_VERSION = 12;
 export const MAX_MULTIPLAYER_PLAYERS = 10;
 
 export type ConnectionQuality =
@@ -77,6 +78,7 @@ export type HostedSessionState = {
   players: MultiplayerPlayer[];
   pendingJoinRequests: MultiplayerJoinRequest[];
   pendingActionPointRequests: PendingActionPointRequest[];
+  pendingSheetChangeRequests: PlayerSheetChangeRequest[];
   error: string | null;
 };
 
@@ -246,6 +248,10 @@ export interface MultiplayerServerToClientEvents {
 }
 
 export interface MultiplayerClientToServerEvents {
+  'player:set-sheet-editor-open': (
+    open: boolean,
+    acknowledge: (result: { ok: boolean; error?: string }) => void,
+  ) => void;
   'player:set-private': (
     privateMode: boolean,
     acknowledge: (result: { ok: boolean; error?: string }) => void,

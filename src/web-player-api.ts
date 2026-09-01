@@ -2,12 +2,15 @@ import { io, type Socket } from 'socket.io-client';
 import type { BossAPI } from './shared/api.ts';
 import type {
   CharacterSheetUploadResult,
+  CharacterSheetEditorField,
+  CharacterSheetEditorResult,
   NotesSaveResult,
   PlayerAccountStatus,
   PlayerAuthenticationResult,
   PlayerCharacterSheetStatus,
 } from './shared/character-sheet.ts';
 import {
+  BOSS_CRITICAL_DUCK_FADE_MS,
   BOSS_CRITICAL_THREAT_DURATION_MS,
   initialBattleState,
   initialEncounterEffectsState,
@@ -374,11 +377,13 @@ export const createWebPlayerApi = ({
   onConnectionState,
   onSessionReady,
   onPlayerState,
+  onCharacterSheetChanged,
   onPlayerCombatImpact,
 }: {
   onConnectionState: (state: WebPlayerConnectionState) => void;
   onSessionReady?: () => void;
   onPlayerState?: (state: PlayerEncounterState | null) => void;
+  onCharacterSheetChanged?: (sheet: PlayerCharacterSheetStatus | null) => void;
   onPlayerCombatImpact?: (impact: PlayerAreaDamageImpact) => void;
 }) => {
   const battle = createChannel<BattleState>(initialBattleState);
@@ -618,6 +623,34 @@ export const createWebPlayerApi = ({
     return result;
   };
 
+  const getCharacterSheetEditor = async (): Promise<CharacterSheetEditorResult> => {
+    const response = await fetch('/api/player/sheet/editor', {
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    const result = await response.json() as CharacterSheetEditorResult;
+    return response.ok ? result : {
+      ok: false,
+      error: result.error ?? 'Não foi possível abrir o editor da ficha.',
+    };
+  };
+
+  const saveCharacterSheetEditor = async (
+    fields: CharacterSheetEditorField[],
+  ): Promise<CharacterSheetEditorResult> => {
+    const response = await fetch('/api/player/sheet/editor', {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: accountHeaders('application/json'),
+      body: JSON.stringify({ fields }),
+    });
+    const result = await response.json() as CharacterSheetEditorResult;
+    return response.ok ? result : {
+      ok: false,
+      error: result.error ?? 'Não foi possível salvar as alterações da ficha.',
+    };
+  };
+
   const saveNotes = async (content: string): Promise<NotesSaveResult> => {
     const response = await fetch('/api/player/notes', {
       method: 'PUT',
@@ -628,6 +661,19 @@ export const createWebPlayerApi = ({
     const result = await response.json() as NotesSaveResult;
     if (result.ok && typeof result.content === 'string') currentNotes = result.content;
     return result;
+  };
+
+  const refreshCharacterSheetStatus = async () => {
+    if (!accountToken) return;
+    const response = await fetch('/api/player/profile', {
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    if (!response.ok) return;
+    const profile = await response.json() as { sheet?: PlayerCharacterSheetStatus };
+    currentSheet = profile.sheet ?? null;
+    invalidateCharacterSheetViewUrl();
+    onCharacterSheetChanged?.(currentSheet);
   };
 
   const verifyMediaCanLoad = (
@@ -1121,6 +1167,12 @@ export const createWebPlayerApi = ({
       fetchCharacterSheetBlob,
       createCharacterSheetViewUrl,
       removeCharacterSheet,
+      getCharacterSheetEditor,
+      saveCharacterSheetEditor,
+      setCharacterSheetEditorOpen: async () => ({
+        ok: false,
+        error: 'O jogador ainda não está conectado.',
+      }),
       blankCharacterSheetUrl: '/api/player/blank-sheet',
       saveNotes,
       setCharacterPrivate: async () => ({
@@ -1260,6 +1312,10 @@ export const createWebPlayerApi = ({
   });
   socket.on('player:resource-notice', (notice) => {
     resourceNotices.publish(notice);
+    if (notice.id.startsWith('sheet-change:')) {
+      if (notice.tone === 'approved') void refreshCharacterSheetStatus();
+      else if (notice.tone === 'rejected') onCharacterSheetChanged?.(currentSheet);
+    }
   });
   socket.on('presentation:background', (nextBackground) => {
     void eventQueue.enqueue(async (isCurrent) => {
@@ -1329,10 +1385,14 @@ export const createWebPlayerApi = ({
       } else {
         musicDuckThreatEndsAt.clear();
         musicDuckImpactEndsAt.clear();
-        musicDuckThreatEndsAt.set(
-          event.id,
-          Date.now() + BOSS_CRITICAL_THREAT_DURATION_MS,
-        );
+        if (
+          event.duration >= BOSS_CRITICAL_DUCK_FADE_MS
+        ) {
+          musicDuckThreatEndsAt.set(
+            event.id,
+            Date.now() + BOSS_CRITICAL_THREAT_DURATION_MS,
+          );
+        }
       }
       musicDuck.publish({
         ...event,
@@ -1385,6 +1445,21 @@ export const createWebPlayerApi = ({
         resolve({ ok: false, error: 'A sala não confirmou a alteração.' });
       }, 5_000);
       socket.emit('player:set-private', privateMode, (result) => {
+        window.clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+
+  const setCharacterSheetEditorOpen = (open: boolean) =>
+    new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      if (!socket.connected) {
+        resolve({ ok: false, error: 'O jogador não está conectado.' });
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        resolve({ ok: false, error: 'A sala não confirmou o estado da ficha.' });
+      }, 5_000);
+      socket.emit('player:set-sheet-editor-open', open, (result) => {
         window.clearTimeout(timeout);
         resolve(result);
       });
@@ -1471,6 +1546,7 @@ export const createWebPlayerApi = ({
     }
     window.localStorage.setItem('bossbar.multiplayer.player-name', authentication.username);
     void preloadSessionManifest();
+    if (socket.connected) socket.disconnect();
     socket.auth = {
       roomCode,
       playerToken,
@@ -1513,6 +1589,9 @@ export const createWebPlayerApi = ({
     fetchCharacterSheetBlob,
     createCharacterSheetViewUrl,
     removeCharacterSheet,
+    getCharacterSheetEditor,
+    saveCharacterSheetEditor,
+    setCharacterSheetEditorOpen,
     blankCharacterSheetUrl: '/api/player/blank-sheet',
     saveNotes,
     setCharacterPrivate,

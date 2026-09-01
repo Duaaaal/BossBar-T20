@@ -6,7 +6,10 @@ import {
 } from '../support/hosted-session';
 
 test('mantém o visual da espera e do HUD', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'chromium', 'Baseline visual única no Chromium/Windows.');
+  test.skip(
+    !['chromium', 'firefox'].includes(testInfo.project.name),
+    'Baseline visual mantida para Chromium e Firefox no Windows.',
+  );
   const session = await startHostedTestSession();
   try {
     await joinHostedSession(page, session.inviteUrl, 'Jogador Visual');

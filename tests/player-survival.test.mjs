@@ -18,6 +18,7 @@ import {
 const vitalState = (overrides = {}) => ({
   currentHealth: 20,
   maxHealth: 20,
+  temporaryHealth: 0,
   statuses: [],
   stabilized: false,
   dead: false,
@@ -39,6 +40,16 @@ test('aplica inconsciência, indefeso e sangramento ao chegar a zero PV', () => 
     new Set(transition.state.statuses.map(({ statusId }) => statusId)),
     new Set(['inconsciente', 'indefeso', 'sangrando']),
   );
+});
+
+test('PV temporário absorve dano antes dos PV reais e não é restaurado por cura', () => {
+  const absorbed = applyPlayerDamage(vitalState({ temporaryHealth: 7 }), 5).state;
+  assert.equal(absorbed.currentHealth, 20);
+  assert.equal(absorbed.temporaryHealth, 2);
+  const overflow = applyPlayerDamage(absorbed, 6).state;
+  assert.equal(overflow.currentHealth, 16);
+  assert.equal(overflow.temporaryHealth, 0);
+  assert.equal(applyPlayerHealing(overflow, 3).state.temporaryHealth, 0);
 });
 
 test('usa o limiar de morte negativo mais baixo entre menos dez e metade dos PV', () => {

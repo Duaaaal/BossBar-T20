@@ -20,6 +20,7 @@
       <div class="web-player-character-vitals">
         <div class="web-player-character-bar is-health">
           <span id="web-player-character-health-fill"></span>
+          <span class="is-temporary" id="web-player-character-temporary-health-fill"></span>
           <output id="web-player-character-health-value">0/0</output>
         </div>
         <div class="web-player-character-bar is-mana">
@@ -28,15 +29,15 @@
         </div>
       </div>
       <div class="web-player-character-defenses">
-        <strong>Defesa:</strong>
-        <span tabindex="-1"><img src="/session-assets/ui/defense-melee.png" alt="Corpo a corpo" /><b id="web-player-character-defense-melee">0</b></span>
-        <i aria-hidden="true">/</i>
-        <span tabindex="-1"><img src="/session-assets/ui/defense-ranged.png" alt="À distância" /><b id="web-player-character-defense-ranged">0</b></span>
-      </div>
-      <div class="web-player-character-actions" aria-label="Ações disponíveis">
-        <button type="button" data-player-action="free" data-app-tooltip="Ação livre disponível" aria-label="Usar ação livre"></button>
-        <button type="button" data-player-action="movement" data-app-tooltip="Ação de movimento disponível" aria-label="Usar ação de movimento"></button>
-        <button type="button" data-player-action="standard" data-app-tooltip="Ação padrão disponível" aria-label="Usar ação padrão"></button>
+        <span tabindex="0" data-app-tooltip="Luta"><img src="/session-assets/ui/corpo-a-corpo.png" alt="Luta" /><b id="web-player-character-melee">0</b></span>
+        <span tabindex="0" data-app-tooltip="Pontaria"><img src="/session-assets/ui/a-distancia.png" alt="Pontaria" /><b id="web-player-character-ranged">0</b></span>
+        <span tabindex="0" id="web-player-character-defense-group" data-app-tooltip="Defesa corpo a corpo / à distância"><img src="/session-assets/shield-icon.png" alt="Defesa" /><b id="web-player-character-defense-melee">0</b><i aria-hidden="true">/</i><b id="web-player-character-defense-ranged">0</b></span>
+        <i class="web-player-character-action-divider" aria-hidden="true"></i>
+        <div class="web-player-character-actions" aria-label="Ações disponíveis">
+          <button type="button" data-player-action="free" data-app-tooltip="Ação livre disponível" aria-label="Usar ação livre"></button>
+          <button type="button" data-player-action="movement" data-app-tooltip="Ação de movimento disponível" aria-label="Usar ação de movimento"></button>
+          <button type="button" data-player-action="standard" data-app-tooltip="Ação padrão disponível" aria-label="Usar ação padrão"></button>
+        </div>
       </div>
       <section class="web-player-character-details" id="web-player-character-details" hidden>
         <div class="web-player-character-detail-heading">
@@ -56,6 +57,7 @@
     <div class="web-player-reflex-results" id="web-player-reflex-results" aria-live="polite"></div>
     <section class="web-player-join" id="web-player-join" aria-labelledby="join-title">
       <form class="web-player-join-card" id="web-player-join-form">
+        <button class="web-player-dialog-close web-player-change-user-close" id="web-player-change-name-close" type="button" aria-label="Fechar troca de usuário" hidden>&times;</button>
         <span class="web-player-join-mark" aria-hidden="true"></span>
         <h1 id="join-title">Entrar no encontro</h1>
         <p>Informe seu usuário e senha.</p>
@@ -89,20 +91,35 @@
     </section>
     <section class="web-player-dialog" id="web-player-name-confirm" role="dialog" aria-modal="true" aria-labelledby="name-confirm-title" hidden>
       <div class="web-player-dialog-card">
+        <button class="web-player-dialog-close" id="web-player-name-confirm-close" type="button" aria-label="Fechar">&times;</button>
         <span class="web-player-join-mark" aria-hidden="true"></span>
         <h1 id="name-confirm-title">Confirmar usuário</h1>
         <p id="web-player-confirm-message">Você entrará no encontro como</p>
         <strong id="web-player-confirmed-name"></strong>
-        <label class="web-player-password-confirm" id="web-player-password-confirm-label" for="web-player-password-confirm" hidden>
-          <span>Repita a senha para criar este usuário</span>
-          <input id="web-player-password-confirm" type="password" minlength="3" maxlength="128" autocomplete="new-password" />
-        </label>
         <p class="web-player-dialog-error" id="web-player-auth-error" role="alert" hidden></p>
         <div class="web-player-dialog-actions">
           <button id="web-player-name-back" type="button">Alterar</button>
           <button id="web-player-name-submit" type="button">Confirmar</button>
         </div>
       </div>
+    </section>
+    <section class="web-player-dialog" id="web-player-create-account" role="dialog" aria-modal="true" aria-labelledby="create-account-title" hidden>
+      <form class="web-player-dialog-card" id="web-player-create-account-form">
+        <button class="web-player-dialog-close" id="web-player-create-close" type="button" aria-label="Fechar">&times;</button>
+        <span class="web-player-join-mark" aria-hidden="true"></span>
+        <h1 id="create-account-title">Criar acesso</h1>
+        <label for="web-player-create-name">Usuário</label>
+        <input id="web-player-create-name" type="text" minlength="1" maxlength="40" autocomplete="username" required />
+        <label for="web-player-create-password">Senha</label>
+        <input id="web-player-create-password" type="password" minlength="3" maxlength="128" autocomplete="new-password" required />
+        <label for="web-player-create-password-confirm">Repita a senha</label>
+        <input id="web-player-create-password-confirm" type="password" minlength="3" maxlength="128" autocomplete="new-password" required />
+        <p class="web-player-dialog-error" id="web-player-create-error" role="alert" hidden></p>
+        <div class="web-player-dialog-actions">
+          <button id="web-player-create-back" type="button">Cancelar</button>
+          <button id="web-player-create-submit" type="submit">Criar acesso</button>
+        </div>
+      </form>
     </section>
     <section class="web-player-pending" id="web-player-pending" aria-live="polite" hidden>
       <div class="web-player-dialog-card">
@@ -118,10 +135,11 @@
         <p>O mestre encerrou esta sala. Você já pode fechar esta página.</p>
       </div>
     </section>
-    <button class="web-player-change-name" id="web-player-change-name" type="button" hidden>Trocar nome</button>
     <nav class="web-player-tools" id="web-player-tools" aria-label="Ferramentas do jogador" hidden>
+      <button id="web-player-settings-button" type="button" aria-label="Configurações" data-app-tooltip="Configurações"><img src="/session-assets/cog.png" alt="" /></button>
       <button id="web-player-sheet-button" type="button">Ficha</button>
       <button id="web-player-notes-button" type="button">Bloco de notas</button>
+      <button class="web-player-change-name" id="web-player-change-name" type="button" hidden>Trocar usuário</button>
     </nav>
     <section class="web-player-dialog web-player-sheet-dialog" id="web-player-sheet-dialog" role="dialog" aria-modal="true" aria-labelledby="sheet-dialog-title" hidden>
       <div class="web-player-dialog-card web-player-tools-card">
@@ -145,8 +163,19 @@
         </div>
       </div>
     </section>
+    <section class="web-player-dialog web-player-sheet-editor-dialog" id="web-player-sheet-editor" role="dialog" aria-modal="true" aria-labelledby="sheet-editor-title" hidden>
+      <div class="web-player-dialog-card web-player-sheet-editor-card">
+        <button class="web-player-dialog-close" id="web-player-sheet-editor-close" type="button" aria-label="Fechar">&times;</button>
+        <h1 id="sheet-editor-title">Ajustar ficha</h1>
+        <p>Edite a ficha livremente. Ao fechar, todas as mudanças serão reunidas em uma única solicitação ao mestre.</p>
+        <input id="web-player-sheet-editor-search" type="search" placeholder="Buscar campo da ficha" autocomplete="off" />
+        <div class="web-player-sheet-editor-fields" id="web-player-sheet-editor-fields"></div>
+        <p class="web-player-sheet-editor-status" id="web-player-sheet-editor-status" role="status"></p>
+      </div>
+    </section>
     <section class="web-player-dialog" id="web-player-sheet-remove-confirm" role="dialog" aria-modal="true" aria-labelledby="sheet-remove-title" hidden>
       <div class="web-player-dialog-card">
+        <button class="web-player-dialog-close" id="web-player-sheet-remove-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-remove-title">Remover ficha?</h1>
         <p>A ficha vinculada a este usuário será excluída. Esta ação não pode ser desfeita.</p>
         <div class="web-player-dialog-actions">
@@ -201,6 +230,7 @@
     </section>
     <section class="web-player-dialog" id="web-player-notes-clear-confirm" role="dialog" aria-modal="true" aria-labelledby="notes-clear-title" hidden>
       <div class="web-player-dialog-card">
+        <button class="web-player-dialog-close" id="web-player-notes-clear-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="notes-clear-title">Limpar esta nota?</h1>
         <p>Todo o conteúdo da aba atual será apagado.</p>
         <div class="web-player-dialog-actions">

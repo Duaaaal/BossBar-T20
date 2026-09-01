@@ -79,15 +79,16 @@ const rollPlayerInitiative = async (page: Page) => {
     page.locator('.encounter-roll-results.is-self .encounter-roll-result')
       .filter({ hasText: 'Iniciativa:' }),
   ).toBeVisible();
-  await expect(page.locator('.self-combat-feedback')).toHaveCount(0);
+  await expect(page.locator('.player-resource-notices button')
+    .filter({ hasText: 'Aguarde o seu turno' })).toHaveCount(0);
 };
 
 test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
   browser,
 }, testInfo) => {
   test.skip(
-    testInfo.project.name !== 'chromium',
-    'Fluxo multiplayer completo executado uma vez no Chromium.',
+    !['chromium', 'firefox'].includes(testInfo.project.name),
+    'Fluxo multiplayer completo executado no Chromium e Firefox.',
   );
   const session = await startHostedTestSession();
   const firstContext = await browser.newContext();
@@ -118,6 +119,17 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
       .filter({ hasText: 'Brasa' });
     await expect(auroraOnSecond).toBeVisible();
     await expect(brasaOnFirst).toBeVisible();
+    await expect(auroraOnSecond.locator('header .party-player-actions')).toBeVisible();
+    await expect(auroraOnSecond.locator(':scope > .party-player-actions')).toHaveCount(0);
+    const partyActionsAlignment = await auroraOnSecond.locator('.party-player-heading').evaluate((heading) => {
+      const headingBounds = heading.getBoundingClientRect();
+      const nameBounds = heading.querySelector('strong')?.getBoundingClientRect();
+      const actionBounds = heading.querySelector('.party-player-actions')?.getBoundingClientRect();
+      if (!nameBounds || !actionBounds) return Number.POSITIVE_INFINITY;
+      const contentCenter = (nameBounds.left + actionBounds.right) / 2;
+      return Math.abs(contentCenter - (headingBounds.left + headingBounds.width / 2));
+    });
+    expect(partyActionsAlignment).toBeLessThan(3);
     await expect(firstPage.locator('.party-player-resources')).toHaveCount(0);
     await expect(secondPage.locator('.party-player-resources')).toHaveCount(0);
     await expect(auroraOnSecond).toContainText('???');
@@ -127,8 +139,8 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
     await expect(firstPage.locator('#web-player-character-private')).toBeChecked();
     await firstPage.locator('#web-player-character-private').uncheck();
     await expect(auroraOnSecond).toContainText('21/21');
-    await expect(auroraOnSecond.locator('.party-player-defense')).toContainText('Defesa:');
-    await expect(auroraOnSecond.locator('.party-player-defense img')).toHaveCount(2);
+    await expect(auroraOnSecond.locator('.party-player-combat-values img')).toHaveCount(3);
+    await expect(auroraOnSecond.locator('.party-player-defense-combined')).toContainText('10/10');
     await expect(brasaOnFirst).toContainText('???');
     await firstPage.locator('#web-player-character-private').check();
     await expect(auroraOnSecond).toContainText('???');
@@ -158,6 +170,7 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
       );
       if (pending.length === 0) break;
       for (const participant of pending) {
+        const previousRevision = session.server.getTurnState().revision;
         if (participant.kind === 'boss') {
           expect(session.server.rollInitiativeAsHost(participant.id).ok).toBe(true);
         } else {
@@ -168,11 +181,9 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
           await rollPlayerInitiative(page);
         }
         await expect.poll(
-          () => session.server.getTurnState().participants.find(
-            ({ id }) => id === participant.id,
-          )?.initiativeRolled,
-          { message: `Iniciativa pendente: ${participant.kind} ${participant.name}` },
-        ).toBe(true);
+          () => session.server.getTurnState().revision,
+          { message: `Iniciativa não processada: ${participant.kind} ${participant.name}` },
+        ).toBeGreaterThan(previousRevision);
       }
     }
     await expect.poll(
@@ -235,9 +246,10 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
     await waitingPage
       .getByRole('button', { name: 'Teste de perícia' })
       .click();
-    const reactTurnNotice = waitingPage.locator('.self-combat-feedback');
+    const reactTurnNotice = waitingPage.locator('.player-resource-notices button')
+      .filter({ hasText: 'Aguarde o seu turno' });
     await expect(reactTurnNotice).toContainText('Aguarde o seu turno');
-    await expectInsideViewport(waitingPage, '.self-combat-feedback');
+    await expectInsideViewport(waitingPage, '.player-resource-notices');
     await reactTurnNotice.click();
     await expect(reactTurnNotice).toHaveCount(0);
 
@@ -291,15 +303,20 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
       retainedByParticipantId: active!.id,
       sequence: 101,
       correlationId,
+      targetParticipantId: 'boss:boss-e2e',
+      targetName: 'Dragão de Teste',
     });
     const linkedResult = activePage.locator(
       `.encounter-roll-result[data-relation-id="${correlationId}"]`,
     );
     await expect(linkedResult).toBeVisible();
     await expect(linkedResult.locator('.encounter-roll-sequence')).toHaveText('#101');
+    await expect(linkedResult).toContainText('→ Dragão de Teste');
     await expect(
-      linkedResult.getByLabel('Teste relacionado'),
+      linkedResult.getByLabel('Testes interligados'),
     ).toBeVisible();
+    await linkedResult.hover();
+    await expect(linkedResult).toHaveClass(/is-related-highlight/);
 
     const resultStack = activePage.locator('.encounter-roll-results.is-self');
     const resultStackLayout = await resultStack.evaluate((element) => {
@@ -379,6 +396,7 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
         self: rectangle('#web-player-character-hud'),
         party: rectangle('.party-hud.is-web-client'),
         turn: rectangle('.encounter-turn-hud'),
+        history: rectangle('.fight-history-button'),
         shortcuts: rectangle('.self-combat-shortcuts'),
       };
     });
@@ -386,6 +404,7 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
       layout.self,
       layout.party,
       layout.turn,
+      layout.history,
       layout.shortcuts,
     ]) {
       expect(bounds).not.toBeNull();
@@ -395,6 +414,9 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
       expect(bounds!.bottom).toBeLessThanOrEqual(layout.height + 1);
     }
     expect(layout.party!.right).toBeLessThanOrEqual(layout.self!.left + 1);
+    expect(Math.abs(layout.turn!.left - layout.history!.left)).toBeLessThan(2);
+    expect(Math.abs(layout.turn!.right - layout.history!.right)).toBeLessThan(2);
+    expect(layout.history!.top).toBeGreaterThanOrEqual(layout.turn!.bottom);
   } finally {
     await firstContext.close();
     await secondContext.close();

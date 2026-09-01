@@ -10,7 +10,10 @@ import {
 
 test.beforeEach(({ browserName }, testInfo) => {
   void browserName;
-  test.skip(testInfo.project.name !== 'chromium', 'Cenários de rede e carga rodam uma vez no Chromium.');
+  test.skip(
+    !['chromium', 'firefox'].includes(testInfo.project.name),
+    'Cenários de rede rodam no Chromium e Firefox.',
+  );
 });
 
 test('mantém eventos ordenados mesmo quando a primeira mídia chega depois', async ({ page }) => {
