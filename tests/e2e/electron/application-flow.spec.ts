@@ -263,7 +263,9 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(
       skillDialog.locator('.control-skill-picker-item.is-initiative-required'),
     ).toContainText('Iniciativa');
-    await skillDialog.getByRole('textbox', { name: 'Iniciativa' }).fill('14');
+    await expect(skillDialog.getByRole('textbox')).toHaveCount(0);
+    await expect(skillDialog.getByRole('button', { name: 'Rolar Iniciativa' }))
+      .toContainText(/\+[0-9]+/);
     const skillLayout = await skillDialog.evaluate((dialog) => {
       const bounds = dialog.getBoundingClientRect();
       const list = dialog.querySelector<HTMLElement>('.control-skill-picker-list');
@@ -326,9 +328,9 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
       .click();
     await activeDamageTargets.getByRole('button', { name: 'Aplicar dano' }).click();
     await expect(
-      player.locator('.encounter-roll-result').filter({ hasText: 'Dano:' }),
+      player.locator('.encounter-roll-result').filter({ hasText: /Dano.*Titã Automatizado:/ }),
     ).toContainText(
-      /Dano:1d2\([12]\) \+ 3 = [45]/,
+      /Dano.*Titã Automatizado:1d2\([12]\) \+ 3 = [45]/,
     );
     await control.getByRole('button', { name: /^Full Heal/ }).click();
     await expect(control.locator('.health-difference strong')).toHaveText('600/600');
@@ -337,6 +339,43 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await control.getByRole('button', { name: /^Dano \(/ }).click();
     await expect(control.locator('.health-difference strong')).toHaveText('550/600');
     await expect(player.locator('.health-bar-fill')).toHaveAttribute('style', /91\.666/);
+    await control.keyboard.press('Control+Z');
+    await expect(control.locator('.health-difference strong')).toHaveText('600/600');
+    await expect(
+      player.locator('.player-resource-notices button').filter({ hasText: 'Desfazer' }),
+    ).toBeVisible();
+    await player.getByRole('button', { name: 'Histórico' }).click();
+    const fightHistory = player.getByRole('dialog', { name: 'Histórico da luta' });
+    await expect(fightHistory).toBeVisible();
+    await expect(fightHistory.locator('.fight-history-entry-meta').last())
+      .toHaveText(/^#\d+ · \d{2}:\d{2}:\d{2} · \d{2}:\d{2}$/);
+    await expect(fightHistory.locator('.fight-history-entry').last())
+      .toContainText('O mestre reverteu');
+    await expect(fightHistory.locator('.fight-history-entry.is-undone'))
+      .toContainText('Dano (desfeito)');
+    await fightHistory.getByRole('button', { name: 'Fechar histórico' }).click();
+
+    await control.locator('.control-amount-field input').fill('2d4');
+    await control.getByRole('button', { name: /^Dano \(/ }).click();
+    const formulaResult = player.locator('.encounter-roll-result').filter({
+      hasText: /Dano.*Titã Automatizado:/,
+    }).last();
+    await expect(formulaResult).toContainText(/2d4\([1-4], [1-4]\).*=/);
+    await control.keyboard.press('Control+Z');
+    await expect(formulaResult).toHaveClass(/is-undone/);
+    await expect(formulaResult).toContainText('(desfeito)');
+    const strike = await formulaResult.evaluate((element) => {
+      const style = getComputedStyle(element, '::after');
+      return {
+        width: Number.parseFloat(style.width),
+        rowWidth: element.getBoundingClientRect().width,
+        height: style.height,
+        animation: style.animationName,
+      };
+    });
+    expect(strike.width).toBeGreaterThan(strike.rowWidth - 15);
+    expect(strike.height).toBe('2px');
+    expect(strike.animation).toBe('none');
 
     const panelToggle = control.locator('.control-minimize-button');
     await panelToggle.click();

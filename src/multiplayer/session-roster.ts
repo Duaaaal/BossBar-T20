@@ -8,13 +8,17 @@ import {
 
 type RosterPlayer = MultiplayerPlayer & {
   clientId: string;
+  profileId: string | null;
   socketId: string;
   missedProbes: number;
   latencySamples: number[];
 };
 
 export type RegisterPlayerRequest = {
+  /** Stable encounter identity when resuming a saved participant. */
+  playerId?: string;
   clientId: string;
+  profileId?: string;
   name: string;
   socketId: string;
   isHost?: boolean;
@@ -35,6 +39,7 @@ export type RegisterPlayerResult =
 
 export type SessionRosterMember = {
   clientId: string;
+  profileId: string | null;
   player: MultiplayerPlayer;
 };
 
@@ -106,7 +111,9 @@ export class SessionRoster {
   }
 
   register({
+    playerId,
     clientId,
+    profileId,
     name,
     socketId,
     isHost = false,
@@ -126,8 +133,9 @@ export class SessionRoster {
     if (replacedSocketId) this.clientIdBySocketId.delete(replacedSocketId);
 
     const player: RosterPlayer = {
-      id: existing?.id ?? randomUUID(),
+      id: existing?.id ?? playerId ?? randomUUID(),
       clientId,
+      profileId: profileId ?? existing?.profileId ?? null,
       socketId,
       name: normalizedName,
       isHost,
@@ -215,6 +223,7 @@ export class SessionRoster {
         || first.id.localeCompare(second.id))
       .map((player) => ({
         clientId: player.clientId,
+        profileId: player.profileId,
         player: publicPlayer(player),
       }));
   }

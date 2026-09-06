@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,12 +18,36 @@ const fixtures = {
 };
 
 await mkdir(outputDirectory, { recursive: true });
-await Promise.all(Object.entries(fixtures).map(([name, base64]) =>
-  writeFile(path.join(outputDirectory, name), Buffer.from(base64, 'base64')),
-));
-await copyFile(
-  path.join(projectRoot, 'scripts', 'test-fixtures', 'test-tone.mp3'),
-  path.join(outputDirectory, 'test-tone.mp3'),
-);
+await Promise.all(Object.entries(fixtures).map(([name, base64]) => {
+  const bytes = Buffer.from(base64, 'base64');
+  if (name === 'test-video.mp4') {
+    // The embedded encoder-identification SEI is 12 bytes shorter than its
+    // original sample. Correct every containing length, including the SEI,
+    // so real browser demuxers can decode this synthetic one-frame fixture.
+    bytes.writeUInt32BE(691, 40); // mdat box
+    bytes.writeUInt32BE(660, 48); // SEI NAL
+    bytes[56] = 144; // extended SEI payload length: 255 + 255 + 144
+    bytes.writeUInt32BE(683, 1356); // stsz sample size
+    // Hold the synthetic frame for four seconds to exercise real seeking.
+    for (const type of ['mvhd', 'tkhd', 'mdhd', 'elst', 'stts']) {
+      const offset = bytes.indexOf(Buffer.from(type));
+      const field = { mvhd: 20, tkhd: 24, mdhd: 20, elst: 12, stts: 16 }[type];
+      bytes.writeUInt32BE(type === 'mdhd' || type === 'stts' ? 49_152 : 4_000, offset + field);
+    }
+  }
+  return writeFile(path.join(outputDirectory, name), bytes);
+}));
+const tone = await readFile(path.join(projectRoot, 'scripts', 'test-fixtures', 'test-tone.mp3'));
+// The seed contains five complete MPEG-1 Layer III frames but an Info header
+// describing 43. Complete its synthetic tone to the advertised one second;
+// otherwise Chromium seeks beyond EOF despite reporting a valid duration.
+const frameSize = 576;
+const audioStart = 45 + frameSize; // ID3 + Info frame
+const toneFrames = Array.from({ length: 43 }, (_, index) => {
+  const offset = audioStart + (index % 5) * frameSize;
+  return tone.subarray(offset, offset + frameSize);
+});
+const completeTone = Buffer.concat([tone.subarray(0, audioStart), ...toneFrames]);
+await writeFile(path.join(outputDirectory, 'test-tone.mp3'), completeTone);
 
 console.log(`Fixtures de mídia atualizadas em ${outputDirectory}`);

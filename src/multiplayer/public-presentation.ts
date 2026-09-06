@@ -13,7 +13,7 @@ import {
   type PublicMusicPresentationState,
   type PublicScenePresentationState,
 } from '../shared/multiplayer.ts';
-import type { ScenePlan } from '../shared/scene.ts';
+import type { ScenePlan, CutscenePlayback } from '../shared/scene.ts';
 
 export type PublicPresentationSource = {
   battle: BattleState;
@@ -44,6 +44,7 @@ export const toPublicBattleState = (
       initiative: boss.skillValues?.iniciativa ?? boss.skills,
       nextAction: boss.nextAction,
       actionSeverity: boss.actionSeverity,
+      actionVersion: boss.actionVersion ?? 0,
       turnCount: boss.turnCount,
       activeStatuses: boss.activeStatuses,
     })),
@@ -54,7 +55,11 @@ export const toPublicBattleState = (
 
 export const toPublicSceneState = (
   state: ScenePlan,
+  rewriteMediaUrl: (url: string) => string = (url) => url,
 ): PublicScenePresentationState => ({
+  mediaRevision: state.mediaRevision,
+  phaseEntrance: state.phaseEntrance ?? null,
+  cutscenePlayback: state.cutscenePlayback ? rewriteCutsceneMedia(state.cutscenePlayback, rewriteMediaUrl) : null,
   phaseMarkers: state.showPhaseMarkers
     ? state.phases.map(({ id, triggerBossId, startHealth }) => ({
       phaseId: id,
@@ -65,6 +70,14 @@ export const toPublicSceneState = (
   activePhaseIndex: state.activePhaseIndex,
   blackoutActive: state.blackoutActive,
   revision: state.revision,
+});
+
+export const rewriteCutsceneMedia = (cutscene: CutscenePlayback, rewrite: (url: string) => string): CutscenePlayback => ({
+  ...cutscene,
+  backgroundUrl: cutscene.backgroundUrl ? rewrite(cutscene.backgroundUrl) : null,
+  nextMusic: cutscene.nextMusic ? { ...cutscene.nextMusic, tracks: cutscene.nextMusic.tracks.map((track) => ({ ...track, url: rewrite(track.url) })) } : null,
+  music: cutscene.music ? { ...cutscene.music, tracks: cutscene.music.tracks.map((track) => ({ ...track, url: rewrite(track.url) })) } : null,
+  sound: cutscene.sound ? { ...cutscene.sound, tracks: cutscene.sound.tracks.map((track) => ({ ...track, url: rewrite(track.url) })) } : null,
 });
 
 const rewriteBackground = (
@@ -91,7 +104,7 @@ const rewriteMusic = (
       name: 'Trilha atual',
       url: rewriteMediaUrl(currentTrack.url),
     }] : [],
-    currentTime: playback?.currentTime ?? 0,
+    currentTime: music.externalPlayback ? music.resumeTime ?? 0 : playback?.currentTime ?? 0,
     synchronizedAt: Date.now(),
   };
 };
@@ -111,7 +124,7 @@ export const createPublicPresentationSnapshot = (
   ),
   battle: toPublicBattleState(source.battle),
   background: rewriteBackground(source.background, rewriteMediaUrl),
-  scene: toPublicSceneState(source.scenePlan),
+  scene: toPublicSceneState(source.scenePlan, rewriteMediaUrl),
   encounterEffects: source.encounterEffects,
   music: rewriteMusic(source.music, source.musicPlayback, rewriteMediaUrl),
   soundboard: {

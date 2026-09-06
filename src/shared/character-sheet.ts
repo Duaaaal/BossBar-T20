@@ -1,4 +1,5 @@
 export const MAX_CHARACTER_SHEET_BYTES = 25 * 1024 * 1024;
+export const MAX_CHARACTER_PORTRAIT_BYTES = 5 * 1024 * 1024;
 export const BLANK_CHARACTER_SHEET_ASSET_PATH = 'ficha-t20-v2-editavel.pdf';
 
 export type CharacterSheetIssueSeverity = 'error' | 'warning';
@@ -37,6 +38,8 @@ export type CharacterSheetSummary = {
     name: string;
     total: number | null;
     trained: boolean;
+    /** This skill may only be used when trained under Tormenta20 rules. */
+    trainedOnly?: boolean;
     attribute: string;
     attributeValue: number;
     halfLevel: number;
@@ -76,6 +79,13 @@ export type PlayerCharacterSheetStatus = {
   validation: CharacterSheetValidation | null;
 };
 
+export type PlayerCharacterPortraitStatus = {
+  hasPortrait: boolean;
+  fileName: string | null;
+  uploadedAt: number | null;
+  contentType: 'image/png' | 'image/jpeg' | 'image/webp' | null;
+};
+
 export type PlayerAccountStatus = {
   exists: boolean;
   username: string;
@@ -93,6 +103,7 @@ export type PlayerAuthenticationResult = {
   username?: string;
   sessionToken?: string;
   sheet?: PlayerCharacterSheetStatus;
+  portrait?: PlayerCharacterPortraitStatus;
   notes?: string;
   error?: string;
 };
@@ -101,6 +112,12 @@ export type CharacterSheetUploadResult = {
   ok: boolean;
   sheet?: PlayerCharacterSheetStatus;
   corrected?: boolean;
+  error?: string;
+};
+
+export type CharacterPortraitUploadResult = {
+  ok: boolean;
+  portrait?: PlayerCharacterPortraitStatus;
   error?: string;
 };
 
@@ -173,6 +190,7 @@ export type PlayerProfileSummary = {
   username: string;
   updatedAt: number;
   sheet: Pick<PlayerCharacterSheetStatus, 'hasSheet' | 'fileName' | 'uploadedAt'>;
+  portrait: PlayerCharacterPortraitStatus;
 };
 
 export type NotesSaveResult = {

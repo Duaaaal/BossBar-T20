@@ -9,10 +9,11 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 test('cada renderer recebe somente os métodos de preload que utiliza', async () => {
   for (const [role, exposedMethods] of Object.entries(bossApiMethodsByRole)) {
-    const rendererSource = await readFile(
+    let rendererSource = await readFile(
       path.join(projectRoot, 'src', `${role}.tsx`),
       'utf8',
     );
+    if (role === 'player') rendererSource += await readFile(path.join(projectRoot, 'src', 'CutscenePlayer.tsx'), 'utf8');
     const usedMethods = Array.from(
       new Set(
         Array.from(rendererSource.matchAll(/window\.bossAPI\.([A-Za-z0-9_]+)/g))

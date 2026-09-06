@@ -24,6 +24,7 @@ import type {
   SoundboardStop,
   SoundEffect,
 } from './battle';
+import type { PendingBossDamageSummary } from './encounter-checkpoint';
 import type {
   BossLibraryDraft,
   BossLibraryDeleteResult,
@@ -88,6 +89,9 @@ import type {
 } from './scene';
 
 export type BossAPI = {
+  resetEncounter: () => Promise<boolean>;
+  getPresentationMedia: () => Promise<string[]>;
+  controlSceneMusic: (ownerId: string, command: { type: 'toggle' } | { type: 'seek'; time: number }) => Promise<boolean>;
   getState: () => Promise<BattleState>;
   getAppVersion: () => Promise<string>;
   undoLastChange: () => Promise<boolean>;
@@ -107,6 +111,7 @@ export type BossAPI = {
     request: PlayerStatusRequest,
   ) => Promise<PlayerTargetActionResult>;
   getPlayerHuds: () => Promise<PlayerHudState[]>;
+  getPendingBossDamage: (bossId: string) => Promise<PendingBossDamageSummary | null>;
   getEncounterTurnState: () => Promise<EncounterTurnState>;
   advanceEncounterTurn: (
     expectedParticipantId?: string | null,
@@ -205,6 +210,7 @@ export type BossAPI = {
   copyHostedSessionLink: (link?: string) => Promise<boolean>;
   openHostedSessionAsPlayer: () => Promise<boolean>;
   approveHostedPlayer: (requestId: string) => Promise<boolean>;
+  kickHostedPlayer: (playerId: string) => Promise<boolean>;
   rejectHostedPlayer: (requestId: string) => Promise<boolean>;
   openHostedPlayerSheet: (playerId: string) => Promise<boolean>;
   resetHostedPlayerPassword: (
@@ -286,6 +292,9 @@ export type BossAPI = {
   ) => Promise<SoundboardAssignmentResult>;
   dispatchSoundboard: (command: SoundboardCommand) => void;
   releaseSceneBlackout: () => Promise<boolean>;
+  continueCutscene: () => Promise<boolean>;
+  reportCutsceneReady: (id: string, duration: number | null) => void;
+  getPresentationTime: () => number;
   activateSceneBlackout: () => Promise<boolean>;
   soundEffectFinished: (effectId: number) => void;
   reportSoundEffectError: (effectId: number, index: number) => void;
@@ -299,6 +308,7 @@ export type BossAPI = {
   getBackground: () => Promise<BackgroundState>;
   presentationReady: () => void;
   reportBackgroundError: (message: string) => void;
+  reportBackgroundProgress: (url: string, time: number) => void;
   subscribe: (callback: (state: BattleState) => void) => () => void;
   subscribeBackground: (
     callback: (state: BackgroundState) => void,

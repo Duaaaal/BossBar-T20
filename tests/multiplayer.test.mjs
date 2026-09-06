@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -588,6 +589,34 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   assert.deepEqual((await closedNotice)[0], { reason: 'host-ended-session' });
 });
 
+test('encerra a sala mesmo com uma requisição HTTP abandonada', { timeout: 5_000 }, async (t) => {
+  const server = await MultiplayerSessionServer.start({
+    playerProfileStore: await createTestPlayerProfileStore(),
+    initialSnapshot: publicSnapshot(),
+    port: 0,
+    networkMode: 'loopback',
+  });
+  const endpoint = new URL(server.info.invite.localUrl);
+  const socket = connect(Number(endpoint.port), '127.0.0.1');
+  socket.on('error', () => undefined);
+  t.after(() => socket.destroy());
+  t.after(() => server.close('server-shutdown'));
+  await once(socket, 'connect');
+  await new Promise((resolve, reject) => socket.write([
+    'POST /api/player/account-status HTTP/1.1',
+    `Host: ${endpoint.host}`,
+    'Content-Type: application/json',
+    'Content-Length: 100',
+    'Connection: keep-alive',
+    '',
+    '{',
+  ].join('\r\n'), (error) => error ? reject(error) : resolve()));
+  const disconnected = new Promise((resolve) => socket.once('close', resolve));
+  await server.close('host-ended-session');
+  await disconnected;
+  assert.equal(socket.destroyed, true);
+});
+
 test('aplica dano em área de forma privada e preserva PV na reconexão', async (t) => {
   const profileStore = await createTestPlayerProfileStore();
   let combatRandomMode = 'ten';
@@ -923,7 +952,7 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   assert.equal(restoredState.revision, aliceRevisionAfterImpact);
 });
 
-test('exige aprovação do mestre para novos jogadores durante a batalha', async (t) => {
+test('exige aprovação para novos jogadores, mas preserva uma reconexão autenticada', { timeout: 10_000 }, async (t) => {
   const requests = [];
   const snapshot = publicSnapshot();
   const server = await MultiplayerSessionServer.start({
@@ -956,14 +985,25 @@ test('exige aprovação do mestre para novos jogadores durante a batalha', async
   assert.equal(server.getPresence().connectedPlayers, 1);
 
   player.disconnect();
-  const reconnectedPending = once(player, 'session:join-pending');
   const reconnectedSnapshot = once(player, 'session:snapshot');
   const reconnected = once(player, 'connect');
   player.connect();
   await reconnected;
-  const [reconnectRequest] = await reconnectedPending;
-  assert.equal(server.approveJoinRequest(reconnectRequest.id), true);
   assert.equal((await reconnectedSnapshot)[0].battle.battleStarted, true);
+  assert.equal(server.getPendingJoinRequests().length, 0);
+
+  // A deliberate expulsion is not a network reconnect: it requires approval.
+  const disconnected = once(player, 'disconnect');
+  const playerId = server.getPresence().players[0].id;
+  assert.equal(server.kickPlayer(playerId), true);
+  await disconnected;
+  const kickedPending = once(player, 'session:join-pending');
+  const kickedSnapshot = once(player, 'session:snapshot');
+  player.connect();
+  const [kickedRequest] = await kickedPending;
+  assert.equal(server.getPresence().connectedPlayers, 0);
+  assert.equal(server.approveJoinRequest(kickedRequest.id), true);
+  assert.equal((await kickedSnapshot)[0].battle.battleStarted, true);
 
   const rejected = await connectPlayer(server, {
     clientId: 'approval-player-02',

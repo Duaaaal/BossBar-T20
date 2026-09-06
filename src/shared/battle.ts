@@ -59,6 +59,7 @@ export type BossState = {
   selectedAttackId: string;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
+  actionVersion?: number;
   turnCount: number;
   activeStatuses: ActiveBossStatus[];
 };
@@ -73,6 +74,7 @@ export type BattleState = {
 };
 
 export type BackgroundState = {
+  resumeTime?: number;
   url: string | null;
   name: string | null;
   mediaType: 'image' | 'video' | null;
@@ -157,7 +159,8 @@ export type EncounterSoundEffectKind =
   | 'dice-roll'
   | 'natural-failure'
   | 'natural-success-player'
-  | 'natural-success-enemy';
+  | 'natural-success-enemy'
+  | 'grave-action';
 
 export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'damage',
@@ -169,6 +172,7 @@ export const encounterSoundEffectKinds: readonly EncounterSoundEffectKind[] = [
   'natural-failure',
   'natural-success-player',
   'natural-success-enemy',
+  'grave-action',
 ];
 
 export const isEncounterSoundEffectKind = (
@@ -223,6 +227,8 @@ export type HealthSequenceRequest = {
   total: number;
   hits: number;
   ignoreDamageReduction?: boolean;
+  /** Roll shown immediately before this mutation and reverted with it. */
+  relatedRollId?: string;
 };
 
 export type HealthSequenceResult = {
@@ -271,6 +277,9 @@ export type MusicTrack = {
 };
 
 export type MusicState = {
+  sceneOwnerId?: string | null;
+  externalPlayback?: boolean;
+  resumeTime?: number;
   tracks: MusicTrack[];
   currentTrackId: string | null;
   isPlaying: boolean;
@@ -838,6 +847,7 @@ export const applyBattleCommand = (
         nextAction: command.text.trim().slice(0, 100),
         actionSeverity:
           command.text.trim().length === 0 ? 'normal' : command.severity,
+        actionVersion: (boss.actionVersion ?? 0) + 1,
       }));
     case 'mark-identity-unprepared':
       return updateBoss(state, command.bossId, (boss) => ({

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import path from 'node:path';
 import {
   createEditableCharacterSheet,
   joinHostedSession,
@@ -13,6 +14,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
   const session = await startHostedTestSession();
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();
+  const observerContext = await browser.newContext();
   try {
     const firstPage = await firstContext.newPage();
     let sheetTicketRequests = 0;
@@ -187,16 +189,45 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     );
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
     await expect.poll(() => sheetTicketRequests).toBe(2);
+    const observerPage = await observerContext.newPage();
+    await joinHostedSession(observerPage, session.inviteUrl, 'Jogador Observador');
     await firstPage.locator('#web-player-sheet-open').click();
     const initialSheetEditor = firstPage.getByRole('dialog', { name: 'Ajustar ficha' });
     await expect(initialSheetEditor).toBeVisible();
-    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section > h2')).toContainText([
+    await initialSheetEditor.locator('#web-player-portrait-input').setInputFiles(
+      path.join(process.cwd(), 'tests', 'fixtures', 'media', 'test-background.png'),
+    );
+    await expect(initialSheetEditor.locator('#web-player-portrait-file-name'))
+      .toHaveText('test-background.png');
+    await expect(initialSheetEditor.locator('#web-player-portrait-editor-preview'))
+      .toBeVisible();
+    const sheetFilters = initialSheetEditor.locator('#web-player-sheet-editor-filters');
+    await expect(sheetFilters.getByRole('button')).toHaveCount(6);
+    await sheetFilters.getByRole('button', { name: 'Personagem' }).click();
+    await expect(sheetFilters.getByRole('button', { name: 'Personagem' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(await initialSheetEditor.locator('.web-player-sheet-editor-section').evaluateAll(
+      (sections) => [...new Set(sections.map((section) => section.getAttribute('data-category')))],
+    )).toEqual(['personagem']);
+    await sheetFilters.getByRole('button', { name: 'Combate' }).click();
+    await expect(sheetFilters.getByRole('button', { name: 'Magia', exact: true }))
+      .toHaveCSS('filter', 'grayscale(1)');
+    await expect(sheetFilters.getByRole('button', { name: 'Combate' }))
+      .toHaveCSS('filter', 'brightness(1.18)');
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section[data-category="personagem"]'))
+      .not.toHaveCount(0);
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section[data-category="combate"]'))
+      .not.toHaveCount(0);
+    await sheetFilters.getByRole('button', { name: 'Mostrar tudo' }).click();
+    await expect(initialSheetEditor.locator('.web-player-sheet-editor-section h2')).toContainText([
       'Identidade',
       'Atributos e modificadores',
+      'Características',
+      'Descrição',
+      'Habilidades',
       'Pontos de vida e mana',
-      'Perícias',
-      'Ataques',
       'Defesa',
+      'Ataques',
     ]);
     await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"]')).toContainText('PV temporário');
     await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input')).toHaveValue('0');
@@ -210,6 +241,15 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       .evaluateAll((fields) => fields.map((field) => field.getBoundingClientRect().top));
     expect(Math.max(...identityFieldTops) - Math.min(...identityFieldTops)).toBeLessThan(2);
     const itemRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-item-row');
+    const attackRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-attack-row');
+    await expect(attackRows).toHaveCount(2);
+    await initialSheetEditor.getByRole('button', { name: '+ Adicionar ataque' }).click();
+    await expect(attackRows).toHaveCount(3);
+    await attackRows.locator('[data-field-name="Ataque 3"] input').fill('Ataque de teste');
+    await expect(attackRows.locator('[data-field-name="BossBar.Ataque.3.MultiplicadorCritico"] input'))
+      .toHaveValue('2');
+    await attackRows.getByRole('button', { name: 'Remover Ataque 3' }).click();
+    await expect(attackRows).toHaveCount(2);
     await expect(itemRows).toHaveCount(3);
     await initialSheetEditor.getByRole('button', { name: /Adicionar item/ }).click();
     await expect(itemRows).toHaveCount(4);
@@ -238,8 +278,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(spellRows).toHaveCount(0);
     await expect(initialSheetEditor.locator('[data-field-name="JOGADOR"]')).toHaveCount(0);
     await initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input').fill('7');
-    await expect(firstPage.locator('#web-player-sheet-editor-status'))
-      .toContainText('Rascunho local');
+    await expect(firstPage.locator('#web-player-sheet-editor-status')).toHaveCount(0);
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await expect.poll(() => firstPage.evaluate(async () =>
       (await window.bossAPI.getPlayerHuds()).find(({ isSelf }) => isSelf)
@@ -274,6 +313,37 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
 
     const characterHud = firstPage.locator('#web-player-character-hud');
     await expect(characterHud).toBeVisible();
+    await expect(firstPage.locator('#web-player-character-portrait')).toBeVisible();
+    await expect(firstPage.locator('#web-player-character-portrait-placeholder')).toBeHidden();
+    const selfPortraitLayout = await firstPage.locator('#web-player-character-portrait').evaluate((portrait) => {
+      const portraitBounds = portrait.getBoundingClientRect();
+      const hudBounds = portrait.parentElement!.getBoundingClientRect();
+      const shortcutsBounds = portrait.parentElement!
+        .querySelector('.self-combat-shortcuts')!.getBoundingClientRect();
+      return {
+        top: portraitBounds.top,
+        portraitCenter: portraitBounds.left + portraitBounds.width / 2,
+        hudCenter: hudBounds.left + hudBounds.width / 2,
+        overlapsShortcuts: !(
+          portraitBounds.right <= shortcutsBounds.left ||
+          portraitBounds.left >= shortcutsBounds.right ||
+          portraitBounds.bottom <= shortcutsBounds.top ||
+          portraitBounds.top >= shortcutsBounds.bottom
+        ),
+      };
+    });
+    expect(selfPortraitLayout.top).toBeGreaterThanOrEqual(0);
+    expect(selfPortraitLayout.portraitCenter).toBeGreaterThan(selfPortraitLayout.hudCenter);
+    expect(selfPortraitLayout.overlapsShortcuts).toBe(false);
+    await firstPage.locator('#web-player-character-portrait').click();
+    await expect(firstPage.getByRole('dialog', { name: 'Retrato ampliado' })).toBeVisible();
+    await firstPage.locator('#web-player-portrait-lightbox-close').click();
+    await expect(firstPage.getByRole('dialog', { name: 'Retrato ampliado' })).toBeHidden();
+    await expect(firstPage.locator('[data-action-point-slot]')).toHaveCount(5);
+    await expect(firstPage.locator('[data-action-point-slot="1"]'))
+      .toHaveAttribute('data-app-tooltip', 'Ponto de ação | 1 de 5');
+    await expect(firstPage.locator('[data-hero-point-slot="1"]'))
+      .toHaveAttribute('data-app-tooltip', 'Ponto heróico | 1 de 1');
     await expect(firstPage.locator('#web-player-character-name')).toHaveText('Valora');
     await expect(firstPage.locator('#web-player-character-health-value')).toHaveText('21/21');
     await expect(firstPage.locator('#web-player-character-temporary-health-fill')).toBeVisible();
@@ -297,6 +367,12 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     expect(selfActionsAlignment).toBeLessThan(1);
     await expect(firstPage.locator('#web-player-character-melee')).toHaveText('0');
     await expect(firstPage.locator('#web-player-character-ranged')).toHaveText('0');
+    const sharedPortrait = observerPage.locator('.party-player-portrait img');
+    await expect(sharedPortrait).toHaveCount(1);
+    await expect.poll(() => sharedPortrait.evaluate((image) =>
+      (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0,
+    )).toBe(true);
+    await observerContext.close();
     await firstPage.locator('#web-player-character-expand').click();
     await expect(firstPage.locator('#web-player-character-details')).toBeVisible();
     await expect(characterHud).toHaveCSS('z-index', '2147483647');
@@ -357,12 +433,8 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(sheetEditor).toBeVisible();
     const originField = sheetEditor.locator('[data-field-name="ORIGEM"] input');
     await originField.fill('Marinheira');
-    await expect(firstPage.locator('#web-player-sheet-editor-status'))
-      .toContainText('Rascunho local');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await originField.fill('Guarda');
-    await expect(firstPage.locator('#web-player-sheet-editor-status'))
-      .toContainText('Rascunho local');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await originField.fill('Marinheira');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
@@ -429,6 +501,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
   } finally {
     await firstContext.close().catch(() => undefined);
     await secondContext.close().catch(() => undefined);
+    await observerContext.close().catch(() => undefined);
     await session.close();
   }
 });
@@ -460,8 +533,7 @@ test('recupera localmente o rascunho da ficha após fechar o navegador', async (
     await expect(editor).toBeVisible();
     await expect(editor.locator('[data-field-name="ORIGEM"] input'))
       .toHaveValue('Sobrevivente');
-    await expect(page.locator('#web-player-sheet-editor-status'))
-      .toContainText('Rascunho local recuperado');
+    await expect(page.locator('#web-player-sheet-editor-status')).toHaveCount(0);
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
 
     await page.locator('#web-player-sheet-editor-close').click();

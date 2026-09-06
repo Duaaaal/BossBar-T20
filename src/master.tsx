@@ -97,6 +97,7 @@ const encounterSoundCategories: Array<{
   { kind: 'natural-failure', label: 'Fracasso natural' },
   { kind: 'natural-success-player', label: 'Sucesso natural do jogador' },
   { kind: 'natural-success-enemy', label: 'Sucesso natural do inimigo' },
+  { kind: 'grave-action', label: 'Ação grave' },
 ];
 
 const connectionQualityLabels: Record<ConnectionQuality, string> = {
@@ -139,6 +140,7 @@ const MasterApp = () => {
   const [soundCategoryMenuPosition, setSoundCategoryMenuPosition] = useState<SoundCategoryMenuPosition | null>(null);
   const [previewingSoundId, setPreviewingSoundId] = useState<string | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const [resetKind, setResetKind] = useState<'encounter' | 'all' | null>(null);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const [returnConfirmationOpen, setReturnConfirmationOpen] = useState(false);
   const [overwriteConfirmationOpen, setOverwriteConfirmationOpen] = useState(false);
@@ -164,6 +166,7 @@ const MasterApp = () => {
   const [passwordResetValue, setPasswordResetValue] = useState('');
   const [passwordResetConfirm, setPasswordResetConfirm] = useState('');
   const [passwordResetError, setPasswordResetError] = useState('');
+  const [kickCandidate, setKickCandidate] = useState<{ id: string; name: string } | null>(null);
   const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<{
     id: string;
     name: string;
@@ -746,7 +749,7 @@ const MasterApp = () => {
         : await window.bossAPI.rejectActionPointRequest(requestId);
       showHostedSessionFeedback(
         result.ok
-          ? approved ? 'Ponto de Ação aprovado.' : 'Ponto de Ação recusado.'
+          ? approved ? 'Solicitação aprovada.' : 'Solicitação recusada.'
           : result.error ?? 'O pedido não está mais disponível.',
       );
     } catch {
@@ -1128,6 +1131,13 @@ const MasterApp = () => {
       </header>
 
       <section className="compact-panel session-panel">
+        {scenePlan?.cutscenePlayback && <div className="session-actions">
+          <button className="start-battle-button" type="button" onClick={() => void window.bossAPI.continueCutscene()}
+            disabled={scenePlan.cutscenePlayback.stage === 'ending'} data-disabled-reason="Concluindo a cutscene">
+            {scenePlan.cutscenePlayback.stage === 'loading' ? 'Interromper cutscene e continuar' : 'Continuar encontro'}
+          </button>
+          {scenePlan.cutscenePlayback.stage === 'loading' && <small>Aguardando as mídias de todos os participantes…</small>}
+        </div>}
         <div className="compact-panel-title"><h2>Sessão</h2></div>
         <div className="session-actions">
           <button
@@ -1158,13 +1168,15 @@ const MasterApp = () => {
           <button
             className={`start-battle-button ${state.battleStarted ? 'is-ending' : ''}`}
             type="button"
+            disabled={!state.battleStarted && Boolean(hostedSession?.waitingPlayers?.length)}
+            data-disabled-reason="Aguardando o retorno dos jogadores salvos"
             onClick={() => state.battleStarted
               ? window.bossAPI.dispatch({ type: 'end-battle' })
               : startBattle()}
           >
             {state.battleStarted ? 'Encerrar batalha' : 'Iniciar batalha'}
           </button>
-          <button className="reset-button" type="button" onClick={() => setResetConfirmationOpen(true)}>Resetar tudo</button>
+          <button className="reset-button" type="button" onClick={() => { setResetKind(null); setResetConfirmationOpen(true); }}>Resetar</button>
           <button className="return-launcher-button" type="button" onClick={() => setReturnConfirmationOpen(true)}>Voltar ao início</button>
         </div>
       </section>
@@ -1330,6 +1342,7 @@ const MasterApp = () => {
                   >
                     Senha
                   </button>
+                  <button className="hosted-player-tool is-delete" type="button" onClick={() => setKickCandidate(player)}>Expulsar</button>
                   {!player.isHost && (
                     <button
                       className="hosted-player-tool is-delete"
@@ -1354,6 +1367,10 @@ const MasterApp = () => {
               Aguardando jogadores entrarem na sala.
             </p>
           )}
+          {(hostedSession.waitingPlayers?.length ?? 0) > 0 && <div className="hosted-player-empty" role="status">
+            <strong>Retomada aguardando {hostedSession.waitingPlayers!.length} jogador(es)</strong>
+            {hostedSession.waitingPlayers!.map((player) => <div key={player.id}>{player.name} <button className="hosted-player-tool is-delete" type="button" onClick={() => setKickCandidate(player)}>Remover do encontro</button></div>)}
+          </div>}
           {hostedSession.error && (
             <p className="hosted-session-error" role="alert">
               {hostedSession.error}
@@ -1764,6 +1781,16 @@ const MasterApp = () => {
         </div>
       )}
 
+      {kickCandidate && <div className="modal-backdrop"><section className="confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="kick-player-title">
+        <button className="modal-close-button" aria-label="Fechar" onClick={() => setKickCandidate(null)}>×</button>
+        <h2 id="kick-player-title">Remover {kickCandidate.name} do encontro?</h2>
+        <p>O personagem sairá do encontro e não será aguardado para retomá-lo. A conta, a ficha e as notas não serão excluídas.</p>
+        <div className="modal-actions"><button className="modal-cancel-button" onClick={() => setKickCandidate(null)}>Cancelar</button><button className="modal-confirm-button is-delete" onClick={async () => {
+          const removed = await window.bossAPI.kickHostedPlayer(kickCandidate.id);
+          setHostedSessionFeedback(removed ? 'Jogador removido do encontro.' : 'Não foi possível remover este jogador.');
+          setKickCandidate(null);
+        }}>Remover</button></div>
+      </section></div>}
       {profileDeleteCandidate && (
         <div className="modal-backdrop">
           <section
@@ -2117,12 +2144,20 @@ const MasterApp = () => {
 
       {resetConfirmationOpen && (
         <div className="modal-backdrop">
-          <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="reset-title">
-            <p className="modal-eyebrow">Confirmação</p><h2 id="reset-title">Resetar todo o encontro?</h2>
-            <p>Chefões, vida, atributos, fundo e ações voltarão ao padrão.</p>
+          <section className="confirmation-modal" style={{ position: 'relative' }} role="dialog" aria-modal="true" aria-labelledby="reset-title">
+            <button className="settings-close-button" style={{ position: 'absolute', top: 10, right: 10 }} type="button" aria-label="Fechar reset" onClick={() => setResetConfirmationOpen(false)}>×</button>
+            <p className="modal-eyebrow">Confirmação</p><h2 id="reset-title">{resetKind === 'all' ? 'Resetar tudo?' : resetKind === 'encounter' ? 'Reiniciar o encontro?' : 'Resetar'}</h2>
+            <p>{resetKind === 'all' ? 'Chefões, vida, atributos, fundo e ações voltarão aos valores padrão do aplicativo.' : resetKind === 'encounter' ? 'Retorna à sala de espera e aos valores registrados no início da batalha, incluindo personagens e cena. A sala hospedada permanece aberta.' : 'Escolha o que deseja reiniciar.'}</p>
             <div className="modal-actions">
               <button className="modal-cancel-button" type="button" onClick={() => setResetConfirmationOpen(false)}>Cancelar</button>
-              <button className="modal-confirm-button" type="button" onClick={() => { window.bossAPI.dispatch({ type: 'reset-all' }); setResetConfirmationOpen(false); }}>Sim, resetar</button>
+              {resetKind ? <button className="modal-confirm-button" type="button" onClick={async () => {
+                if (resetKind === 'all') window.bossAPI.dispatch({ type: 'reset-all' });
+                else await window.bossAPI.resetEncounter();
+                setResetConfirmationOpen(false);
+              }}>Sim, resetar</button> : <>
+                <button className="modal-confirm-button" type="button" onClick={() => setResetKind('encounter')}>Resetar encontro</button>
+                <button className="modal-cancel-button" type="button" onClick={() => setResetKind('all')}>Resetar tudo</button>
+              </>}
             </div>
           </section>
         </div>

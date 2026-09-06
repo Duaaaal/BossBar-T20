@@ -4,8 +4,10 @@ import {
 } from './web-player-api';
 import {
   MAX_CHARACTER_SHEET_BYTES,
+  MAX_CHARACTER_PORTRAIT_BYTES,
   type CharacterSheetEditorField,
   type PlayerCharacterSheetStatus,
+  type CharacterSheetSummary,
 } from './shared/character-sheet';
 import {
   CHARACTER_SHEET_DRAFT_MAX_BYTES,
@@ -27,6 +29,7 @@ import type {
   PlayerActionKind,
   PlayerAreaDamageImpact,
   PlayerEncounterState,
+  PlayerResourceNotice,
 } from './shared/player-combat';
 import {
   getActiveStatusDescription,
@@ -90,9 +93,29 @@ const sheetRemoveConfirmButton = document.getElementById('web-player-sheet-remov
 const sheetEditorDialog = document.getElementById('web-player-sheet-editor');
 const sheetEditorClose = document.getElementById('web-player-sheet-editor-close');
 const sheetEditorSearch = document.getElementById('web-player-sheet-editor-search');
+const sheetEditorFilters = document.getElementById('web-player-sheet-editor-filters');
 const sheetEditorFields = document.getElementById('web-player-sheet-editor-fields');
+// Kept as an optional hook for validation failures; the editor no longer renders
+// a persistent draft/status bar.
 const sheetEditorStatus = document.getElementById('web-player-sheet-editor-status');
 const characterHud = document.getElementById('web-player-character-hud');
+const characterPortraitButton = document.getElementById('web-player-character-portrait');
+const characterPortraitImage = document.getElementById('web-player-character-portrait-image');
+const characterPortraitPlaceholder = document.getElementById(
+  'web-player-character-portrait-placeholder',
+);
+const portraitInput = document.getElementById('web-player-portrait-input');
+const portraitRemoveButton = document.getElementById('web-player-portrait-remove');
+const portraitEditorPreview = document.getElementById('web-player-portrait-editor-preview');
+const portraitEditorPlaceholder = document.getElementById('web-player-portrait-editor-placeholder');
+const portraitFileName = document.getElementById('web-player-portrait-file-name');
+const portraitLightbox = document.getElementById('web-player-portrait-lightbox');
+const portraitLightboxImage = document.getElementById('web-player-portrait-lightbox-image');
+const portraitLightboxClose = document.getElementById('web-player-portrait-lightbox-close');
+const portraitRemoveDialog = document.getElementById('web-player-portrait-remove-confirm');
+const portraitRemoveClose = document.getElementById('web-player-portrait-remove-close');
+const portraitRemoveCancel = document.getElementById('web-player-portrait-remove-cancel');
+const portraitRemoveConfirm = document.getElementById('web-player-portrait-remove-confirm-button');
 const characterStatuses = document.getElementById('web-player-character-statuses');
 const characterName = document.getElementById('web-player-character-name');
 const characterExpandButton = document.getElementById('web-player-character-expand');
@@ -101,6 +124,12 @@ const characterClassLevel = document.getElementById('web-player-character-class-
 const characterPrivateInput = document.getElementById('web-player-character-private');
 const characterActionButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('[data-player-action]'),
+];
+const characterActionPointSlots = [
+  ...document.querySelectorAll<HTMLElement>('[data-action-point-slot]'),
+];
+const characterHeroPointSlots = [
+  ...document.querySelectorAll<HTMLElement>('[data-hero-point-slot]'),
 ];
 const characterHealthFill = document.getElementById('web-player-character-health-fill');
 const characterTemporaryHealthFill = document.getElementById(
@@ -146,7 +175,10 @@ let authenticating = false;
 let notesDocument: PlayerNotesDocument = createPlayerNotesDocument();
 let playerEncounterState: PlayerEncounterState | null = null;
 let selfHudId: string | null = null;
+let encounterSheetSummary: CharacterSheetSummary | null = null;
 let activeTurnParticipantId: string | null = null;
+let currentPortraitUrl: string | null = null;
+let pendingPortraitPreviewUrl: string | null = null;
 let sheetEditorDocument: CharacterSheetEditorField[] = [];
 let sheetEditorRemovedFields: CharacterSheetEditorField[] = [];
 let sheetEditorBaseDocument: CharacterSheetEditorField[] = [];
@@ -155,6 +187,56 @@ let sheetEditorUsername = '';
 let sheetEditorDirty = false;
 let sheetEditorClosing = false;
 let sheetEditorDraftTimer: ReturnType<typeof setTimeout> | null = null;
+const activeSheetEditorCategories = new Set<string>();
+
+const sheetEditorCategoryDefinitions = [
+  {
+    id: 'personagem',
+    label: 'Personagem',
+    sections: [
+      'Identidade',
+      'Atributos e modificadores',
+      'Características',
+      'Descrição',
+      'Habilidades',
+    ],
+  },
+  {
+    id: 'combate',
+    label: 'Combate',
+    sections: ['Pontos de vida e mana', 'Defesa', 'Ataques', 'Armadura e escudo', 'Proficiências'],
+  },
+  { id: 'pericias', label: 'Perícias', sections: ['Perícias'] },
+  { id: 'magia', label: 'Magia', sections: ['Magias'] },
+  { id: 'inventario', label: 'Inventário', sections: ['Itens'] },
+] as const;
+
+const sheetEditorCategoryForSection = (section: string) =>
+  sheetEditorCategoryDefinitions.find(({ sections }) =>
+    (sections as readonly string[]).includes(section))?.id ??
+  'personagem';
+
+const sheetEditorSectionOrder = new Map<string, number>(
+  sheetEditorCategoryDefinitions
+    .flatMap(({ sections }) => sections)
+    .map((section, index) => [section, index]),
+);
+
+const notifyPlayer = (
+  message: string,
+  tone: PlayerResourceNotice['tone'] = 'info',
+  persistent = false,
+) => document.dispatchEvent(new CustomEvent<PlayerResourceNotice>(
+  'bossbar:player-notice',
+  {
+    detail: {
+      id: `web:${crypto.randomUUID()}`,
+      message,
+      tone,
+      persistent,
+    },
+  },
+));
 
 const currentRoomCode = () => {
   const parameters = new URLSearchParams(window.location.search);
@@ -413,6 +495,8 @@ const {
   connect,
   dispose,
   uploadCharacterSheet,
+  uploadCharacterPortrait,
+  removeCharacterPortrait,
   automaticallyFixCharacterSheet,
   fetchCharacterSheetBlob,
   removeCharacterSheet,
@@ -487,11 +571,49 @@ api.subscribeMusicDuck((event) => {
 api.subscribePlayerHuds((players) => {
   const self = players.find(({ isSelf }) => isSelf);
   selfHudId = self?.id ?? null;
+  encounterSheetSummary = self?.summary ?? null;
+  // The subscription immediately emits its empty initial state while this
+  // module is still initializing; render after all handlers exist.
+  queueMicrotask(() => renderCharacterHud(getPlayerToolsState().sheet));
+  currentPortraitUrl = self?.portraitUrl ?? null;
+  if (currentPortraitUrl) releasePendingPortraitPreview();
+  if (characterPortraitImage instanceof HTMLImageElement) {
+    if (currentPortraitUrl) characterPortraitImage.src = currentPortraitUrl;
+    else characterPortraitImage.removeAttribute('src');
+    characterPortraitImage.toggleAttribute('hidden', !currentPortraitUrl);
+  }
+  characterPortraitPlaceholder?.toggleAttribute('hidden', Boolean(currentPortraitUrl));
+  characterPortraitButton?.classList.toggle('has-image', Boolean(currentPortraitUrl));
+  characterPortraitButton?.setAttribute(
+    'aria-label',
+    currentPortraitUrl ? 'Ampliar retrato do personagem' : 'Retrato não definido',
+  );
+  renderPortraitEditor();
   updateOwnTurnHighlight();
   if (characterPrivateInput instanceof HTMLInputElement && self) {
     characterPrivateInput.checked = self.privateMode;
   }
   if (self) {
+    const actionPoints = Math.max(0, Math.min(5, Math.trunc(self.actionPoints ?? 0)));
+    const heroPoints = Math.max(0, Math.min(1, Math.trunc(self.heroPoints ?? 0)));
+    for (const [index, slot] of characterActionPointSlots.entries()) {
+      slot.classList.toggle('is-active', index < actionPoints);
+      slot.dataset.appTooltip = `Ponto de ação | ${actionPoints} de 5`;
+      slot.setAttribute('aria-label', slot.dataset.appTooltip);
+      slot.setAttribute('role', 'button');
+      slot.setAttribute('aria-disabled', String(index >= actionPoints));
+      slot.onclick = () => { if (index < actionPoints) window.dispatchEvent(new CustomEvent('bossbar:resource-action', { detail: 'action-point' })); };
+      slot.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); slot.click(); } };
+    }
+    for (const [index, slot] of characterHeroPointSlots.entries()) {
+      slot.classList.toggle('is-active', index < heroPoints);
+      slot.dataset.appTooltip = `Ponto heróico | ${heroPoints} de 1`;
+      slot.setAttribute('aria-label', slot.dataset.appTooltip);
+      slot.setAttribute('role', 'button');
+      slot.setAttribute('aria-disabled', String(index >= heroPoints));
+      slot.onclick = () => { if (index < heroPoints) window.dispatchEvent(new CustomEvent('bossbar:resource-action', { detail: 'hero-point' })); };
+      slot.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); slot.click(); } };
+    }
     const sheetLocked = self.sheetInteractionState &&
       self.sheetInteractionState !== 'idle';
     for (const button of characterActionButtons) {
@@ -664,7 +786,7 @@ function showReflexResult(impact: PlayerAreaDamageImpact) {
 }
 
 const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
-  const summary = sheet?.hasSheet ? sheet.validation?.summary : null;
+  const summary = encounterSheetSummary ?? (sheet?.hasSheet ? sheet.validation?.summary : null);
   if (!summary) {
     characterHud?.setAttribute('hidden', '');
     return;
@@ -1008,6 +1130,70 @@ sheetButton?.addEventListener('click', () => {
 });
 sheetCloseButton?.addEventListener('click', () => sheetDialog?.setAttribute('hidden', ''));
 
+portraitInput?.addEventListener('change', () => {
+  if (!(portraitInput instanceof HTMLInputElement)) return;
+  const file = portraitInput.files?.[0];
+  if (!file) return;
+  if (file.size > MAX_CHARACTER_PORTRAIT_BYTES) {
+    notifyPlayer('O retrato deve ter no máximo 5 MB.', 'rejected');
+    portraitInput.value = '';
+    return;
+  }
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    notifyPlayer('Use uma imagem PNG, JPEG ou WebP.', 'rejected');
+    portraitInput.value = '';
+    return;
+  }
+  releasePendingPortraitPreview();
+  pendingPortraitPreviewUrl = URL.createObjectURL(file);
+  renderPortraitEditor();
+  if (portraitFileName) {
+    portraitFileName.textContent = file.name;
+    portraitFileName.setAttribute('title', file.name);
+  }
+  portraitInput.disabled = true;
+  void uploadCharacterPortrait(file).then((result) => {
+    if (!result.ok) {
+      releasePendingPortraitPreview();
+      notifyPlayer(result.error ?? 'Não foi possível salvar o retrato.', 'rejected');
+    }
+    renderPortraitEditor();
+    portraitInput.value = '';
+  }).finally(() => {
+    portraitInput.disabled = false;
+  });
+});
+
+portraitRemoveButton?.addEventListener('click', () => {
+  portraitRemoveDialog?.removeAttribute('hidden');
+  portraitRemoveCancel?.focus();
+});
+portraitRemoveCancel?.addEventListener('click', () => portraitRemoveDialog?.setAttribute('hidden', ''));
+portraitRemoveClose?.addEventListener('click', () => portraitRemoveCancel?.click());
+portraitRemoveConfirm?.addEventListener('click', () => {
+  portraitRemoveConfirm.setAttribute('disabled', '');
+  void removeCharacterPortrait().then((result) => {
+    if (result.ok) {
+      releasePendingPortraitPreview();
+      currentPortraitUrl = null;
+      portraitRemoveDialog?.setAttribute('hidden', '');
+    } else {
+      notifyPlayer(result.error ?? 'Não foi possível remover o retrato.', 'rejected');
+    }
+    renderPortraitEditor();
+  }).finally(() => portraitRemoveConfirm.removeAttribute('disabled'));
+});
+
+characterPortraitButton?.addEventListener('click', () => {
+  if (!currentPortraitUrl || !(portraitLightboxImage instanceof HTMLImageElement)) return;
+  portraitLightboxImage.src = currentPortraitUrl;
+  portraitLightbox?.removeAttribute('hidden');
+  portraitLightboxClose?.focus();
+});
+portraitLightboxClose?.addEventListener('click', () => {
+  portraitLightbox?.setAttribute('hidden', '');
+});
+
 sheetInput?.addEventListener('change', () => {
   if (!(sheetInput instanceof HTMLInputElement)) return;
   const file = sheetInput.files?.[0];
@@ -1108,6 +1294,26 @@ const editorField = (
   ...(validation ? { validation } : {}),
 });
 
+const attackEditorFields = (index: number): CharacterSheetEditorField[] => {
+  const group = `Ataque ${index}`;
+  return [
+    editorField(`Ataque ${index}`, 'Nome', 'Ataques', group),
+    editorField(`Bônus Atq ${index}`, 'Teste de ataque', 'Ataques', group, { kind: 'formula' }),
+    editorField(`Dano ${index}`, 'Dano', 'Ataques', group, { kind: 'formula' }),
+    editorField(`BossBar.Ataque.${index}.MargemCritico`, 'Margem de crítico', 'Ataques', group, {
+      kind: 'integer', min: 2, max: 20,
+    }),
+    {
+      ...editorField(`BossBar.Ataque.${index}.MultiplicadorCritico`, 'Multiplicador de crítico', 'Ataques', group, {
+        kind: 'integer', min: 1, max: 20,
+      }),
+      value: '2',
+    },
+    editorField(`Tipo ${index}`, 'Tipo', 'Ataques', group),
+    editorField(`Alcance ${index}`, 'Alcance', 'Ataques', group),
+  ];
+};
+
 const itemEditorFields = (index: number) => [
   editorField(index <= 15 ? `Item${index}` : `BossBar.Item.${index}.Nome`, 'Item', 'Itens', `Item ${index}`),
   {
@@ -1143,6 +1349,17 @@ const nextEditorGroupIndex = (pattern: RegExp, maximum: number) => {
   }));
   return Array.from({ length: maximum }, (_, offset) => offset + 1)
     .find((candidate) => !used.has(candidate)) ?? null;
+};
+
+const addAttackEditorRow = () => {
+  const index = nextEditorGroupIndex(/^Ataque (\d+)$/, 20);
+  if (!index) return;
+  sheetEditorRemovedFields = sheetEditorRemovedFields.filter(
+    ({ group }) => group !== `Ataque ${index}`,
+  );
+  sheetEditorDocument.push(...attackEditorFields(index));
+  renderSheetEditorFields();
+  markSheetEditorDirty();
 };
 
 const addItemEditorRow = () => {
@@ -1208,8 +1425,7 @@ const markSheetEditorDirty = () => {
   sheetEditorDirty = true;
   scheduleSheetEditorDraft();
   if (sheetEditorStatus) {
-    sheetEditorStatus.textContent =
-      'Rascunho local. Uma única solicitação será enviada ao fechar a ficha.';
+    sheetEditorStatus.textContent = 'Rascunho local.';
   }
 };
 
@@ -1237,6 +1453,60 @@ const addSpellEditorRow = () => {
   markSheetEditorDirty();
 };
 
+function releasePendingPortraitPreview() {
+  if (!pendingPortraitPreviewUrl) return;
+  URL.revokeObjectURL(pendingPortraitPreviewUrl);
+  pendingPortraitPreviewUrl = null;
+}
+
+function renderPortraitEditor() {
+  const portrait = getPlayerToolsState().portrait;
+  const previewUrl = pendingPortraitPreviewUrl ?? currentPortraitUrl;
+  if (portraitEditorPreview instanceof HTMLImageElement) {
+    if (previewUrl) portraitEditorPreview.src = previewUrl;
+    else portraitEditorPreview.removeAttribute('src');
+    portraitEditorPreview.toggleAttribute('hidden', !previewUrl);
+  }
+  portraitEditorPlaceholder?.toggleAttribute('hidden', Boolean(previewUrl));
+  portraitRemoveButton?.toggleAttribute('hidden', !portrait?.hasPortrait);
+  if (portraitFileName) {
+    const label = portrait?.fileName ?? 'Nenhum retrato';
+    portraitFileName.textContent = label;
+    portraitFileName.setAttribute('title', label);
+  }
+}
+
+const renderSheetEditorFilters = () => {
+  if (!sheetEditorFilters) return;
+  sheetEditorFilters.replaceChildren();
+  for (const category of sheetEditorCategoryDefinitions) {
+    const button = document.createElement('button');
+    const selected = activeSheetEditorCategories.has(category.id);
+    button.type = 'button';
+    button.className = `is-${category.id}`;
+    button.textContent = category.label;
+    button.setAttribute('aria-pressed', String(selected));
+    button.addEventListener('click', () => {
+      if (selected) activeSheetEditorCategories.delete(category.id);
+      else activeSheetEditorCategories.add(category.id);
+      renderSheetEditorFilters();
+      renderSheetEditorFields();
+    });
+    sheetEditorFilters.append(button);
+  }
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'is-all';
+  clear.textContent = 'Mostrar tudo';
+  clear.disabled = activeSheetEditorCategories.size === 0;
+  clear.addEventListener('click', () => {
+    activeSheetEditorCategories.clear();
+    renderSheetEditorFilters();
+    renderSheetEditorFields();
+  });
+  sheetEditorFilters.append(clear);
+};
+
 const renderSheetEditorFields = () => {
   if (!sheetEditorFields) return;
   const query = sheetEditorSearch instanceof HTMLInputElement
@@ -1244,6 +1514,9 @@ const renderSheetEditorFields = () => {
     : '';
   sheetEditorFields.replaceChildren();
   const filteredFields = sheetEditorDocument.filter((field) => {
+    const categoryMatches = activeSheetEditorCategories.size === 0 ||
+      activeSheetEditorCategories.has(sheetEditorCategoryForSection(field.section));
+    if (!categoryMatches) return false;
     if (!query) return true;
     return [field.label, field.section, field.group, field.name]
       .some((value) => value?.toLocaleLowerCase('pt-BR').includes(query));
@@ -1390,9 +1663,14 @@ const renderSheetEditorFields = () => {
     container.append(label);
   };
 
-  for (const [sectionName, fields] of sections) {
+  const orderedSections = [...sections].sort(([left], [right]) =>
+    (sheetEditorSectionOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+    (sheetEditorSectionOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
+  for (const [sectionName, fields] of orderedSections) {
     const section = document.createElement('section');
     section.className = 'web-player-sheet-editor-section';
+    section.dataset.category = sheetEditorCategoryForSection(sectionName);
     const sectionClass = new Map([
       ['Identidade', 'is-identity'],
       ['Atributos e modificadores', 'is-attributes'],
@@ -1404,12 +1682,20 @@ const renderSheetEditorFields = () => {
     if (sectionClass) section.classList.add(sectionClass);
     const heading = document.createElement('h2');
     heading.textContent = sectionName;
-    if (['Magias', 'Itens', 'Armadura e escudo'].includes(sectionName)) {
+    if (['Ataques', 'Magias', 'Itens', 'Armadura e escudo'].includes(sectionName)) {
       const headingRow = document.createElement('div');
       headingRow.className = 'web-player-sheet-editor-section-heading';
       const controls = document.createElement('div');
       controls.className = 'web-player-sheet-editor-section-actions';
-      if (sectionName === 'Magias') {
+      if (sectionName === 'Ataques') {
+        const addAttack = document.createElement('button');
+        addAttack.type = 'button';
+        addAttack.textContent = '+ Adicionar ataque';
+        addAttack.disabled = nextEditorGroupIndex(/^Ataque (\d+)$/, 20) === null;
+        if (addAttack.disabled) addAttack.dataset.disabledReason = 'Limite de 20 ataques atingido';
+        addAttack.addEventListener('click', addAttackEditorRow);
+        controls.append(addAttack);
+      } else if (sectionName === 'Magias') {
         const addSpell = document.createElement('button');
         addSpell.type = 'button';
         addSpell.textContent = '+ Adicionar magia';
@@ -1445,7 +1731,11 @@ const renderSheetEditorFields = () => {
       groupFields.push(field);
       groups.set(groupName, groupFields);
     }
-    for (const [groupName, groupFields] of groups) {
+    const orderedGroups = sectionName === 'Ataques'
+      ? [...groups].sort(([left], [right]) =>
+        Number(left.replace('Ataque ', '')) - Number(right.replace('Ataque ', '')))
+      : groups;
+    for (const [groupName, groupFields] of orderedGroups) {
       if (!groupName) {
         groupFields.forEach((field) => appendField(body, field));
         continue;
@@ -1456,6 +1746,7 @@ const renderSheetEditorFields = () => {
         group.classList.add('is-spell-row');
       }
       if (/^Item \d+$/.test(groupName)) group.classList.add('is-item-row');
+      if (/^Ataque \d+$/.test(groupName)) group.classList.add('is-attack-row');
       if (/^Armadura \d+$/.test(groupName)) group.classList.add('is-armor-row');
       if (/^Escudo \d+$/.test(groupName)) group.classList.add('is-shield-row');
       if (groupName === 'Carga') group.classList.add('is-load-row');
@@ -1472,6 +1763,7 @@ const renderSheetEditorFields = () => {
         group.style.gridRow = String(groupIndex);
       }
       const removable = group.classList.contains('is-spell-row') ||
+        (group.classList.contains('is-attack-row') && groupIndex > 2) ||
         (group.classList.contains('is-item-row') && groupIndex > 3) ||
         ((group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row')) && groupIndex > 1);
       if (removable) {
@@ -1534,6 +1826,7 @@ const renderSheetEditorFields = () => {
 };
 
 sheetEditorSearch?.addEventListener('input', renderSheetEditorFields);
+renderSheetEditorFilters();
 const closeSheetEditor = async () => {
   if (sheetEditorClosing) return;
   const invalidInput = sheetEditorFields?.querySelector<
@@ -1549,7 +1842,7 @@ const closeSheetEditor = async () => {
   sheetEditorClose?.setAttribute('disabled', '');
   if (sheetEditorStatus) {
     sheetEditorStatus.textContent = sheetEditorDirty
-      ? 'Enviando uma única solicitação ao mestre…'
+      ? 'Salvando ajustes…'
       : 'Fechando ficha…';
   }
   try {
@@ -1633,10 +1926,11 @@ sheetOpenButton?.addEventListener('click', () => {
     sheetEditorDialog?.removeAttribute('hidden');
     syncPermanentEncounterValuesIntoSheetEditor();
     renderSheetEditorFields();
+    renderPortraitEditor();
     if (sheetEditorStatus) {
       sheetEditorStatus.textContent = recoveredDraft
         ? `Rascunho local recuperado de ${new Date(recoveredDraft.savedAt).toLocaleString('pt-BR')}.`
-        : 'Edite livremente. Uma única solicitação será enviada ao fechar a ficha.';
+        : 'Ficha pronta para edição.';
     }
     sheetDialog?.setAttribute('hidden', '');
   }).catch((error: unknown) => {

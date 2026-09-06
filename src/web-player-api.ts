@@ -1,13 +1,16 @@
 import { io, type Socket } from 'socket.io-client';
+import { rewriteCutsceneMedia } from './multiplayer/public-presentation.ts';
 import type { BossAPI } from './shared/api.ts';
 import type {
   CharacterSheetUploadResult,
+  CharacterPortraitUploadResult,
   CharacterSheetEditorField,
   CharacterSheetEditorResult,
   NotesSaveResult,
   PlayerAccountStatus,
   PlayerAuthenticationResult,
   PlayerCharacterSheetStatus,
+  PlayerCharacterPortraitStatus,
 } from './shared/character-sheet.ts';
 import {
   BOSS_CRITICAL_DUCK_FADE_MS,
@@ -59,6 +62,7 @@ import type {
 import { emptyEncounterTurnState } from './shared/player-combat.ts';
 import {
   createScenePlan,
+  cutsceneMediaUrls,
   type ScenePlan,
   type SceneTransitionEvent,
 } from './shared/scene.ts';
@@ -108,6 +112,9 @@ type PlayerApi = Pick<
   | 'subscribeBackground'
   | 'reportBackgroundError'
   | 'presentationReady'
+  | 'reportCutsceneReady'
+  | 'reportBackgroundProgress'
+  | 'getPresentationTime'
   | 'subscribeHealthEffect'
   | 'getScenePlan'
   | 'subscribeScenePlan'
@@ -287,6 +294,8 @@ export const toScenePlan = (
     showPhaseMarkers: transitionMarkers.length > 0,
     activePhaseIndex: state.activePhaseIndex,
     blackoutActive: state.blackoutActive,
+    cutscenePlayback: state.cutscenePlayback ?? null,
+    phaseEntrance: state.phaseEntrance ?? null,
     revision: state.revision,
   };
 };
@@ -302,6 +311,7 @@ export const publicMediaUrlsFromSnapshot = (
   snapshot: MultiplayerSessionSnapshot,
 ) => [...new Set([
   snapshot.background.url,
+  ...cutsceneMediaUrls(snapshot.scene.cutscenePlayback),
   ...snapshot.music.tracks.map(({ url }) => url),
   ...(snapshot.encounterSoundUrls ?? []),
 ].filter((url): url is string => Boolean(url)))];
@@ -314,6 +324,7 @@ export const criticalMediaUrlsFromSnapshot = (
   )?.url;
   return [...new Set([
     snapshot.background.url,
+    ...cutsceneMediaUrls(snapshot.scene.cutscenePlayback),
     currentTrackUrl,
   ].filter((url): url is string => Boolean(url)))];
 };
@@ -416,6 +427,8 @@ export const createWebPlayerApi = ({
     resolveConnectionParameters();
   const mediaPreloadPromises = new Map<string, Promise<boolean>>();
   const resolvedMediaUrls = new Map<string, string>();
+  let serverClockOffset = 0;
+  let bestClockRoundTrip = Number.POSITIVE_INFINITY;
   const maxResidentMediaItemBytes = MEDIA_CACHE_ITEM_LIMIT_BYTES;
   const maxResidentMediaTotalBytes = MEDIA_CACHE_GLOBAL_LIMIT_BYTES;
   const activePreloadControllers = new Set<AbortController>();
@@ -440,6 +453,7 @@ export const createWebPlayerApi = ({
   let accountToken = '';
   let authenticatedUsername = '';
   let currentSheet: PlayerCharacterSheetStatus | null = null;
+  let currentPortrait: PlayerCharacterPortraitStatus | null = null;
   let currentNotes = '';
   let accountStatusCache: {
     username: string;
@@ -557,6 +571,7 @@ export const createWebPlayerApi = ({
     accountToken = result.sessionToken;
     authenticatedUsername = result.username;
     currentSheet = result.sheet ?? null;
+    currentPortrait = result.portrait ?? null;
     currentNotes = result.notes ?? '';
     if (currentSheet?.hasSheet) void prefetchCharacterSheetViewUrl();
     return result;
@@ -623,6 +638,41 @@ export const createWebPlayerApi = ({
     return result;
   };
 
+  const uploadCharacterPortrait = async (
+    file: File,
+  ): Promise<CharacterPortraitUploadResult> => {
+    if (!accountToken) return { ok: false, error: 'Entre novamente para enviar o retrato.' };
+    const response = await fetch('/api/player/portrait', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        ...accountHeaders(file.type),
+        'X-BossBar-Filename': encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const result = await response.json() as CharacterPortraitUploadResult;
+    if (result.portrait) currentPortrait = result.portrait;
+    return response.ok ? result : {
+      ok: false,
+      error: result.error ?? 'Não foi possível salvar o retrato.',
+    };
+  };
+
+  const removeCharacterPortrait = async (): Promise<CharacterPortraitUploadResult> => {
+    const response = await fetch('/api/player/portrait', {
+      method: 'DELETE',
+      cache: 'no-store',
+      headers: accountHeaders(),
+    });
+    const result = await response.json() as CharacterPortraitUploadResult;
+    if (result.ok) currentPortrait = result.portrait ?? null;
+    return response.ok ? result : {
+      ok: false,
+      error: result.error ?? 'Não foi possível remover o retrato.',
+    };
+  };
+
   const getCharacterSheetEditor = async (): Promise<CharacterSheetEditorResult> => {
     const response = await fetch('/api/player/sheet/editor', {
       cache: 'no-store',
@@ -670,8 +720,12 @@ export const createWebPlayerApi = ({
       headers: accountHeaders(),
     });
     if (!response.ok) return;
-    const profile = await response.json() as { sheet?: PlayerCharacterSheetStatus };
+    const profile = await response.json() as {
+      sheet?: PlayerCharacterSheetStatus;
+      portrait?: PlayerCharacterPortraitStatus;
+    };
     currentSheet = profile.sheet ?? null;
+    currentPortrait = profile.portrait ?? null;
     invalidateCharacterSheetViewUrl();
     onCharacterSheetChanged?.(currentSheet);
   };
@@ -754,7 +808,8 @@ export const createWebPlayerApi = ({
         contentLength <= maxResidentMediaItemBytes &&
         residentMediaBytes + contentLength <= maxResidentMediaTotalBytes;
       if (!canKeepResident) {
-        await response.body?.cancel();
+        const reader = response.body?.getReader();
+        if (reader) { try { while (!(await reader.read()).done) { /* stream into the HTTP cache */ } } finally { reader.releaseLock(); } }
         return verifyMediaCanLoad(url, contentType, controller.signal);
       }
 
@@ -885,7 +940,7 @@ export const createWebPlayerApi = ({
             } catch {
               return [];
             }
-          }).slice(0, 256);
+          }).slice(0, 8192);
           return waitForMediaUrls(urls);
         })
         .catch(() => false)
@@ -951,8 +1006,9 @@ export const createWebPlayerApi = ({
   };
 
   const publishScene = (nextScene: PublicScenePresentationState) => {
-    latestPublicScene = nextScene;
-    scenePlan.publish(toScenePlan(nextScene, battle.current()));
+    latestPublicScene = { ...nextScene, cutscenePlayback: nextScene.cutscenePlayback
+      ? rewriteCutsceneMedia(nextScene.cutscenePlayback, (url) => resolvedMediaUrl(url) ?? url) : null };
+    scenePlan.publish(toScenePlan(latestPublicScene, battle.current()));
   };
 
   const preloadEncounterSounds = (urls: string[]) => {
@@ -1101,6 +1157,9 @@ export const createWebPlayerApi = ({
     subscribeBackground: background.subscribe,
     reportBackgroundError: (message) => console.warn(message),
     presentationReady: () => undefined,
+    getPresentationTime: () => Date.now() + serverClockOffset,
+    reportCutsceneReady: (id, duration) => socket.emit('presentation:cutscene-ready', id, duration),
+    reportBackgroundProgress: () => undefined,
     subscribeHealthEffect: healthEffects.subscribe,
     getScenePlan: async () => scenePlan.current(),
     subscribeScenePlan: scenePlan.subscribe,
@@ -1163,6 +1222,8 @@ export const createWebPlayerApi = ({
       dispose: () => undefined,
       socket: null,
       uploadCharacterSheet,
+      uploadCharacterPortrait,
+      removeCharacterPortrait,
       automaticallyFixCharacterSheet,
       fetchCharacterSheetBlob,
       createCharacterSheetViewUrl,
@@ -1190,6 +1251,7 @@ export const createWebPlayerApi = ({
       getPlayerToolsState: () => ({
         username: authenticatedUsername,
         sheet: currentSheet,
+        portrait: currentPortrait,
         notes: currentNotes,
       }),
     };
@@ -1208,7 +1270,22 @@ export const createWebPlayerApi = ({
     reconnectionDelayMax: 5_000,
   });
 
+  const synchronizeClock = () => {
+    bestClockRoundTrip = Number.POSITIVE_INFINITY;
+    for (let sample = 0; sample < 3; sample += 1) {
+      const sentAt = Date.now();
+      socket.emit('session:clock', (serverTime) => {
+        const receivedAt = Date.now();
+        const rtt = receivedAt - sentAt;
+        if (Number.isFinite(serverTime) && rtt < bestClockRoundTrip) {
+          bestClockRoundTrip = rtt;
+          serverClockOffset = serverTime - (sentAt + receivedAt) / 2;
+        }
+      });
+    }
+  };
   socket.on('connect', () => {
+    synchronizeClock();
     onConnectionState({
       state: 'connecting',
       message: receivedSnapshot
@@ -1233,6 +1310,9 @@ export const createWebPlayerApi = ({
     });
   });
   socket.on('session:snapshot', (snapshot) => {
+    // Approval can happen long after the transport connects. Sample again
+    // now that the authenticated player handlers are definitely registered.
+    synchronizeClock();
     eventQueue.reset();
     void eventQueue.enqueue(() => applySnapshot(snapshot));
   });
@@ -1324,7 +1404,14 @@ export const createWebPlayerApi = ({
     });
   });
   socket.on('presentation:scene', (nextScene) => {
-    void eventQueue.enqueue(() => publishScene(nextScene));
+    if (nextScene.mediaRevision !== latestPublicScene?.mediaRevision) {
+      manifestPreloadPromise = null;
+      void preloadSessionManifest();
+    }
+    void eventQueue.enqueue(async (isCurrent) => {
+      const loaded = await waitForMediaUrls(cutsceneMediaUrls(nextScene.cutscenePlayback), isCurrent);
+      if (loaded && isCurrent()) publishScene(nextScene);
+    });
   });
   socket.on('presentation:scene-transition', (transition) => {
     void eventQueue.enqueue(async (isCurrent) => {
@@ -1585,6 +1672,8 @@ export const createWebPlayerApi = ({
     dispose,
     socket,
     uploadCharacterSheet,
+    uploadCharacterPortrait,
+    removeCharacterPortrait,
     automaticallyFixCharacterSheet,
     fetchCharacterSheetBlob,
     createCharacterSheetViewUrl,
@@ -1600,6 +1689,7 @@ export const createWebPlayerApi = ({
     getPlayerToolsState: () => ({
       username: authenticatedUsername,
       sheet: currentSheet,
+      portrait: currentPortrait,
       notes: currentNotes,
     }),
   };

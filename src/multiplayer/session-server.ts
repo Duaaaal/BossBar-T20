@@ -1,7 +1,7 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { networkInterfaces } from 'node:os';
+import { stat, writeFile, rm } from 'node:fs/promises';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -14,6 +14,7 @@ import {
 import { z } from 'zod';
 import {
   BLANK_CHARACTER_SHEET_ASSET_PATH,
+  MAX_CHARACTER_PORTRAIT_BYTES,
   MAX_CHARACTER_SHEET_BYTES,
   type CharacterSheetEditorField,
   type CharacterSheetEditorResult,
@@ -55,6 +56,8 @@ import {
 } from '../shared/multiplayer.ts';
 import { resolveByteRange } from '../shared/media.ts';
 import type { SceneTransitionEvent } from '../shared/scene.ts';
+import type { MultiplayerEncounterCheckpoint, SavedPlayerEncounter, SavedSessionMember, PendingPlayerDamageInternal, PendingDirectPlayerDamageInternal } from '../shared/encounter-checkpoint.ts';
+import { effectivePlayerDefenses } from '../shared/player-defenses.ts';
 import { resolveD20Check } from '../shared/d20-rules.ts';
 import {
   historyEntriesForRolls,
@@ -120,7 +123,6 @@ import {
 } from '../shared/status.ts';
 import {
   applyStatusRules,
-  deriveStatusAttributes,
 } from '../shared/status-rules.ts';
 import {
   applyPlayerDamage,
@@ -149,21 +151,6 @@ import {
 export const DEFAULT_MULTIPLAYER_PORT = 43_120;
 const DEFAULT_PROBE_INTERVAL_MS = 5_000;
 
-const effectivePlayerDefenses = (state: PlayerEncounterState) => {
-  const derived = deriveStatusAttributes({
-    attack: 0,
-    rangedAttack: 0,
-    skills: 0,
-    meleeDefense: state.defenseMelee,
-    rangedDefense: state.defenseRanged,
-    damageReduction: 0,
-    shield: 0,
-  }, state.statuses);
-  return {
-    melee: derived.values.meleeDefense + state.temporaryDefenseBonus,
-    ranged: derived.values.rangedDefense + state.temporaryDefenseBonus,
-  };
-};
 const DEFAULT_PROBE_TIMEOUT_MS = 4_000;
 
 type MultiplayerSocketServer = SocketIOServer<
@@ -220,6 +207,7 @@ export type MultiplayerSessionServerOptions = {
   ) => void;
   onPlayerHudsChanged?: (huds: PlayerHudState[]) => void;
   onTurnStateChanged?: (state: EncounterTurnState) => void;
+  onCutsceneReady?: (playerId: string, id: string, duration: number | null) => void;
   onTurnStarted?: (participant: EncounterTurnParticipant) => void;
   onDiceRolled?: (result: EncounterRollResult) => void;
   onBossCriticalThreat?: (context: { targetPlayerIds: string[] }) => void;
@@ -307,39 +295,6 @@ type PendingSheetChangeRequestInternal = {
   fields: CharacterSheetEditorField[];
 };
 
-type PendingPlayerDamageInternal = {
-  id: string;
-  profileId: string;
-  playerId: string;
-  targetBossId: string;
-  targetBossName: string;
-  attackName: string;
-  damageFormula: string;
-  critical: boolean;
-  criticalMultiplier: number;
-  nonlethal: boolean;
-  actionId: string;
-  correlationId?: string;
-  resourceEffect?: EncounterRollResult['resourceEffect'];
-  stateBefore: PlayerEncounterState;
-  actionsBefore: PlayerHudActionState;
-  retainedByParticipantId: string | null;
-  createdAt: number;
-};
-
-type PendingDirectPlayerDamageInternal = {
-  id: string;
-  request: DirectPlayerDamageRequest;
-  targets: Array<{
-    socketId: string;
-    playerId: string;
-    playerName: string;
-    hits: Array<{ hit: boolean; critical: boolean }>;
-  }>;
-  skippedPlayers: string[];
-  missedPlayers: string[];
-  createdAt: number;
-};
 
 type SnapshotReference = {
   current: MultiplayerSessionSnapshot;
@@ -621,6 +576,199 @@ export class MultiplayerSessionServer {
   private readonly accountSessions: Map<string, AccountSession>;
 
   private readonly playerCombatStates = new Map<string, PlayerEncounterState>();
+  private readonly savedEncounterPlayers = new Map<string, SavedPlayerEncounter>();
+  private readonly savedSessionMembers = new Map<string, SavedSessionMember>();
+  private readonly awaitingSavedPlayers = new Set<string>();
+  private readonly seenEncounterPlayers = new Set<string>();
+  private readonly kickedProfiles = new Set<string>();
+  private deferredDisconnectedTurn: string | null = null;
+  private encounterGeneration = 0;
+  private readonly sheetPreviewFiles = new Set<string>();
+
+  captureEncounter(): MultiplayerEncounterCheckpoint {
+    const members = new Map(this.savedSessionMembers);
+    const players = new Map(this.savedEncounterPlayers);
+    for (const [id, saved] of players) {
+      players.set(id, { ...saved, state: this.playerCombatStates.get(saved.clientId) ?? saved.state });
+    }
+    for (const { clientId, profileId, player } of this.roster.members()) {
+      if (!profileId) continue;
+      members.set(profileId, { profileId, clientId, playerId: player.id, name: player.name });
+      const state = this.playerCombatStates.get(clientId);
+      if (!state) continue;
+      players.set(profileId, {
+        ...(players.get(profileId)?.sheetDocument ? { sheetDocument: players.get(profileId)!.sheetDocument } : {}),
+        profileId, clientId, playerId: player.id, name: player.name,
+        state: { ...state, sheetInteractionState: 'idle' },
+        privateMode: this.playerPrivacy.get(profileId) ?? true,
+        actions: this.playerActions.get(profileId) ?? { free: true, movement: true, standard: true },
+        validation: this.profileForEncounter(profileId)?.sheet.validation ?? null,
+        usedActionIds: [...(this.actionPointActionIds.get(profileId) ?? [])],
+      });
+    }
+    return structuredClone({ members: [...members.values()], players: [...players.values()], turns: this.encounterTurnState,
+      pendingPlayerDamages: [...this.pendingPlayerDamages.values()],
+      pendingDirectPlayerDamages: [...this.pendingDirectPlayerDamages.values()],
+      deferredInitiativeActors: [...this.deferredInitiativeActors.entries()],
+      lateInitiativeQueue: this.lateInitiativeQueue, interruptedTurnParticipantId: this.interruptedTurnParticipantId,
+    });
+  }
+
+  forgetSavedParticipants() {
+    this.savedSessionMembers.clear();
+    this.savedEncounterPlayers.clear(); this.awaitingSavedPlayers.clear();
+    this.seenEncounterPlayers.clear(); this.kickedProfiles.clear();
+    this.deferredDisconnectedTurn = null;
+    this.syncTurnParticipants(); this.publishPlayerHuds(); this.publishTurnState(); this.notifyPresenceChanged();
+  }
+
+  restoreEncounter(checkpoint: MultiplayerEncounterCheckpoint) {
+    this.encounterGeneration += 1;
+    this.savedEncounterPlayers.clear();
+    this.savedSessionMembers.clear();
+    this.awaitingSavedPlayers.clear();
+    this.seenEncounterPlayers.clear();
+    this.kickedProfiles.clear();
+    this.deferredDisconnectedTurn = null;
+    this.playerCombatStates.clear();
+    this.playerActions.clear();
+    this.playerPrivacy.clear();
+    this.actionPointActionIds.clear();
+    this.pendingPlayerDamages.clear();
+    this.pendingDirectPlayerDamages.clear();
+    this.pendingActionPointRequests.clear();
+    this.pendingSheetChangeRequests.clear();
+    this.activeSheetEditors.clear();
+    this.deferredInitiativeActors.clear();
+    this.lateInitiativeQueue = [];
+    this.interruptedTurnParticipantId = null;
+    for (const pending of structuredClone(checkpoint.pendingPlayerDamages ?? [])) this.pendingPlayerDamages.set(pending.id, pending);
+    for (const pending of structuredClone(checkpoint.pendingDirectPlayerDamages ?? [])) this.pendingDirectPlayerDamages.set(pending.id, pending);
+    for (const [id, actor] of checkpoint.deferredInitiativeActors ?? []) this.deferredInitiativeActors.set(id, { ...actor });
+    this.lateInitiativeQueue = [...(checkpoint.lateInitiativeQueue ?? [])];
+    this.interruptedTurnParticipantId = checkpoint.interruptedTurnParticipantId ?? null;
+    this.encounterTurnState = structuredClone(checkpoint.turns);
+    this.encounterRollSequence = Math.max(0, ...checkpoint.turns.rollResults.map((roll) => roll.sequence ?? 0));
+    for (const { profileId, clientId, playerId, name } of checkpoint.members ?? checkpoint.players) {
+      const connected = this.roster.members().find((member) => member.profileId === profileId);
+      this.savedSessionMembers.set(profileId, { profileId, clientId: connected?.clientId ?? clientId, playerId: connected?.player.id ?? playerId, name });
+      if (connected) this.seenEncounterPlayers.add(profileId);
+      else this.awaitingSavedPlayers.add(profileId);
+    }
+    for (const saved of structuredClone(checkpoint.players)) {
+      const connected = this.roster.members().find(({ profileId }) => profileId === saved.profileId);
+      const oldPlayerId = saved.playerId;
+      if (connected) {
+        this.seenEncounterPlayers.add(saved.profileId);
+        saved.clientId = connected.clientId;
+        saved.playerId = connected.player.id;
+        this.remapEncounterParticipant(oldPlayerId, saved.playerId);
+      } else this.awaitingSavedPlayers.add(saved.profileId);
+      saved.state = { ...saved.state, clientId: saved.clientId, sheetInteractionState: 'idle', revision: saved.state.revision + 1 };
+      this.savedEncounterPlayers.set(saved.profileId, saved);
+      this.playerCombatStates.set(saved.clientId, saved.state);
+      this.playerActions.set(saved.profileId, saved.actions);
+      this.playerPrivacy.set(saved.profileId, saved.privateMode);
+      this.unarmedStrikeEnabled.set(saved.profileId, saved.state.unarmedStrikeEnabled);
+      this.actionPointActionIds.set(saved.profileId, new Set(saved.usedActionIds));
+    }
+    for (const socket of this.io.sockets.sockets.values()) {
+      const state = this.playerCombatStates.get(socket.data.clientId);
+      if (state && socket.data.playerId) socket.emit('player:state', state);
+    }
+    this.publishPlayerHuds();
+    this.publishTurnState();
+    this.notifyPresenceChanged();
+    this.notifyActionPointRequestsChanged();
+    this.options.onSheetChangeRequestsChanged?.(this.getPendingSheetChangeRequests());
+  }
+
+  async includeCharacterSheets(checkpoint: MultiplayerEncounterCheckpoint) {
+    const snapshot = structuredClone(checkpoint);
+    await Promise.all(snapshot.players.map(async (player) => {
+      if (player.sheetDocument) return;
+      const sheet = await this.options.playerProfileStore.readSheet(player.profileId).catch(() => null);
+      if (sheet) player.sheetDocument = { fileName: sheet.fileName, base64: sheet.bytes.toString('base64') };
+    }));
+    return snapshot;
+  }
+
+  async readEncounterSheet(profileId: string) {
+    const saved = this.savedEncounterPlayers.get(profileId);
+    if (saved?.sheetDocument && saved.validation) return {
+      bytes: Buffer.from(saved.sheetDocument.base64, 'base64'), fileName: saved.sheetDocument.fileName, validation: saved.validation, filePath: null,
+    };
+    return this.options.playerProfileStore.readSheet(profileId);
+  }
+
+  private remapEncounterParticipant(previousId: string, nextId: string) {
+    if (previousId === nextId) return;
+    const previous = `player:${previousId}`;
+    const next = `player:${nextId}`;
+    const remap = (id: string | null | undefined) => id === previous ? next : id;
+    for (const pending of this.pendingPlayerDamages.values()) {
+      if (pending.playerId === previousId) pending.playerId = nextId;
+      pending.retainedByParticipantId = remap(pending.retainedByParticipantId) ?? null;
+    }
+    for (const pending of this.pendingDirectPlayerDamages.values()) {
+      pending.request.playerIds = pending.request.playerIds.map((id) => id === previousId ? nextId : id);
+      for (const target of pending.targets) if (target.playerId === previousId) target.playerId = nextId;
+    }
+    const deferred = this.deferredInitiativeActors.get(previous);
+    if (deferred) { this.deferredInitiativeActors.delete(previous); this.deferredInitiativeActors.set(next, deferred); }
+    for (const actor of this.deferredInitiativeActors.values()) actor.blockedBy = remap(actor.blockedBy) as string;
+    this.lateInitiativeQueue = this.lateInitiativeQueue.map((id) => remap(id) as string);
+    this.interruptedTurnParticipantId = remap(this.interruptedTurnParticipantId) ?? null;
+    this.encounterTurnState = {
+      ...this.encounterTurnState,
+      activeParticipantId: remap(this.encounterTurnState.activeParticipantId) ?? null,
+      participants: this.encounterTurnState.participants.map((participant) => participant.id === previous
+        ? { ...participant, id: next, sourceId: nextId } : participant),
+      rollResults: this.encounterTurnState.rollResults.map((roll) => ({
+        ...roll, participantId: remap(roll.participantId) as string,
+        targetParticipantId: remap(roll.targetParticipantId) ?? undefined,
+        retainedByParticipantId: remap(roll.retainedByParticipantId) ?? null,
+      })),
+      history: this.encounterTurnState.history.map((entry) => ({ ...entry,
+        actorParticipantId: remap(entry.actorParticipantId) ?? null,
+        targetParticipantId: remap(entry.targetParticipantId) ?? null,
+        turnParticipantId: remap(entry.turnParticipantId) ?? null,
+      })),
+    };
+  }
+
+  private profileForEncounter(profileId: string) {
+    const profile = this.options.playerProfileStore.profileById(profileId);
+    const validation = this.savedEncounterPlayers.get(profileId)?.validation;
+    const document = this.savedEncounterPlayers.get(profileId)?.sheetDocument;
+    return profile && validation ? { ...profile, sheet: { ...profile.sheet, validation, ...(document ? { hasSheet: true, fileName: document.fileName } : {}) } } : profile;
+  }
+
+  private encounterMembers() {
+    const members = this.roster.members();
+    const connectedProfiles = new Set(members.map(({ profileId }) => profileId));
+    for (const saved of this.savedSessionMembers.values()) {
+      if (connectedProfiles.has(saved.profileId)) continue;
+      members.push({ clientId: saved.clientId, profileId: saved.profileId, player: {
+        id: saved.playerId, name: saved.name, isHost: false, connectedAt: 0, lastSeenAt: 0,
+        latencyMs: null, connectionQuality: 'unknown', hasConnectionIssue: true, hasCharacterSheet: this.savedEncounterPlayers.has(saved.profileId),
+      } });
+    }
+    return members;
+  }
+
+  // Encounter targets survive a dropped socket. Transport is optional; identity
+  // and combat state, not the current connection, determine target eligibility.
+  private encounterTargets() {
+    return this.encounterMembers().filter(({ profileId }) => Boolean(profileId)).map(({ clientId, profileId, player }) => ({
+      data: { clientId, profileId: profileId!, playerId: player.id, playerName: player.name },
+      emit: (event: 'player:combat-impact', impact: import('../shared/player-combat').PlayerAreaDamageImpact) => {
+        for (const socket of this.io.sockets.sockets.values()) {
+          if (socket.data.clientId === clientId) socket.emit(event, impact);
+        }
+      },
+    }));
+  }
 
   private readonly playerPrivacy = new Map<string, boolean>();
 
@@ -710,11 +858,19 @@ export class MultiplayerSessionServer {
       logger: options.logger ?? false,
       trustProxy: false,
       bodyLimit: 64 * 1024,
+      // Once the room is closed, abandoned uploads/media requests must not
+      // keep its HTTP listener alive indefinitely.
+      forceCloseConnections: true,
     });
 
     app.addContentTypeParser(
       'application/pdf',
       { parseAs: 'buffer', bodyLimit: MAX_CHARACTER_SHEET_BYTES },
+      (_request, body, done) => done(null, body),
+    );
+    app.addContentTypeParser(
+      ['image/png', 'image/jpeg', 'image/webp'],
+      { parseAs: 'buffer', bodyLimit: MAX_CHARACTER_PORTRAIT_BYTES },
       (_request, body, done) => done(null, body),
     );
 
@@ -725,7 +881,7 @@ export class MultiplayerSessionServer {
         directives: {
           defaultSrc: ["'self'"],
           baseUri: ["'none'"],
-          connectSrc: ["'self'", 'ws:', 'wss:'],
+          connectSrc: ["'self'", 'blob:', 'ws:', 'wss:'],
           fontSrc: ["'self'", 'data:'],
           frameAncestors: ["'none'"],
           imgSrc: ["'self'", 'blob:', 'data:'],
@@ -833,6 +989,7 @@ export class MultiplayerSessionServer {
           username: profile.username,
           sessionToken,
           sheet: profile.sheet,
+          portrait: profile.portrait,
           notes: profile.notes,
         };
       } catch (error) {
@@ -850,7 +1007,80 @@ export class MultiplayerSessionServer {
       if (!account) return reply.code(401).send({ error: 'Entre novamente para continuar.' });
       const profile = options.playerProfileStore.profileById(account.session.profileId);
       if (!profile) return reply.code(404).send({ error: 'Perfil não encontrado.' });
-      return { username: profile.username, sheet: profile.sheet, notes: profile.notes };
+      return {
+        username: profile.username,
+        sheet: profile.sheet,
+        portrait: profile.portrait,
+        notes: profile.notes,
+      };
+    });
+    app.route({
+      method: ['GET', 'HEAD'],
+      url: '/api/player/portrait/:profileId',
+      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+      handler: async (request, reply) => {
+        const query = request.query as { access?: unknown };
+        if (typeof query.access !== 'string' || !tokensMatch(query.access, credentials.playerToken)) {
+          return reply.code(403).type('text/plain').send('Convite inválido.');
+        }
+        const { profileId } = request.params as { profileId: string };
+        const portrait = await options.playerProfileStore.readPortrait(profileId);
+        if (!portrait) return reply.code(404).type('text/plain').send('Retrato não encontrado.');
+        reply
+          .header('Cache-Control', 'private, max-age=3600, immutable')
+          .header('Content-Type', portrait.contentType)
+          .header('Content-Length', portrait.bytes.byteLength)
+          .header('X-Content-Type-Options', 'nosniff');
+        return request.method === 'HEAD' ? reply.send() : reply.send(portrait.bytes);
+      },
+    });
+    app.post('/api/player/portrait', {
+      bodyLimit: MAX_CHARACTER_PORTRAIT_BYTES,
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const bytes = request.body;
+      const contentType = request.headers['content-type'];
+      const normalizedType = contentType === 'image/png' || contentType === 'image/jpeg' || contentType === 'image/webp'
+        ? contentType
+        : null;
+      const validSignature = Buffer.isBuffer(bytes) && normalizedType && (
+        (normalizedType === 'image/png' && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+        (normalizedType === 'image/jpeg' && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9) ||
+        (normalizedType === 'image/webp' && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP')
+      );
+      if (!Buffer.isBuffer(bytes) || !validSignature || !normalizedType) {
+        return reply.code(400).send({ ok: false, error: 'Selecione uma imagem PNG, JPEG ou WebP válida.' });
+      }
+      const encodedFileName = request.headers['x-bossbar-filename'];
+      let fileName = 'retrato';
+      if (typeof encodedFileName === 'string') {
+        try {
+          fileName = decodeURIComponent(encodedFileName);
+        } catch {
+          return reply.code(400).send({ ok: false, error: 'O nome do arquivo é inválido.' });
+        }
+      }
+      const profile = await options.playerProfileStore.savePortrait(
+        account.session.profileId,
+        fileName,
+        bytes,
+        normalizedType,
+      );
+      serverReference?.refreshPlayerPortrait();
+      return { ok: true, portrait: profile.portrait };
+    });
+    app.delete('/api/player/portrait', {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const profile = await options.playerProfileStore.removePortrait(account.session.profileId);
+      serverReference?.refreshPlayerPortrait();
+      return { ok: true, portrait: profile.portrait };
     });
     app.put('/api/player/notes', {
       config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
@@ -886,7 +1116,7 @@ export class MultiplayerSessionServer {
         reply.header('Cache-Control', 'no-store');
         const account = authenticatedAccount(request.headers);
         if (!account) return reply.code(401).send({ error: 'Entre novamente para continuar.' });
-        const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
+        const sheet = await (serverReference?.readEncounterSheet(account.session.profileId) ?? options.playerProfileStore.readSheet(account.session.profileId));
         if (!sheet) return reply.code(404).send({ error: 'Nenhuma ficha foi enviada.' });
         reply
           .header('Content-Type', 'application/pdf')
@@ -929,7 +1159,7 @@ export class MultiplayerSessionServer {
           'O acesso temporário a esta ficha expirou. Abra-a novamente pelo BossBar.',
         );
       }
-      const sheet = await options.playerProfileStore.readSheet(authorization.profileId);
+      const sheet = await (serverReference?.readEncounterSheet(authorization.profileId) ?? options.playerProfileStore.readSheet(authorization.profileId));
       if (!sheet) {
         return reply.code(404).type('text/plain').send(
           'Esta ficha não está mais vinculada ao jogador.',
@@ -1041,7 +1271,7 @@ export class MultiplayerSessionServer {
       reply.header('Cache-Control', 'no-store');
       const account = authenticatedAccount(request.headers);
       if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
-      const sheet = await options.playerProfileStore.readSheet(account.session.profileId);
+      const sheet = await (serverReference?.readEncounterSheet(account.session.profileId) ?? options.playerProfileStore.readSheet(account.session.profileId));
       if (!sheet) return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
       try {
         const inspected = await inspectCharacterSheetPdf(sheet.bytes, true);
@@ -1363,7 +1593,49 @@ export class MultiplayerSessionServer {
   }
 
   getPresence() {
-    return this.roster.presence();
+    return { ...this.roster.presence(), waitingPlayers: [...this.awaitingSavedPlayers].flatMap((profileId) => {
+      const member = this.savedSessionMembers.get(profileId);
+      return member ? [{ id: member.playerId, name: this.savedEncounterPlayers.get(profileId)?.state.characterName || member.name }] : [];
+    }) };
+  }
+
+  getConnectionPause(): EncounterTurnState['connectionPause'] {
+    if (this.awaitingSavedPlayers.size) return { reason: 'restoring', names: this.getPresence().waitingPlayers.map(({ name }) => name) };
+    const active = this.encounterTurnState.participants.find(({ id }) => id === this.encounterTurnState.activeParticipantId);
+    const connectedIds = new Set(this.roster.members().map(({ player }) => player.id));
+    const required = new Set([...this.pendingPlayerDamages.values()].map(({ playerId }) => playerId));
+    if (active?.kind === 'player') required.add(active.sourceId);
+    const names = this.encounterMembers().filter(({ player }) => required.has(player.id) && !connectedIds.has(player.id))
+      .map(({ player, clientId }) => this.playerCombatStates.get(clientId)?.characterName || player.name);
+    return names.length ? { reason: 'reconnecting', names } : null;
+  }
+
+  private connectionLockError() {
+    const pause = this.getConnectionPause();
+    return pause ? `Aguardando ${pause.reason === 'restoring' ? 'o retorno' : 'a reconexão'} de ${pause.names.join(', ')}.` : null;
+  }
+
+  kickPlayer(playerId: string) {
+    const member = this.encounterMembers().find(({ player }) => player.id === playerId);
+    if (!member?.profileId) return false;
+    const profileId = member.profileId;
+    this.kickedProfiles.add(profileId);
+    this.savedEncounterPlayers.delete(profileId);
+    this.savedSessionMembers.delete(profileId);
+    this.awaitingSavedPlayers.delete(profileId);
+    this.seenEncounterPlayers.delete(profileId);
+    this.playerCombatStates.delete(member.clientId);
+    this.playerActions.delete(profileId);
+    this.deferredInitiativeActors.delete(`player:${playerId}`);
+    this.lateInitiativeQueue = this.lateInitiativeQueue.filter((id) => id !== `player:${playerId}`);
+    for (const [id, pending] of this.pendingPlayerDamages) if (pending.playerId === playerId) this.pendingPlayerDamages.delete(id);
+    for (const socket of this.io.sockets.sockets.values()) if (socket.data.profileId === profileId) {
+      this.roster.unregisterSocket(socket.id);
+      socket.emit('session:join-rejected', 'O mestre removeu você deste encontro.', () => undefined);
+      socket.disconnect(true);
+    }
+    this.syncTurnParticipants(); this.publishTurnState(); this.publishPlayerHuds(); this.notifyPresenceChanged();
+    return true;
   }
 
   getPlayerHuds(viewerClientId: string | null = null) {
@@ -1380,7 +1652,7 @@ export class MultiplayerSessionServer {
         .map(({ id }) => `player:${id}`),
     );
     return personalizeEncounterTurnState(
-      this.encounterTurnState,
+      { ...this.encounterTurnState, connectionPause: this.getConnectionPause() },
       viewerSourceId,
       hiddenParticipantIds,
       viewerClientId === null,
@@ -1390,6 +1662,8 @@ export class MultiplayerSessionServer {
   advanceTurnAsHost(
     expectedParticipantId?: string | null,
   ): EncounterTurnActionResult {
+    const connectionError = this.connectionLockError();
+    if (connectionError) return { ok: false, error: connectionError };
     if (!this.currentSnapshot.battle.battleStarted) {
       return { ok: false, error: 'Inicie a batalha primeiro.' };
     }
@@ -1472,6 +1746,8 @@ export class MultiplayerSessionServer {
     participantId: string,
     extremeAdvantage = false,
   ): EncounterTurnActionResult {
+    const lock = this.connectionLockError();
+    if (lock) return { ok: false, error: lock };
     const participant = this.encounterTurnState.participants.find(
       ({ id }) => id === participantId,
     );
@@ -1631,6 +1907,10 @@ export class MultiplayerSessionServer {
       .sort((first, second) => first.requestedAt - second.requestedAt);
   }
 
+  refreshPlayerPortrait() {
+    this.publishPlayerHuds();
+  }
+
   getEncounterDebugCreatures(): EncounterDebugCreature[] {
     const creatures: EncounterDebugCreature[] = [];
     const seenClients = new Set<string>();
@@ -1703,6 +1983,14 @@ export class MultiplayerSessionServer {
   }
 
   refreshCharacterSheet(clientId: string, hasCharacterSheet: boolean) {
+    const saved = [...this.savedEncounterPlayers.values()].find((player) => player.clientId === clientId);
+    if (saved) {
+      if (!hasCharacterSheet) this.savedEncounterPlayers.delete(saved.profileId);
+      else {
+        saved.validation = this.options.playerProfileStore.profileById(saved.profileId)?.sheet.validation ?? null;
+        delete saved.sheetDocument;
+      }
+    }
     if (this.roster.setCharacterSheet(clientId, hasCharacterSheet)) {
       this.notifyPresenceChanged();
     }
@@ -1726,17 +2014,19 @@ export class MultiplayerSessionServer {
   }
 
   applyAreaDamage(request: AreaDamageRequest): AreaDamageResult {
+    const lock = this.connectionLockError();
+    if (lock) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: lock };
     if (!isAreaDamageRequest(request)) throw new Error('Informe dano, CD e resultado de sucesso válidos.');
     const skippedPlayers: string[] = [];
     let appliedPlayers = 0;
     const rollResults: EncounterRollResult[] = [];
     const vitalHistory = [] as ReturnType<typeof historyEntryForVitalChange>[];
     const targets: Array<{
-      socket: MultiplayerPlayerSocket;
+      socket: ReturnType<MultiplayerSessionServer['encounterTargets']>[number];
       state: PlayerEncounterState;
     }> = [];
     const handledClients = new Set<string>();
-    for (const socket of this.io.sockets.sockets.values()) {
+    for (const socket of this.encounterTargets()) {
       if (!socket.data.playerId || handledClients.has(socket.data.clientId)) continue;
       if (
         request.playerIds &&
@@ -1899,6 +2189,10 @@ export class MultiplayerSessionServer {
       ReadonlyArray<{ hit: boolean; critical: boolean }>
     >,
   ): Promise<PlayerTargetActionResult> {
+    const generation = this.encounterGeneration;
+    const lock = this.connectionLockError();
+    if (lock) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: lock };
+    if (this.currentSnapshot.scene.cutscenePlayback) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'Aguarde o fim da cutscene para agir.' };
     if (!isDirectPlayerDamageRequest(request)) {
       return {
         ok: false,
@@ -1915,11 +2209,11 @@ export class MultiplayerSessionServer {
     const vitalHistory = [] as ReturnType<typeof historyEntryForVitalChange>[];
     const impacts: NonNullable<PlayerTargetActionResult['impacts']> = [];
     const targets: Array<{
-      socket: MultiplayerPlayerSocket;
+      socket: ReturnType<MultiplayerSessionServer['encounterTargets']>[number];
       state: PlayerEncounterState;
     }> = [];
     let appliedPlayers = 0;
-    for (const socket of this.io.sockets.sockets.values()) {
+    for (const socket of this.encounterTargets()) {
       if (
         !socket.data.playerId ||
         !selected.has(socket.data.playerId) ||
@@ -1936,7 +2230,7 @@ export class MultiplayerSessionServer {
     }
     const requestedHits = request.hits ?? 1;
     const targetOutcomes: Array<{
-      socket: MultiplayerPlayerSocket;
+      socket: ReturnType<MultiplayerSessionServer['encounterTargets']>[number];
       state: PlayerEncounterState;
       hits: Array<{ hit: boolean; critical: boolean }>;
     }> = [];
@@ -2022,7 +2316,6 @@ export class MultiplayerSessionServer {
         id: pendingDamageId,
         request: { ...request, deferDamage: false },
         targets: targetOutcomes.map(({ socket, state, hits }) => ({
-          socketId: socket.id,
           playerId: socket.data.playerId,
           playerName: state.characterName,
           hits: hits.map(({ hit, critical }) => ({ hit, critical })),
@@ -2072,6 +2365,7 @@ export class MultiplayerSessionServer {
     }
     if (hasSuccessfulHit && (hasCriticalHit || !precomputedHits)) {
       await this.waitForCombatRollDelay(hasCriticalHit ? 'dramatic' : 'normal');
+      if (generation !== this.encounterGeneration || this.closing) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'O encontro foi substituído; o ataque anterior foi cancelado.' };
     }
 
     const parsedDamage = request.damageFormula
@@ -2255,7 +2549,15 @@ export class MultiplayerSessionServer {
     return result;
   }
 
+  getPendingBossDamage(bossId: string) {
+    const pending = [...this.pendingDirectPlayerDamages.values()].find(({ request }) => request.attackerParticipantId === `boss:${bossId}`);
+    return pending ? { id: pending.id, bossId, attackName: pending.request.attackName ?? 'Ataque',
+      bossTargetIds: pending.request.bossTargetIds ?? [], fallbackDamage: pending.request.damage, hits: pending.request.hits ?? 1 } : null;
+  }
+
   applyPlayerStatus(request: PlayerStatusRequest): PlayerTargetActionResult {
+    const lock = this.connectionLockError();
+    if (lock) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: lock };
     const status = normalizeActiveStatuses([request?.status])[0];
     if (
       !request ||
@@ -2278,7 +2580,7 @@ export class MultiplayerSessionServer {
     const handledClients = new Set<string>();
     const skippedPlayers: string[] = [];
     let appliedPlayers = 0;
-    for (const socket of this.io.sockets.sockets.values()) {
+    for (const socket of this.encounterTargets()) {
       if (
         !socket.data.playerId ||
         !selected.has(socket.data.playerId) ||
@@ -2317,6 +2619,57 @@ export class MultiplayerSessionServer {
     }
     const sheetLockError = this.characterSheetLockError(socket.data.profileId);
     if (sheetLockError) return { ok: false, error: sheetLockError };
+    const state = this.playerCombatStates.get(socket.data.clientId);
+    if (!state) {
+      return { ok: false, error: 'Vincule uma ficha válida antes de agir.' };
+    }
+    const beforeInitiative = this.currentSnapshot.battle.battleStarted &&
+      !this.encounterTurnState.started;
+    if (beforeInitiative && request.kind !== 'damage') {
+      const existing = [...this.pendingActionPointRequests.values()].find(
+        ({ clientId }) => clientId === socket.data.clientId,
+      );
+      if (existing) {
+        return {
+          ok: false,
+          pendingApproval: true,
+          requestId: existing.request.id,
+          error: 'Aguarde o mestre avaliar sua solicitação.',
+        };
+      }
+      const actionId = request.actionId ?? randomUUID();
+      const combatAction = { ...request, actionId } as PlayerCombatActionRequest;
+      const approvesActionPoint =
+        (request.kind === 'resource' && request.resource === 'action-point') ||
+        ((request.kind === 'skill' || request.kind === 'attack') &&
+          request.resource?.kind === 'action-point');
+      const id = randomUUID();
+      this.pendingActionPointRequests.set(id, {
+        request: {
+          id,
+          playerId: socket.data.playerId,
+          playerName: state.characterName || socket.data.playerName,
+          label: `Ação antes da iniciativa: ${this.combatActionLabel(socket, request)}`,
+          requestedAt: Date.now(),
+          actionId,
+          kind: 'pre-initiative-action',
+        },
+        socketId: socket.id,
+        clientId: socket.data.clientId,
+        profileId: socket.data.profileId,
+        combatAction,
+        approvesActionPoint,
+        approvesMissingStandardAction: true,
+      });
+      this.notifyActionPointRequestsChanged();
+      this.emitResourceNotice(socket.data.clientId, {
+        id,
+        tone: 'info',
+        message: 'A ação foi enviada ao mestre porque a iniciativa ainda não terminou.',
+        persistent: true,
+      });
+      return { ok: true, pendingApproval: true, requestId: id };
+    }
     const active = this.encounterTurnState.participants.find(
       ({ id }) => id === this.encounterTurnState.activeParticipantId,
     );
@@ -2335,10 +2688,6 @@ export class MultiplayerSessionServer {
         ok: false,
         error: 'Neste turno de entrada, apenas a Iniciativa está disponível.',
       };
-    }
-    const state = this.playerCombatStates.get(socket.data.clientId);
-    if (!state) {
-      return { ok: false, error: 'Vincule uma ficha válida antes de agir.' };
     }
     if (request.kind === 'damage') {
       return this.executePlayerCombatAction(socket, request);
@@ -2493,6 +2842,8 @@ export class MultiplayerSessionServer {
   async approveActionPointRequest(
     requestId: string,
   ): Promise<PlayerCombatActionResult> {
+    const lock = this.connectionLockError();
+    if (lock) return { ok: false, error: lock };
     const pending = this.pendingActionPointRequests.get(requestId);
     if (!pending) {
       return { ok: false, error: 'Este pedido não está mais disponível.' };
@@ -2507,9 +2858,8 @@ export class MultiplayerSessionServer {
       ({ id }) => id === this.encounterTurnState.activeParticipantId,
     );
     if (
-      !active ||
-      active.kind !== 'player' ||
-      active.sourceId !== socket.data.playerId
+      pending.request.kind !== 'pre-initiative-action' &&
+      (!active || active.kind !== 'player' || active.sourceId !== socket.data.playerId)
     ) {
       this.pendingActionPointRequests.delete(requestId);
       this.notifyActionPointRequestsChanged();
@@ -2517,6 +2867,14 @@ export class MultiplayerSessionServer {
         ok: false,
         error: 'O turno mudou antes da aprovação deste Ponto de Ação.',
       };
+    }
+    if (
+      pending.request.kind === 'pre-initiative-action' &&
+      this.encounterTurnState.started
+    ) {
+      this.pendingActionPointRequests.delete(requestId);
+      this.notifyActionPointRequestsChanged();
+      return { ok: false, error: 'A iniciativa terminou antes da aprovação.' };
     }
     this.pendingActionPointRequests.delete(requestId);
     this.notifyActionPointRequestsChanged();
@@ -2530,7 +2888,9 @@ export class MultiplayerSessionServer {
       id: requestId,
       tone: result.ok ? 'approved' : 'rejected',
       message: result.ok
-        ? pending.approvesMissingStandardAction && !pending.approvesActionPoint
+        ? pending.request.kind === 'pre-initiative-action'
+          ? 'O mestre autorizou sua ação antes da iniciativa.'
+          : pending.approvesMissingStandardAction && !pending.approvesActionPoint
           ? 'O mestre autorizou seu teste de perícia.'
           : 'O mestre aprovou seu Ponto de Ação.'
         : result.error ?? 'A solicitação não pôde ser concluída.',
@@ -2548,7 +2908,9 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(pending.clientId, {
       id: requestId,
       tone: 'rejected',
-      message: pending.approvesMissingStandardAction && !pending.approvesActionPoint
+      message: pending.request.kind === 'pre-initiative-action'
+        ? 'O mestre não autorizou sua ação antes da iniciativa.'
+        : pending.approvesMissingStandardAction && !pending.approvesActionPoint
         ? 'O mestre não autorizou este teste de perícia.'
         : 'O mestre não aprovou este Ponto de Ação.',
     });
@@ -2711,7 +3073,7 @@ export class MultiplayerSessionServer {
     socket: MultiplayerPlayerSocket,
     request: PlayerCombatActionRequest,
   ) {
-    const summary = this.options.playerProfileStore.profileById(
+    const summary = this.profileForEncounter(
       socket.data.profileId,
     )?.sheet.validation?.summary;
     if (request.kind === 'skill') {
@@ -2739,7 +3101,7 @@ export class MultiplayerSessionServer {
     missingStandardActionApproved = false,
   ): Promise<PlayerCombatActionResult> {
     const state = this.playerCombatStates.get(socket.data.clientId);
-    const summary = this.options.playerProfileStore.profileById(
+    const summary = this.profileForEncounter(
       socket.data.profileId,
     )?.sheet.validation?.summary;
     if (!state || !summary) {
@@ -3501,6 +3863,9 @@ export class MultiplayerSessionServer {
   }
 
   private characterSheetLockError(profileId: string) {
+    const connectionError = this.connectionLockError();
+    if (connectionError) return connectionError;
+    if (this.currentSnapshot.scene.cutscenePlayback) return 'Aguarde o fim da cutscene para agir.';
     const state = this.characterSheetInteractionState(profileId);
     if (state === 'editing') {
       return 'Feche a ficha antes de realizar ações com este personagem.';
@@ -3523,7 +3888,7 @@ export class MultiplayerSessionServer {
           error: 'Aguarde o mestre avaliar as alterações já enviadas.',
         };
       }
-      if (!this.options.playerProfileStore.profileById(profileId)?.sheet.hasSheet) {
+      if (!this.profileForEncounter(profileId)?.sheet.hasSheet) {
         return { ok: false, error: 'Nenhuma ficha foi enviada.' };
       }
       this.activeSheetEditors.set(profileId, socketId);
@@ -3551,7 +3916,7 @@ export class MultiplayerSessionServer {
   async getCharacterSheetEditor(
     profileId: string,
   ): Promise<CharacterSheetEditorResult> {
-    const sheet = await this.options.playerProfileStore.readSheet(profileId);
+    const sheet = await this.readEncounterSheet(profileId);
     if (!sheet) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
     const pending = this.pendingSheetChangeRequests.get(profileId);
     return {
@@ -3570,7 +3935,7 @@ export class MultiplayerSessionServer {
     clientId: string,
     fields: CharacterSheetEditorField[],
   ): Promise<CharacterSheetEditorResult> {
-    const sheet = await this.options.playerProfileStore.readSheet(profileId);
+    const sheet = await this.readEncounterSheet(profileId);
     const profile = this.options.playerProfileStore.profileById(profileId);
     if (!sheet || !profile) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
     const invalidUpdate = validateCharacterSheetEditorUpdates(fields);
@@ -3633,7 +3998,7 @@ export class MultiplayerSessionServer {
     this.emitResourceNotice(clientId, {
       id: `sheet-change:${request.id}`,
       tone: 'info',
-      message: 'Alterações da ficha aguardam aprovação do mestre.',
+      message: 'Ajustes da ficha aguardam aprovação do mestre. Se for seu turno, suas ações permanecerão bloqueadas até a decisão.',
       persistent: true,
     });
     return {
@@ -3696,7 +4061,12 @@ export class MultiplayerSessionServer {
     const socket = [...this.io.sockets.sockets.values()]
       .find((candidate) => candidate.data.playerId === playerId);
     if (!socket) return null;
-    return this.options.playerProfileStore.readSheet(socket.data.profileId);
+    const sheet = await this.readEncounterSheet(socket.data.profileId);
+    if (!sheet || sheet.filePath) return sheet;
+    const filePath = resolve(tmpdir(), `bossbar-sheet-${randomUUID()}.pdf`);
+    await writeFile(filePath, sheet.bytes, { flag: 'wx', mode: 0o600 });
+    this.sheetPreviewFiles.add(filePath);
+    return { ...sheet, filePath };
   }
 
   async resetPlayerPassword(playerId: string, password: string) {
@@ -3949,6 +4319,12 @@ export class MultiplayerSessionServer {
     this.pendingSheetChangeRequests.clear();
     this.activeSheetEditors.clear();
     this.accountSessions.clear();
+    this.savedEncounterPlayers.clear();
+    this.savedSessionMembers.clear();
+    this.awaitingSavedPlayers.clear();
+    this.seenEncounterPlayers.clear();
+    this.kickedProfiles.clear();
+    this.deferredDisconnectedTurn = null;
     this.playerCombatStates.clear();
     this.playerPrivacy.clear();
     this.playerActions.clear();
@@ -3958,14 +4334,15 @@ export class MultiplayerSessionServer {
     this.pendingDirectPlayerDamages.clear();
     this.encounterRollSequence = 0;
     this.encounterTurnState = emptyEncounterTurnState();
-    if (this.fastify.server.listening) await this.fastify.close();
-    await new Promise<void>((resolveClose) => {
-      this.io.close(() => resolveClose());
-    });
+    // Close Engine.IO transports as well as HTTP requests. Waiting for HTTP
+    // first can deadlock on pending polls or an unfinished WebSocket upgrade.
+    await Promise.all([this.io.close(), this.fastify.close()]);
+    await Promise.all([...this.sheetPreviewFiles].map((file) => rm(file, { force: true }).catch(() => undefined)));
+    this.sheetPreviewFiles.clear();
   }
 
   private createPlayerEncounterState(clientId: string, profileId: string) {
-    const validation = this.options.playerProfileStore.profileById(profileId)?.sheet.validation;
+    const validation = this.profileForEncounter(profileId)?.sheet.validation;
     if (
       !validation?.supported ||
       validation.issues.some(({ severity }) => severity === 'error')
@@ -4020,6 +4397,11 @@ export class MultiplayerSessionServer {
 
   private registerConnectedSocket(socket: MultiplayerPlayerSocket) {
     socket.on('disconnect', () => {
+      if (!this.closing && !this.kickedProfiles.has(socket.data.profileId)) {
+        const checkpoint = this.captureEncounter();
+        for (const saved of checkpoint.players) if (!this.kickedProfiles.has(saved.profileId)) this.savedEncounterPlayers.set(saved.profileId, saved);
+        for (const member of checkpoint.members ?? []) if (!this.kickedProfiles.has(member.profileId)) this.savedSessionMembers.set(member.profileId, member);
+      }
       const pendingProbe = this.pendingProbes.get(socket.id);
       if (pendingProbe) clearTimeout(pendingProbe.timeout);
       this.pendingProbes.delete(socket.id);
@@ -4044,6 +4426,7 @@ export class MultiplayerSessionServer {
         this.notifyPresenceChanged();
         this.syncTurnParticipants();
         this.publishPlayerHuds();
+        this.publishTurnState();
       }
     });
 
@@ -4053,7 +4436,8 @@ export class MultiplayerSessionServer {
     if (
       this.currentSnapshot.battle.battleStarted &&
       !socket.data.isHost &&
-      !replacingConnectedClient
+      !replacingConnectedClient &&
+      (!this.savedSessionMembers.has(socket.data.profileId) || this.kickedProfiles.has(socket.data.profileId))
     ) {
       this.queueJoinRequest(socket);
       return;
@@ -4062,14 +4446,18 @@ export class MultiplayerSessionServer {
   }
 
   private completePlayerRegistration(socket: MultiplayerPlayerSocket) {
+    const savedPlayer = this.savedEncounterPlayers.get(socket.data.profileId);
+    const savedMember = this.savedSessionMembers.get(socket.data.profileId);
     const result = this.roster.register({
+      playerId: savedPlayer?.playerId ?? savedMember?.playerId,
       clientId: socket.data.clientId,
+      profileId: socket.data.profileId,
       name: socket.data.playerName,
       socketId: socket.id,
       isHost: socket.data.isHost,
       now: socket.data.connectedAt,
       hasCharacterSheet: Boolean(
-        this.options.playerProfileStore.profileById(socket.data.profileId)?.sheet.hasSheet
+        this.profileForEncounter(socket.data.profileId)?.sheet.hasSheet
       ),
     });
     if (!result.accepted) {
@@ -4085,6 +4473,25 @@ export class MultiplayerSessionServer {
       return;
     }
     socket.data.playerId = result.player.id;
+    if (savedMember) { savedMember.clientId = socket.data.clientId; savedMember.playerId = result.player.id; }
+    this.kickedProfiles.delete(socket.data.profileId);
+    this.awaitingSavedPlayers.delete(socket.data.profileId);
+    this.seenEncounterPlayers.add(socket.data.profileId);
+    socket.on('session:clock', (acknowledge) => {
+      if (typeof acknowledge === 'function') acknowledge(Date.now());
+    });
+    socket.on('presentation:cutscene-ready', (id, duration) => {
+      const cutscene = this.currentSnapshot.scene.cutscenePlayback;
+      if (typeof id !== 'string' || id !== cutscene?.id || cutscene.stage !== 'loading') return;
+      if (duration !== null && (!Number.isFinite(duration) || duration <= 0 || duration > 3600)) return;
+      this.options.onCutsceneReady?.(result.player.id, id, duration);
+    });
+    if (savedPlayer && savedPlayer.clientId !== socket.data.clientId) {
+      this.playerCombatStates.delete(savedPlayer.clientId);
+      savedPlayer.clientId = socket.data.clientId;
+      savedPlayer.state = { ...savedPlayer.state, clientId: socket.data.clientId };
+      this.playerCombatStates.set(socket.data.clientId, savedPlayer.state);
+    }
     if (
       result.replacedSocketId &&
       this.activeSheetEditors.get(socket.data.profileId) === result.replacedSocketId
@@ -4114,10 +4521,20 @@ export class MultiplayerSessionServer {
       this.io.sockets.sockets.get(result.replacedSocketId)?.disconnect(true);
     }
     if (typeof this.options.initialSnapshot === 'function') {
-      this.setCurrentSnapshot(this.options.initialSnapshot({
+      const liveMedia = this.options.initialSnapshot({
         roomCode: this.credentials.roomCode,
         mediaUrl: (id) => this.mediaUrl(id),
-      }));
+      });
+      // A new connection must never roll back the battle or phase to an
+      // initializer's state. Refresh only playback clocks for the same media.
+      this.setCurrentSnapshot({ ...this.currentSnapshot,
+        music: liveMedia.music.currentTrackId === this.currentSnapshot.music.currentTrackId
+          ? { ...this.currentSnapshot.music, currentTime: liveMedia.music.currentTime, synchronizedAt: liveMedia.music.synchronizedAt }
+          : this.currentSnapshot.music,
+        background: liveMedia.background.url === this.currentSnapshot.background.url
+          ? { ...this.currentSnapshot.background, resumeTime: liveMedia.background.resumeTime }
+          : this.currentSnapshot.background,
+      });
     }
     socket.emit('session:snapshot', this.currentSnapshot);
     const existingPlayerState = this.playerCombatStates.get(socket.data.clientId);
@@ -4260,6 +4677,7 @@ export class MultiplayerSessionServer {
     this.syncTurnParticipants();
     this.publishPlayerHuds();
     this.notifyPresenceChanged();
+    this.publishTurnState();
   }
 
   private queueJoinRequest(socket: MultiplayerPlayerSocket) {
@@ -4328,7 +4746,7 @@ export class MultiplayerSessionServer {
   }
 
   private notifyPresenceChanged() {
-    const presence = this.roster.presence();
+    const presence = this.getPresence();
     this.io.emit('session:occupancy', {
       connectedPlayers: presence.connectedPlayers,
       maxPlayers: presence.maxPlayers,
@@ -4350,21 +4768,20 @@ export class MultiplayerSessionServer {
     viewerClientId: string | null,
     revealAll = false,
   ): PlayerHudState[] {
-    return this.roster.members().map(({ clientId, player }) => {
+    const connectedProfiles = new Set(this.roster.members().map(({ profileId }) => profileId));
+    return this.encounterMembers().filter(({ profileId }) => profileId && (connectedProfiles.has(profileId) || this.seenEncounterPlayers.has(profileId))).map(({ clientId, profileId, player }) => {
       const profile = [...this.io.sockets.sockets.values()]
         .find((socket) => socket.data.clientId === clientId);
-      const summary = profile
-        ? this.options.playerProfileStore.profileById(
-          profile.data.profileId,
-        )?.sheet.validation?.summary ?? null
+      const resolvedProfileId = profileId ?? profile?.data.profileId ?? null;
+      const storedProfile = resolvedProfileId
+        ? this.profileForEncounter(resolvedProfileId)
         : null;
+      const summary = storedProfile?.sheet.validation?.summary ?? null;
       const encounter = this.playerCombatStates.get(clientId) ?? null;
       const isSelf = clientId === viewerClientId;
-      const privateMode = profile
-        ? this.playerPrivacy.get(profile.data.profileId) ?? true
-        : true;
-      const storedActions = profile
-        ? this.playerActions.get(profile.data.profileId) ?? {
+      const privateMode = this.playerPrivacy.get(resolvedProfileId ?? '') ?? true;
+      const storedActions = resolvedProfileId
+        ? this.playerActions.get(resolvedProfileId) ?? {
           free: true,
           movement: true,
           standard: true,
@@ -4403,6 +4820,9 @@ export class MultiplayerSessionServer {
         faction: 'players',
         characterName:
           encounter?.characterName || summary?.characterName || player.name,
+        portraitUrl: storedProfile?.portrait.hasPortrait
+          ? `${revealAll ? new URL(this.info.invite.localUrl).origin : ''}/api/player/portrait/${encodeURIComponent(storedProfile.id)}?access=${encodeURIComponent(this.credentials.playerToken)}&v=${storedProfile.portrait.uploadedAt ?? 0}`
+          : null,
         isSelf,
         privateMode,
         redacted,
@@ -4455,6 +4875,7 @@ export class MultiplayerSessionServer {
           }
           : null,
         sheetInteractionState,
+        disconnected: !connectedProfiles.has(profileId),
         revision: encounter?.revision ?? 0,
       };
     });
@@ -4477,7 +4898,13 @@ export class MultiplayerSessionServer {
       return;
     }
     const previousActiveId = this.encounterTurnState.activeParticipantId;
-    const members = this.roster.members();
+    if (this.encounterTurnState.startedAt === null) {
+      this.encounterTurnState = {
+        ...this.encounterTurnState,
+        startedAt: Date.now(),
+      };
+    }
+    const members = this.encounterMembers();
     const actors: InitiativeActor[] = [
       ...this.currentSnapshot.battle.bosses
         .filter(({ currentHealth }) => currentHealth > 0)
@@ -4492,7 +4919,7 @@ export class MultiplayerSessionServer {
             ? this.encounterTurnState.round + 1
             : 1,
         })),
-      ...members.flatMap(({ clientId, player }) => {
+      ...members.flatMap(({ clientId, profileId, player }) => {
         const encounter = this.playerCombatStates.get(clientId);
         // A connected account without a valid character sheet is a spectator,
         // not an encounter participant. Including it here would make round zero
@@ -4500,10 +4927,8 @@ export class MultiplayerSessionServer {
         if (!encounter || encounter.dead) return [];
         const socket = [...this.io.sockets.sockets.values()]
           .find((candidate) => candidate.data.clientId === clientId);
-        const summary = socket
-          ? this.options.playerProfileStore.profileById(
-            socket.data.profileId,
-          )?.sheet.validation?.summary
+        const summary = (profileId ?? socket?.data.profileId)
+          ? this.profileForEncounter(profileId ?? socket?.data.profileId ?? '')?.sheet.validation?.summary
           : null;
         const initiative = summary?.skills.find(
           ({ id, name }) => id === '130' || name === 'Iniciativa',
@@ -4659,7 +5084,7 @@ export class MultiplayerSessionServer {
       !state.statuses.some(({ statusId }) => statusId === 'sangrando')
     ) return;
 
-    const summary = this.options.playerProfileStore.profileById(
+    const summary = this.profileForEncounter(
       socket.data.profileId,
     )?.sheet.validation?.summary;
     const constitution = Math.trunc(summary?.attributes.con ?? 0);
@@ -4746,15 +5171,20 @@ export class MultiplayerSessionServer {
 
   private publishTurnState(previousActiveId?: string | null) {
     const activeId = this.encounterTurnState.activeParticipantId;
+    if (this.deferredDisconnectedTurn === activeId && !this.getConnectionPause()) {
+      previousActiveId = null;
+      this.deferredDisconnectedTurn = null;
+    }
     if (
       previousActiveId !== undefined &&
       activeId &&
       activeId !== previousActiveId
     ) {
+      if (this.getConnectionPause()) this.deferredDisconnectedTurn = activeId;
       const activePlayer = this.encounterTurnState.participants.find(
         ({ id, kind }) => id === activeId && kind === 'player',
       );
-      if (activePlayer) {
+      if (activePlayer && !this.getConnectionPause()) {
         const initiativeOnly = this.lateInitiativeQueue.includes(activePlayer.id);
         const socket = [...this.io.sockets.sockets.values()].find(
           (candidate) => candidate.data.playerId === activePlayer.sourceId,
@@ -4796,7 +5226,7 @@ export class MultiplayerSessionServer {
       );
     }
     this.options.onTurnStateChanged?.(this.getTurnState());
-    if (activeId && activeId !== previousActiveId) {
+    if (previousActiveId !== undefined && activeId && activeId !== previousActiveId && !this.getConnectionPause()) {
       const participant = this.encounterTurnState.participants.find(
         ({ id }) => id === activeId,
       );

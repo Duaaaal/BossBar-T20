@@ -64,6 +64,43 @@ test('lê a ficha editável usando somente modificadores como atributos oficiais
   assert.equal(corrected.getForm().getTextField('CA').getText(), '10');
 });
 
+test('ataques começam com duas linhas, preservam slots antigos e permitem linhas adicionais', async () => {
+  const document = await PDFDocument.load(await createEditableSheet());
+  document.getForm().createTextField('Ataque 5').setText('Arco legado');
+  const bytes = await document.save({ updateFieldAppearances: false });
+  const fields = await readCharacterSheetEditorFields(bytes);
+  assert.deepEqual(
+    [...new Set(fields.filter(({ section }) => section === 'Ataques').map(({ group }) => group))],
+    ['Ataque 1', 'Ataque 2', 'Ataque 5'],
+  );
+  const extraAttack = fields.filter(({ group }) => group === 'Ataque 2').map((field) => ({
+    ...field,
+    group: 'Ataque 6',
+    name: field.name.replace(/2(?=\.|$)/g, '6'),
+    value: {
+      Nome: 'Lança adicional',
+      'Teste de ataque': '1d20 + 3',
+      Dano: '1d8 + 2',
+      'Margem de crítico': '19',
+      'Multiplicador de crítico': '3',
+      Tipo: 'Perfuração',
+      Alcance: '1,5m',
+    }[field.label],
+  }));
+  const edited = await applyCharacterSheetEditorFields(bytes, extraAttack);
+  assert.equal(edited.validation.summary.attacks.at(-1)?.name, 'Lança adicional');
+  assert.equal(edited.validation.summary.attacks.at(-1)?.critical, '19/x3');
+  const reopened = await readCharacterSheetEditorFields(edited.bytes);
+  assert.equal(reopened.find(({ name }) => name === 'Dano 6')?.value, '1d8 + 2');
+  assert.equal(reopened.find(({ name }) => name === 'Ataque 5')?.value, 'Arco legado');
+  const removed = await applyCharacterSheetEditorFields(edited.bytes,
+    extraAttack.map((field) => ({ ...field, value: '' })),
+  );
+  assert.equal(removed.validation.summary.attacks.some(({ name }) => name === 'Lança adicional'), false);
+  assert.equal((await readCharacterSheetEditorFields(removed.bytes))
+    .some(({ group }) => group === 'Ataque 6'), false);
+});
+
 test('rejeita PDFs sem os campos editáveis esperados', async () => {
   const document = await PDFDocument.create();
   document.addPage();
@@ -91,6 +128,10 @@ test('edita campos da ficha e preserva um PDF válido para aprovação do mestre
   assert.equal(fields.find(({ name }) => name === 'Exp')?.value, '0');
   assert.equal(fields.find(({ name }) => name === '014')?.value, '0');
   assert.equal(fields.some(({ name }) => name.startsWith('BossBar.Magia.')), false);
+  assert.deepEqual(
+    [...new Set(fields.filter(({ section }) => section === 'Ataques').map(({ group }) => group))],
+    ['Ataque 1', 'Ataque 2'],
+  );
   assert.deepEqual(
     [...new Set(fields.filter(({ group }) => /^Item \d+$/.test(group ?? '')).map(({ group }) => group))],
     ['Item 1', 'Item 2', 'Item 3'],
@@ -253,6 +294,32 @@ test('persiste perfis com senha derivada, notas e ficha por usuário', async (t)
   );
   assert.equal(withSheet.sheet.hasSheet, true);
   assert.equal((await store.readSheet(registered.id)).fileName, 'ficha-da-alice.pdf');
+  const portraitBytes = Uint8Array.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0,
+  ]);
+  const withPortrait = await store.savePortrait(
+    registered.id,
+    'valora.png',
+    portraitBytes,
+    'image/png',
+  );
+  assert.equal(withPortrait.portrait.hasPortrait, true);
+  assert.equal(withPortrait.portrait.fileName, 'valora.png');
+  assert.deepEqual((await store.readPortrait(registered.id)).bytes, Buffer.from(portraitBytes));
+  const replacementPortraitBytes = Uint8Array.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4,
+  ]);
+  const replacedPortrait = await store.savePortrait(
+    registered.id,
+    'valora-atualizada.png',
+    replacementPortraitBytes,
+    'image/png',
+  );
+  assert.equal(replacedPortrait.portrait.fileName, 'valora-atualizada.png');
+  assert.deepEqual(
+    (await store.readPortrait(registered.id)).bytes,
+    Buffer.from(replacementPortraitBytes),
+  );
   assert.deepEqual(store.listProfiles().map((profile) => ({
     id: profile.id,
     username: profile.username,
@@ -262,6 +329,9 @@ test('persiste perfis com senha derivada, notas e ficha por usuário', async (t)
   const withoutSheet = await store.removeSheet(registered.id);
   assert.equal(withoutSheet.sheet.hasSheet, false);
   assert.equal(await store.readSheet(registered.id), null);
+  const withoutPortrait = await store.removePortrait(registered.id);
+  assert.equal(withoutPortrait.portrait.hasPortrait, false);
+  assert.equal(await store.readPortrait(registered.id), null);
 
   await store.resetPassword(registered.id, 'nova-senha');
   await assert.rejects(() => store.authenticate('Alice', 'senha-flexivel'));

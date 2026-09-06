@@ -69,10 +69,16 @@ export const createPublicBattle = ({
   battleStarted = false,
   currentHealth = 100,
   revision = 1,
+  nextAction = 'Investida de validação',
+  actionSeverity = 'normal',
+  actionVersion = 0,
 }: {
   battleStarted?: boolean;
   currentHealth?: number;
   revision?: number;
+  nextAction?: string;
+  actionSeverity?: 'normal' | 'grave';
+  actionVersion?: number;
 } = {}): PublicBattlePresentationState => ({
   bosses: [{
     id: 'boss-e2e',
@@ -82,8 +88,9 @@ export const createPublicBattle = ({
     currentHealth,
     shield: 0,
     initiative: 10,
-    nextAction: 'Investida de validação',
-    actionSeverity: 'normal',
+    nextAction,
+    actionSeverity,
+    actionVersion,
     turnCount: 0,
     activeStatuses: [],
   }],
@@ -177,6 +184,7 @@ export const createEditableCharacterSheet = async ({
 
 export const startHostedTestSession = async ({
   battleStarted = false,
+  onCutsceneReady,
   preloadMediaIds = [
     TEST_MEDIA_IDS.background,
     TEST_MEDIA_IDS.animation,
@@ -185,6 +193,7 @@ export const startHostedTestSession = async ({
   ],
 }: {
   battleStarted?: boolean;
+  onCutsceneReady?: (playerId: string, id: string, duration: number | null) => void;
   preloadMediaIds?: string[];
 } = {}): Promise<HostedTestSession> => {
   const mediaRequests = new Map<string, number>();
@@ -194,6 +203,7 @@ export const startHostedTestSession = async ({
   );
   const playerProfileStore = await PlayerProfileStore.open(profileDirectory);
   const server = await MultiplayerSessionServer.start({
+    onCutsceneReady,
     playerProfileStore,
     networkMode: 'loopback',
     port: 0,

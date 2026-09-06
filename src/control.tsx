@@ -418,6 +418,7 @@ const ControlApp = () => {
   const [panelMinimized, setPanelMinimized] = useState(false);
   const [panelTransitioning, setPanelTransitioning] = useState(false);
   const loadedSource = useRef('');
+  const loadedAmountSource = useRef('');
 
   useEffect(() => {
     let active = true;
@@ -517,6 +518,13 @@ const ControlApp = () => {
   }, []);
 
   const activeBoss = state?.bosses.find((boss) => boss.id === state.activeBossId);
+  useEffect(() => {
+    let active = true;
+    if (activeBoss) void window.bossAPI.getPendingBossDamage(activeBoss.id).then((pending) => {
+      if (active) setPendingBossDamage(pending);
+    });
+    return () => { active = false; };
+  }, [activeBoss?.id, turnState.revision]);
   const activeStatusesById = useMemo(
     () => new Map(
       (activeBoss?.activeStatuses ?? []).map((status) => [status.statusId, status]),
@@ -570,7 +578,11 @@ const ControlApp = () => {
     if (!activeBoss || loadedSource.current === bossSource) return;
     loadedSource.current = bossSource;
     setBossName(activeBoss.bossName);
-    setAmount(activeBoss.controlAmount);
+    const amountSource = `${activeBoss.id}\u0000${activeBoss.controlAmount}`;
+    if (loadedAmountSource.current !== amountSource) {
+      loadedAmountSource.current = amountSource;
+      setAmount(activeBoss.controlAmount);
+    }
     setApplyDamageReduction(activeBoss.applyDamageReduction);
     setMaxHealth(String(activeBoss.maxHealth));
     setCurrentHealth(String(activeBoss.currentHealth));
@@ -656,6 +668,7 @@ const ControlApp = () => {
     bossArsenalSelectedId,
   );
   const canAdvanceTurn = Boolean(
+    !turnState.connectionPause &&
     state?.battleStarted &&
     turnState.participants.length > 0 &&
     (turnState.started || turnState.initiativeReady !== false),
@@ -1107,19 +1120,21 @@ const ControlApp = () => {
   ) => {
     if (!draft || !activeBoss) return null;
     if (draft.kind === 'sequence') {
-      return { total: draft.total, hits: draft.hits };
+      return { total: draft.total, hits: draft.hits, rollId: undefined };
     }
     const rolled = await window.bossAPI.rollEncounterFormula({
       participantId: `boss:${activeBoss.id}`,
       label,
       formula: draft.formula,
       category: 'damage',
+      targetParticipantId: `boss:${activeBoss.id}`,
+      targetName: activeBoss.bossName,
     });
     if (!rolled.ok || rolled.total === undefined) {
       setFormError(rolled.error ?? 'Não foi possível rolar a fórmula.');
       return null;
     }
-    return { total: rolled.total, hits: 1 };
+    return { total: rolled.total, hits: 1, rollId: rolled.resultId };
   };
 
   const applyHealthChange = async (type: 'damage' | 'heal') => {
@@ -1139,6 +1154,7 @@ const ControlApp = () => {
       total: resolved.total,
       hits: resolved.hits,
       ignoreDamageReduction: type === 'damage' && !applyDamageReduction,
+      ...(resolved.rollId ? { relatedRollId: resolved.rollId } : {}),
     });
     if (!result.ok) setFormError(result.error ?? 'Não foi possível aplicar o valor.');
   };
@@ -1345,6 +1361,7 @@ const ControlApp = () => {
       if (playerIds.length > 0) {
         const result = await window.bossAPI.applyDirectPlayerDamage({
           playerIds,
+          bossTargetIds: bosses.map(({ sourceId }) => sourceId),
           damage: fixedValue,
           hits: requestedHits,
           ...(damageFormula ? { damageFormula } : {}),
@@ -1534,42 +1551,6 @@ const ControlApp = () => {
     markIdentityUnprepared();
   };
 
-  const commitExactSkillValues = () => {
-    if (!activeBoss) return null;
-    const rawSkillValues = Object.fromEntries(
-      BOSS_SKILL_DEFINITIONS.map(([id]) => [id, Number(skillValues[id])]),
-    ) as Record<BossSkillId, number>;
-    if (
-      Object.values(skillValues).some((value) => !/^-?\d{1,2}$/.test(value)) ||
-      Object.values(rawSkillValues).some(
-        (value) => !Number.isInteger(value) || value < -99 || value > 99,
-      )
-    ) {
-      setFormError('Informe valores de perícia entre −99 e 99.');
-      return null;
-    }
-    const numericSkillValues = rawSkillValues;
-    window.bossAPI.dispatch({
-      type: 'configure',
-      bossId: activeBoss.id,
-      bossName: activeBoss.bossName,
-      controlAmount: activeBoss.controlAmount,
-      applyDamageReduction: activeBoss.applyDamageReduction,
-      maxHealth: activeBoss.maxHealth,
-      currentHealth: activeBoss.currentHealth,
-      attack: numericSkillValues.luta,
-      rangedAttack: numericSkillValues.pontaria,
-      skills: activeBoss.skills,
-      skillValues: numericSkillValues,
-      skillOverrides: [...manuallyEditedSkills],
-      defense: activeBoss.defense,
-      rangedDefense: activeBoss.rangedDefense,
-      damageReduction: activeBoss.damageReduction,
-      shield: activeBoss.shield,
-    });
-    return numericSkillValues;
-  };
-
   const rollBossSkill = async (
     skillId: BossSkillId,
     label: string,
@@ -1581,12 +1562,11 @@ const ControlApp = () => {
       return;
     }
     if (!await requestBossTurnPermission(`realizar o teste de ${label}`)) return;
-    const exactSkills = commitExactSkillValues();
-    if (!exactSkills) return;
     const generalSkillDelta =
       (authoritativeAttributes?.values.skills ?? activeBoss.skills) -
       activeBoss.skills;
-    const value = exactSkills[skillId] + generalSkillDelta;
+    const value = (activeBoss.skillValues?.[skillId] ?? activeBoss.skills) +
+      generalSkillDelta;
     setBossSkillPickerOpen(false);
     setFormError('');
     await nextPaint();
@@ -1621,13 +1601,6 @@ const ControlApp = () => {
     if (!result.ok) {
       setFormError(result.error ?? 'Não foi possível realizar o teste.');
     }
-  };
-
-  const applyBossSkillValues = () => {
-    if (!commitExactSkillValues()) return;
-    setFormError('');
-    setLinkBossSkillToPrevious(false);
-    setBossSkillPickerOpen(false);
   };
 
   const saveShieldValue = () => {
@@ -2216,13 +2189,6 @@ const ControlApp = () => {
                   Extrema vantagem
                 </label>
                 <button
-                  className="is-apply"
-                  type="button"
-                  onClick={applyBossSkillValues}
-                >
-                  Aplicar
-                </button>
-                <button
                   type="button"
                   aria-label="Fechar lista de perícias"
                   onClick={() => {
@@ -2258,12 +2224,7 @@ const ControlApp = () => {
                 const generalSkillDelta =
                   (authoritativeAttributes?.values.skills ?? activeBoss.skills) -
                   activeBoss.skills;
-                const baseValue = Number(skillValues[id]);
-                const value = (
-                  Number.isFinite(baseValue)
-                    ? baseValue
-                    : activeBoss.skillValues?.[id] ?? activeBoss.skills
-                ) +
+                const value = (activeBoss.skillValues?.[id] ?? activeBoss.skills) +
                   generalSkillDelta;
                 const initiativeRequired =
                   id === 'iniciativa' && bossInitiativePending;
@@ -2282,14 +2243,6 @@ const ControlApp = () => {
                       <span>{label}</span>
                       <strong>{value >= 0 ? '+' : ''}{value}</strong>
                     </button>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={3}
-                      aria-label={label}
-                      value={skillValues[id]}
-                      onChange={(event) => updateSkillDraft(id, event.target.value)}
-                    />
                   </div>
                 );
               })}

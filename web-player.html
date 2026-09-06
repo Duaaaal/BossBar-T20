@@ -5,13 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none';"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: ws: wss:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none';"
     />
     <title>Apresentação - BossBar T20</title>
   </head>
   <body>
     <div id="root"></div>
     <aside class="web-player-character-hud" id="web-player-character-hud" aria-label="Ficha resumida do personagem" hidden>
+      <button class="web-player-character-portrait" id="web-player-character-portrait" type="button" aria-label="Retrato do personagem">
+        <img id="web-player-character-portrait-image" alt="" hidden />
+        <span id="web-player-character-portrait-placeholder" aria-hidden="true">?</span>
+      </button>
       <div class="web-player-character-statuses" id="web-player-character-statuses" aria-label="Condições do personagem"></div>
       <header>
         <strong id="web-player-character-name">Personagem</strong>
@@ -29,15 +33,24 @@
         </div>
       </div>
       <div class="web-player-character-defenses">
-        <span tabindex="0" data-app-tooltip="Luta"><img src="/session-assets/ui/corpo-a-corpo.png" alt="Luta" /><b id="web-player-character-melee">0</b></span>
-        <span tabindex="0" data-app-tooltip="Pontaria"><img src="/session-assets/ui/a-distancia.png" alt="Pontaria" /><b id="web-player-character-ranged">0</b></span>
-        <span tabindex="0" id="web-player-character-defense-group" data-app-tooltip="Defesa corpo a corpo / à distância"><img src="/session-assets/shield-icon.png" alt="Defesa" /><b id="web-player-character-defense-melee">0</b><i aria-hidden="true">/</i><b id="web-player-character-defense-ranged">0</b></span>
-        <i class="web-player-character-action-divider" aria-hidden="true"></i>
         <div class="web-player-character-actions" aria-label="Ações disponíveis">
           <button type="button" data-player-action="free" data-app-tooltip="Ação livre disponível" aria-label="Usar ação livre"></button>
           <button type="button" data-player-action="movement" data-app-tooltip="Ação de movimento disponível" aria-label="Usar ação de movimento"></button>
           <button type="button" data-player-action="standard" data-app-tooltip="Ação padrão disponível" aria-label="Usar ação padrão"></button>
         </div>
+        <i class="web-player-character-action-divider" aria-hidden="true"></i>
+        <div class="web-player-character-resources" aria-label="Pontos disponíveis">
+          <span class="is-action-point" data-action-point-slot="1" tabindex="0"></span>
+          <span class="is-action-point" data-action-point-slot="2" tabindex="0"></span>
+          <span class="is-action-point" data-action-point-slot="3" tabindex="0"></span>
+          <span class="is-action-point" data-action-point-slot="4" tabindex="0"></span>
+          <span class="is-action-point" data-action-point-slot="5" tabindex="0"></span>
+          <span class="is-hero-point" data-hero-point-slot="1" tabindex="0"></span>
+        </div>
+        <i class="web-player-character-action-divider" aria-hidden="true"></i>
+        <span tabindex="0" data-app-tooltip="Luta"><img src="/session-assets/ui/corpo-a-corpo.png" alt="Luta" /><b id="web-player-character-melee">0</b></span>
+        <span tabindex="0" data-app-tooltip="Pontaria"><img src="/session-assets/ui/a-distancia.png" alt="Pontaria" /><b id="web-player-character-ranged">0</b></span>
+        <span tabindex="0" id="web-player-character-defense-group" data-app-tooltip="Defesa corpo a corpo / à distância"><img src="/session-assets/shield-icon.png" alt="Defesa" /><b id="web-player-character-defense-melee">0</b><i aria-hidden="true">/</i><b id="web-player-character-defense-ranged">0</b></span>
       </div>
       <section class="web-player-character-details" id="web-player-character-details" hidden>
         <div class="web-player-character-detail-heading">
@@ -167,10 +180,39 @@
       <div class="web-player-dialog-card web-player-sheet-editor-card">
         <button class="web-player-dialog-close" id="web-player-sheet-editor-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-editor-title">Ajustar ficha</h1>
-        <p>Edite a ficha livremente. Ao fechar, todas as mudanças serão reunidas em uma única solicitação ao mestre.</p>
-        <input id="web-player-sheet-editor-search" type="search" placeholder="Buscar campo da ficha" autocomplete="off" />
+        <div class="web-player-sheet-editor-toolbar">
+          <div>
+            <input id="web-player-sheet-editor-search" type="search" placeholder="Buscar campo da ficha" autocomplete="off" />
+            <div class="web-player-sheet-editor-filters" id="web-player-sheet-editor-filters" aria-label="Filtrar categorias da ficha"></div>
+          </div>
+          <div class="web-player-portrait-editor">
+            <label class="web-player-portrait-upload" for="web-player-portrait-input" data-app-tooltip="Alterar retrato do personagem">
+              <input id="web-player-portrait-input" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" />
+              <img id="web-player-portrait-editor-preview" alt="" hidden />
+              <span id="web-player-portrait-editor-placeholder" aria-hidden="true">+</span>
+            </label>
+            <button id="web-player-portrait-remove" type="button" aria-label="Remover retrato" hidden>&times;</button>
+            <output id="web-player-portrait-file-name">Nenhum retrato</output>
+          </div>
+        </div>
         <div class="web-player-sheet-editor-fields" id="web-player-sheet-editor-fields"></div>
-        <p class="web-player-sheet-editor-status" id="web-player-sheet-editor-status" role="status"></p>
+      </div>
+    </section>
+    <section class="web-player-dialog web-player-portrait-lightbox" id="web-player-portrait-lightbox" role="dialog" aria-modal="true" aria-label="Retrato ampliado" hidden>
+      <div class="web-player-portrait-lightbox-card">
+        <button class="web-player-dialog-close" id="web-player-portrait-lightbox-close" type="button" aria-label="Fechar">&times;</button>
+        <img id="web-player-portrait-lightbox-image" alt="Retrato ampliado do personagem" />
+      </div>
+    </section>
+    <section class="web-player-dialog" id="web-player-portrait-remove-confirm" role="dialog" aria-modal="true" aria-labelledby="portrait-remove-title" hidden>
+      <div class="web-player-dialog-card">
+        <button class="web-player-dialog-close" id="web-player-portrait-remove-close" type="button" aria-label="Fechar">&times;</button>
+        <h1 id="portrait-remove-title">Remover retrato?</h1>
+        <p>O retrato deixará de aparecer para todos os jogadores.</p>
+        <div class="web-player-dialog-actions">
+          <button id="web-player-portrait-remove-cancel" type="button">Cancelar</button>
+          <button class="web-player-confirm-danger" id="web-player-portrait-remove-confirm-button" type="button">Remover</button>
+        </div>
       </div>
     </section>
     <section class="web-player-dialog" id="web-player-sheet-remove-confirm" role="dialog" aria-modal="true" aria-labelledby="sheet-remove-title" hidden>

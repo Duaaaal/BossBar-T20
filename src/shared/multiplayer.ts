@@ -58,6 +58,7 @@ export type HostedSessionStartupProgress = {
 };
 
 export type MultiplayerPresence = {
+  waitingPlayers?: Array<{ id: string; name: string }>;
   roomCode: string;
   connectedPlayers: number;
   maxPlayers: number;
@@ -65,6 +66,7 @@ export type MultiplayerPresence = {
 };
 
 export type HostedSessionState = {
+  waitingPlayers?: Array<{ id: string; name: string }>;
   active: boolean;
   roomCode: string | null;
   tunnelProvider: 'cloudflare-quick' | null;
@@ -109,6 +111,7 @@ export type PublicBossPresentationState = {
   initiative: number;
   nextAction: string;
   actionSeverity: 'normal' | 'grave';
+  actionVersion: number;
   turnCount: number;
   activeStatuses: ActiveBossStatus[];
 };
@@ -127,6 +130,9 @@ export type PublicScenePhaseMarker = {
 };
 
 export type PublicScenePresentationState = {
+  phaseEntrance?: import('./scene').ScenePlan['phaseEntrance'];
+  mediaRevision?: number;
+  cutscenePlayback?: import('./scene').CutscenePlayback | null;
   phaseMarkers: PublicScenePhaseMarker[];
   activePhaseIndex: number;
   blackoutActive: boolean;
@@ -134,6 +140,9 @@ export type PublicScenePresentationState = {
 };
 
 export type PublicMusicPresentationState = {
+  externalPlayback?: boolean;
+  sceneOwnerId?: string | null;
+  resumeTime?: number;
   tracks: MusicTrack[];
   currentTrackId: string | null;
   isPlaying: boolean;
@@ -248,6 +257,8 @@ export interface MultiplayerServerToClientEvents {
 }
 
 export interface MultiplayerClientToServerEvents {
+  'presentation:cutscene-ready': (id: string, duration: number | null) => void;
+  'session:clock': (acknowledge: (serverTime: number) => void) => void;
   'player:set-sheet-editor-open': (
     open: boolean,
     acknowledge: (result: { ok: boolean; error?: string }) => void,

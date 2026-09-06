@@ -46,7 +46,7 @@ const expectInsideViewport = async (
 
 const rollPlayerInitiative = async (page: Page) => {
   const shortcuts = page.locator('.self-combat-shortcuts');
-  await expect(shortcuts.getByRole('button')).toHaveCount(4);
+  await expect(shortcuts.getByRole('button')).toHaveCount(2);
   await expect(
     shortcuts.getByRole('button', { name: 'Teste de perícia' }),
   ).toBeVisible();
@@ -54,10 +54,10 @@ const rollPlayerInitiative = async (page: Page) => {
     shortcuts.getByRole('button', { name: 'Combate' }),
   ).toBeVisible();
   await expect(
-    shortcuts.getByRole('button', { name: /Ponto de Ação/ }),
+    page.locator('[data-action-point-slot="1"]'),
   ).toBeVisible();
   await expect(
-    shortcuts.getByRole('button', { name: /Ponto Heróico/ }),
+    page.locator('[data-hero-point-slot="1"]'),
   ).toBeVisible();
 
   const skillButton = shortcuts.getByRole('button', {
@@ -71,8 +71,32 @@ const rollPlayerInitiative = async (page: Page) => {
     skillDialog.locator('.player-skill-table.is-initiative-pending'),
   ).toBeVisible();
   await expect(
-    skillDialog.locator('.player-skill-table button:not(:disabled)'),
+    skillDialog.locator('.player-skill-table button.is-initiative'),
   ).toHaveCount(1);
+  await expect(
+    skillDialog.locator('.player-skill-table button.is-pre-initiative-locked'),
+  ).not.toHaveCount(0);
+  const lockedSkill = skillDialog.locator(
+    '.player-skill-table button.is-pre-initiative-locked:not(:disabled)',
+  ).first();
+  await expect(lockedSkill).toHaveAttribute(
+    'data-app-tooltip',
+    'É necessário o mestre aprovar teste de perícia antes da iniciativa',
+  );
+  await expect(lockedSkill).toHaveCSS('cursor', 'pointer');
+  await lockedSkill.click({ force: true });
+  const initiativeWarning = page.locator('.player-resource-notices button')
+    .filter({ hasText: 'somente Iniciativa está liberada' });
+  await expect(initiativeWarning).toBeVisible();
+  await skillDialog.locator(
+    '.player-skill-table button.is-initiative',
+  ).click();
+  await expect(skillDialog.locator('.player-test-resource option')).toContainText([
+    'Nenhum',
+    /Intervenção.*\+1d6 ao teste/,
+    /Rolar novamente.*repete este teste uma vez/,
+    /Extrema vantagem.*2d20.*limitado a 20/,
+  ]);
   await expectInsideViewport(page, '.player-combat-modal');
   await skillDialog.getByRole('button', { name: 'Rolar' }).click();
   await expect(
@@ -206,6 +230,23 @@ test('sincroniza HUDs do grupo, privacidade e o turno do jogador', async ({
 
     const activePage = active?.name === 'Aurora' ? firstPage : secondPage;
     const waitingPage = activePage === firstPage ? secondPage : firstPage;
+    await activePage.getByRole('button', { name: 'Teste de perícia', exact: true }).click();
+    const skillDialog = activePage.getByRole('dialog', { name: 'Teste de perícia', exact: true });
+    await expect(skillDialog.locator('.is-initiative')).toHaveCount(0);
+    await expect(skillDialog.locator('.is-initiative-pending')).toHaveCount(0);
+    await expect(skillDialog.getByRole('button', { name: /^Iniciativa/ }))
+      .toHaveCSS('animation-name', 'none');
+    const skillLabels = await skillDialog.locator('.player-skill-label').evaluateAll((labels) =>
+      labels.map((label) => ({
+        alignment: getComputedStyle(label).textAlign,
+        nameLeft: label.children[0].getBoundingClientRect().left,
+        tagLeft: label.children[1].getBoundingClientRect().left,
+      })),
+    );
+    expect(skillLabels.length).toBeGreaterThan(20);
+    expect(skillLabels.every(({ alignment, nameLeft, tagLeft }) =>
+      alignment === 'left' && Math.abs(nameLeft - tagLeft) < 1)).toBe(true);
+    await skillDialog.getByRole('button', { name: 'Fechar' }).click();
     await expect(
       activePage.getByRole('button', { name: 'Encerrar turno' }),
     ).toBeVisible();

@@ -1,0 +1,12 @@
+.party-player-card[data-disconnected] > :not(.player-reconnection-label) { filter: grayscale(1); opacity: .55; }
+.player-reconnection-label { position: absolute; top: calc(100% + 3px); left: 0; right: 0; color: #ff7070; text-align: center; font-size: 11px; font-weight: 700; text-shadow: 0 1px 3px #000; }
+.encounter-connection-pause { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 100000; display: grid; gap: .5rem; padding: 1rem 1.5rem; max-width: 90vw; text-align: center; color: #ffe1ac; background: #201510ee; border: 1px solid #98683f; border-radius: 10px; }
+.encounter-connection-pause.is-restoring { inset: 0; transform: none; max-width: none; border: 0; border-radius: 0; align-content: center; background: #100c0b; }
+.web-player-character-resources > [role=button] { cursor: pointer; }
+.web-player-character-resources > [role=button]:focus-visible { outline: 2px solid #ecc073; outline-offset: 2px; }
+.boss-hud.is-active { opacity: var(--phase-hud-opacity, 1); }
+.phase-hud-entering .boss-hud { transition: transform 900ms cubic-bezier(.22, 1, .36, 1); }
+:is(.party-hud, .web-player-character-hud, .self-combat-shortcuts, .encounter-turn-tools, .self-roll-results) { opacity: var(--phase-hud-opacity, 1); }
+.phase-hud-hidden :is(.boss-hud, .party-hud, .web-player-character-hud, .self-combat-shortcuts, .encounter-turn-tools, .self-roll-results) { visibility: hidden; pointer-events: none; }
+.encounter-restoring :is(.boss-hud, .party-hud, .web-player-character-hud, .self-combat-shortcuts, .encounter-turn-tools, .self-roll-results, .encounter-roll-results) { visibility: hidden !important; pointer-events: none !important; }
+.encounter-connection-pause { z-index: 2147483647; }

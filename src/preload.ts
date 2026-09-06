@@ -229,6 +229,7 @@ const bossAPI = {
     latestPlayerHuds = await ipcRenderer.invoke('multiplayer:get-player-huds');
     return latestPlayerHuds;
   },
+  getPendingBossDamage: (bossId) => ipcRenderer.invoke('multiplayer:get-pending-boss-damage', bossId),
   getEncounterTurnState: async (): Promise<EncounterTurnState> => {
     const state = await ipcRenderer.invoke(
       'multiplayer:get-turn-state',
@@ -331,6 +332,9 @@ const bossAPI = {
   },
   saveScenePlan: (draft: ScenePlanDraft): Promise<SceneSaveResult> =>
     ipcRenderer.invoke('scene:save', draft),
+  getPresentationMedia: () => ipcRenderer.invoke('presentation:media'),
+  resetEncounter: () => ipcRenderer.invoke('encounter:reset'),
+  controlSceneMusic: (ownerId, command) => ipcRenderer.invoke('scene:music-control', ownerId, command),
   resetSceneDraft: (): Promise<ScenePlanDraft | null> =>
     ipcRenderer.invoke('scene:reset-draft'),
   chooseScenePhaseMedia: (
@@ -392,6 +396,8 @@ const bossAPI = {
     ipcRenderer.invoke('multiplayer:open-local-player'),
   approveHostedPlayer: (requestId: string): Promise<boolean> =>
     ipcRenderer.invoke('multiplayer:approve-player', requestId),
+  kickHostedPlayer: (playerId: string): Promise<boolean> =>
+    ipcRenderer.invoke('multiplayer:kick-player', playerId),
   rejectHostedPlayer: (requestId: string): Promise<boolean> =>
     ipcRenderer.invoke('multiplayer:reject-player', requestId),
   openHostedPlayerSheet: (playerId: string): Promise<boolean> =>
@@ -460,6 +466,9 @@ const bossAPI = {
   dispatchMusicControl: (command: MusicControlCommand) => {
     ipcRenderer.send('music:control', command);
   },
+  continueCutscene: (): Promise<boolean> => ipcRenderer.invoke('scene:continue-cutscene'),
+  reportCutsceneReady: (id: string, duration: number | null) => ipcRenderer.send('scene:cutscene-ready', id, duration),
+  getPresentationTime: () => Date.now(),
   openActivePhasePlaylist: (): Promise<boolean> =>
     ipcRenderer.invoke('scene:open-active-playlist'),
   setUniversalMute: (muted: boolean) => {
@@ -620,6 +629,7 @@ const bossAPI = {
     ipcRenderer.on('library:entries-changed', listener);
     return () => ipcRenderer.removeListener('library:entries-changed', listener);
   },
+  reportBackgroundProgress: (url, time) => ipcRenderer.send('background:progress', url, time),
   subscribeHostedSession: (callback: (state: HostedSessionState) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,

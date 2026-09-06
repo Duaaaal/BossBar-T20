@@ -324,6 +324,7 @@ test('acompanha separadamente a preparação da identidade e da próxima ação'
   });
   assert.equal(state.bosses[0].identityPrepared, true);
   assert.equal(state.bosses[0].actionPrepared, true);
+  assert.equal(state.bosses[0].actionVersion, 1);
   assert.equal(state.bosses[0].controlAmount, '100/4');
   assert.equal(state.bosses[0].applyDamageReduction, false);
 
@@ -529,6 +530,7 @@ test('habilita sons e efeitos visuais, mantendo o visor de vida opcional', () =>
   assert.equal(getEncounterSoundSetting('natural-failure'), 'dice');
   assert.equal(getEncounterSoundSetting('natural-success-player'), 'dice');
   assert.equal(getEncounterSoundSetting('natural-success-enemy'), 'dice');
+  assert.equal(getEncounterSoundSetting('grave-action'), 'damage');
   assert.equal(
     isEncounterSoundEnabled(initialEncounterEffectsState, 'shield-break'),
     true,
@@ -546,6 +548,7 @@ test('reconhece as categorias configuráveis de efeitos sonoros e resultados nat
     'natural-failure',
     'natural-success-player',
     'natural-success-enemy',
+    'grave-action',
   ]) assert.equal(isEncounterSoundEffectKind(kind), true);
   assert.equal(isEncounterSoundEffectKind('music'), false);
   assert.equal(isEncounterSoundEffectKind(null), false);

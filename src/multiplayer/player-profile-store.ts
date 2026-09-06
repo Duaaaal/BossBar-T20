@@ -9,6 +9,7 @@ import path from 'node:path';
 import type {
   CharacterSheetValidation,
   PlayerCharacterSheetStatus,
+  PlayerCharacterPortraitStatus,
   PlayerProfileSummary,
 } from '../shared/character-sheet.ts';
 import { normalizePlayerName } from './session-roster.ts';
@@ -23,6 +24,13 @@ type StoredSheet = {
   validation: CharacterSheetValidation;
 };
 
+type StoredPortrait = {
+  fileName: string;
+  relativePath: string;
+  uploadedAt: number;
+  contentType: 'image/png' | 'image/jpeg' | 'image/webp';
+};
+
 type StoredPlayerProfile = {
   id: string;
   username: string;
@@ -33,6 +41,7 @@ type StoredPlayerProfile = {
   updatedAt: number;
   notes: string;
   sheet: StoredSheet | null;
+  portrait?: StoredPortrait | null;
 };
 
 type StoredPlayerProfiles = {
@@ -45,6 +54,7 @@ export type PublicPlayerProfile = {
   username: string;
   notes: string;
   sheet: PlayerCharacterSheetStatus;
+  portrait: PlayerCharacterPortraitStatus;
 };
 
 const normalizeUsername = (value: string) =>
@@ -86,11 +96,21 @@ const publicSheet = (sheet: StoredSheet | null): PlayerCharacterSheetStatus => (
   validation: sheet?.validation ?? null,
 });
 
+const publicPortrait = (
+  portrait: StoredPortrait | null | undefined,
+): PlayerCharacterPortraitStatus => ({
+  hasPortrait: Boolean(portrait),
+  fileName: portrait?.fileName ?? null,
+  uploadedAt: portrait?.uploadedAt ?? null,
+  contentType: portrait?.contentType ?? null,
+});
+
 const publicProfile = (profile: StoredPlayerProfile): PublicPlayerProfile => ({
   id: profile.id,
   username: profile.username,
   notes: profile.notes,
   sheet: publicSheet(profile.sheet),
+  portrait: publicPortrait(profile.portrait),
 });
 
 export class PlayerProfileStore {
@@ -139,6 +159,7 @@ export class PlayerProfileStore {
       updatedAt: now,
       notes: '',
       sheet: null,
+      portrait: null,
     };
     this.profiles.set(normalizedUsername, profile);
     await this.save();
@@ -179,6 +200,7 @@ export class PlayerProfileStore {
           fileName: profile.sheet?.fileName ?? null,
           uploadedAt: profile.sheet?.uploadedAt ?? null,
         },
+        portrait: publicPortrait(profile.portrait),
       }))
       .sort((left, right) => left.username.localeCompare(right.username, 'pt-BR'));
   }
@@ -270,6 +292,88 @@ export class PlayerProfileStore {
       });
     }
     profile.sheet = null;
+    profile.updatedAt = Date.now();
+    await this.save();
+    return publicProfile(profile);
+  }
+
+  async savePortrait(
+    profileId: string,
+    fileName: string,
+    bytes: Uint8Array,
+    contentType: StoredPortrait['contentType'],
+  ) {
+    const profile = [...this.profiles.values()].find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error('O jogador não foi encontrado.');
+    const extension = contentType === 'image/png'
+      ? '.png'
+      : contentType === 'image/webp' ? '.webp' : '.jpg';
+    const profileDirectory = path.join(this.rootDirectory, profile.id);
+    const destination = path.join(profileDirectory, `portrait${extension}`);
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    await mkdir(profileDirectory, { recursive: true });
+    await writeFile(temporary, bytes, { flag: 'wx' });
+    const previousPath = profile.portrait
+      ? path.resolve(this.rootDirectory, profile.portrait.relativePath)
+      : null;
+    const backup = previousPath === destination
+      ? `${destination}.${randomUUID()}.previous`
+      : null;
+    try {
+      if (backup) {
+        await rename(destination, backup).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+      await rename(temporary, destination);
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      if (backup) {
+        await rename(backup, destination).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (backup) await unlink(backup).catch(() => undefined);
+    if (previousPath && previousPath !== destination) {
+      await unlink(previousPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }
+    profile.portrait = {
+      fileName: path.basename(fileName).slice(0, 180) || `retrato${extension}`,
+      relativePath: path.relative(this.rootDirectory, destination),
+      uploadedAt: Date.now(),
+      contentType,
+    };
+    profile.updatedAt = Date.now();
+    await this.save();
+    return publicProfile(profile);
+  }
+
+  async readPortrait(profileId: string) {
+    const profile = [...this.profiles.values()].find((candidate) => candidate.id === profileId);
+    if (!profile?.portrait) return null;
+    const filePath = path.resolve(this.rootDirectory, profile.portrait.relativePath);
+    const root = `${path.resolve(this.rootDirectory)}${path.sep}`;
+    if (!filePath.startsWith(root)) throw new Error('O caminho do retrato é inválido.');
+    return {
+      bytes: await readFile(filePath),
+      ...profile.portrait,
+    };
+  }
+
+  async removePortrait(profileId: string) {
+    const profile = [...this.profiles.values()].find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error('O jogador não foi encontrado.');
+    if (profile.portrait) {
+      const filePath = path.resolve(this.rootDirectory, profile.portrait.relativePath);
+      const root = `${path.resolve(this.rootDirectory)}${path.sep}`;
+      if (!filePath.startsWith(root)) throw new Error('O caminho do retrato é inválido.');
+      await unlink(filePath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }
+    profile.portrait = null;
     profile.updatedAt = Date.now();
     await this.save();
     return publicProfile(profile);

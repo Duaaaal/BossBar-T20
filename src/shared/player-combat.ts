@@ -64,8 +64,10 @@ export type PlayerHudActionState = {
 export type PlayerActionKind = keyof PlayerHudActionState;
 
 export type PlayerHudState = {
+  disconnected?: boolean;
   id: string;
   characterName: string;
+  portraitUrl?: string | null;
   isSelf: boolean;
   privateMode: boolean;
   redacted: boolean;
@@ -217,7 +219,10 @@ export const encounterRollSoundKind = (
 };
 
 export type EncounterTurnState = {
+  connectionPause?: { reason: 'restoring' | 'reconnecting'; names: string[] } | null;
   round: number;
+  /** Wall-clock instant when the master started the current battle. */
+  startedAt: number | null;
   activeParticipantId: string | null;
   participants: EncounterTurnParticipant[];
   rollResults: EncounterRollResult[];
@@ -242,11 +247,14 @@ export type EncounterFormulaRollRequest = {
   rollMode?: 'sum' | 'sum-capped';
   /** Links this roll to an opposed or otherwise related action. */
   correlationId?: string;
+  targetParticipantId?: string;
+  targetName?: string;
 };
 
 export type EncounterFormulaRollResult = {
   ok: boolean;
   total?: number;
+  resultId?: string;
   error?: string;
 };
 
@@ -379,7 +387,7 @@ export type PendingActionPointRequest = {
   label: string;
   requestedAt: number;
   actionId?: string;
-  kind?: 'action-point' | 'skill-without-standard-action';
+  kind?: 'action-point' | 'skill-without-standard-action' | 'pre-initiative-action';
 };
 
 export type PlayerResourceNotice = {
@@ -419,6 +427,7 @@ export type InitiativeActor = Pick<
 
 export const emptyEncounterTurnState = (): EncounterTurnState => ({
   round: 0,
+  startedAt: null,
   activeParticipantId: null,
   participants: [],
   rollResults: [],
@@ -683,7 +692,13 @@ export const normalizeEncounterFormulaRequest = (
     (candidate.rollMode !== undefined &&
       candidate.rollMode !== 'sum' &&
       candidate.rollMode !== 'sum-capped') ||
-    !isSafeActionIdentity(candidate.correlationId)
+    !isSafeActionIdentity(candidate.correlationId) ||
+    !isSafeActionIdentity(candidate.targetParticipantId) ||
+    (candidate.targetName !== undefined && (
+      typeof candidate.targetName !== 'string' ||
+      candidate.targetName.trim().length < 1 ||
+      candidate.targetName.trim().length > 80
+    ))
   ) return null;
   return {
     participantId: candidate.participantId,
@@ -696,6 +711,12 @@ export const normalizeEncounterFormulaRequest = (
     ...(candidate.correlationId === undefined
       ? {}
       : { correlationId: candidate.correlationId }),
+    ...(candidate.targetParticipantId === undefined
+      ? {}
+      : { targetParticipantId: candidate.targetParticipantId }),
+    ...(candidate.targetName === undefined
+      ? {}
+      : { targetName: candidate.targetName.trim() }),
   };
 };
 
@@ -891,6 +912,7 @@ export type AreaDamageResult = {
 };
 
 export type DirectPlayerDamageRequest = {
+  bossTargetIds?: string[];
   playerIds: string[];
   damage: number;
   damageFormula?: string;
@@ -1012,6 +1034,7 @@ export const isDirectPlayerDamageRequest = (
 ): value is DirectPlayerDamageRequest => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<DirectPlayerDamageRequest>;
+  if (candidate.bossTargetIds !== undefined && (!Array.isArray(candidate.bossTargetIds) || candidate.bossTargetIds.length > 3 || !candidate.bossTargetIds.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128))) return false;
   const hasAttackCheck =
     candidate.attackType !== undefined ||
     candidate.attackBonus !== undefined ||

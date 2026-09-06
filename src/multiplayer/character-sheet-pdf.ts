@@ -109,6 +109,8 @@ const textValidation = (maxLength: number) => ({
 });
 
 const MAX_SPELL_ROWS = 100;
+const MIN_ATTACK_ROWS = 2;
+const MAX_ATTACK_ROWS = 20;
 const MIN_ITEM_ROWS = 3;
 const MAX_ITEM_ROWS = 100;
 const MAX_ARMOR_ROWS = 20;
@@ -217,7 +219,7 @@ const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
     );
   }
 
-  for (let index = 1; index <= 5; index += 1) {
+  for (let index = 1; index <= MAX_ATTACK_ROWS; index += 1) {
     const group = `Ataque ${index}`;
     const criticalField = `Crítico ${index}`;
     const marginField = `BossBar.Ataque.${index}.MargemCritico`;
@@ -685,6 +687,7 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
           : rule.name,
       total,
       trained,
+      trainedOnly: Boolean(rule.trainedOnly),
       attribute,
       attributeValue,
       halfLevel,
@@ -709,7 +712,7 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
   addFormulaIssue(issues, 'TesteResist', numberValue(fields.TesteResist), expectedSpellDc, 'A CD de magia');
   const defense = integerValue(fields.CA);
   const defenseCalculation = `${numericOrZero(fields['Base CA'])} (base) + ${numericOrZero(fields['B.Arm'])} (armadura) + ${numericOrZero(fields['B.Esc'])} (escudo) + ${numericOrZero(fields['Outros B.CA'])} (outros) + ${defenseIncludesDexterity ? numericOrZero(fields.ModAtribDefe) : 0} (atributo) = ${defense ?? expectedDefense}`;
-  const attacks = Array.from({ length: 5 }, (_, index) => {
+  const attacks = Array.from({ length: MAX_ATTACK_ROWS }, (_, index) => {
     const number = index + 1;
     return {
       name: clean(fields[`Ataque ${number}`]),
@@ -803,6 +806,17 @@ const editorFields = (document: PDFDocument): CharacterSheetEditorField[] => {
     ))) activeSpellRows.add(index);
   }
   if (activeSpellRows.size === 0 && values.Magias?.trim()) activeSpellRows.add(1);
+  const activeAttackRows = new Set<number>(
+    Array.from({ length: MIN_ATTACK_ROWS }, (_, index) => index + 1),
+  );
+  for (let index = MIN_ATTACK_ROWS + 1; index <= MAX_ATTACK_ROWS; index += 1) {
+    if ([
+      `Ataque ${index}`, `Bônus Atq ${index}`, `Dano ${index}`,
+      `Crítico ${index}`, `Tipo ${index}`, `Alcance ${index}`,
+      `BossBar.Ataque.${index}.MargemCritico`,
+      `BossBar.Ataque.${index}.MultiplicadorCritico`,
+    ].some((name) => values[name]?.trim())) activeAttackRows.add(index);
+  }
   const activeItemRows = new Set<number>(
     Array.from({ length: MIN_ITEM_ROWS }, (_, index) => index + 1),
   );
@@ -827,6 +841,8 @@ const editorFields = (document: PDFDocument): CharacterSheetEditorField[] => {
     ))) activeShieldRows.add(index);
   }
   return CHARACTER_SHEET_EDITOR_DESCRIPTORS.filter((descriptor) => {
+    const attackMatch = /^Ataque (\d+)$/.exec(descriptor.group ?? '');
+    if (attackMatch) return activeAttackRows.has(Number(attackMatch[1]));
     const spellMatch = /^BossBar\.Magia\.(\d+)\./.exec(descriptor.name);
     if (spellMatch) return activeSpellRows.has(Number(spellMatch[1]));
     const itemMatch = /^Item (\d+)$/.exec(descriptor.group ?? '');
@@ -950,7 +966,7 @@ export const applyCharacterSheetEditorFields = async (
     }
   }
 
-  for (let index = 1; index <= 5; index += 1) {
+  for (let index = 1; index <= MAX_ATTACK_ROWS; index += 1) {
     const marginFieldName = `BossBar.Ataque.${index}.MargemCritico`;
     const multiplierFieldName = `BossBar.Ataque.${index}.MultiplicadorCritico`;
     const margin = byName.get(marginFieldName)?.value.trim();

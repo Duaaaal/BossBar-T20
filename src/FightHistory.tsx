@@ -19,9 +19,29 @@ const formatHistoryRoll = (entry: EncounterHistoryEntry) => {
   return `${dice} ${modifier >= 0 ? '+' : '−'} ${Math.abs(modifier)} = ${entry.total ?? 0}`;
 };
 
+const brasiliaTime = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+const formatElapsed = (createdAt: number, startedAt: number | null) => {
+  const seconds = Math.max(0, Math.floor((createdAt - (startedAt ?? createdAt)) / 1_000));
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  return [hours, minutes, seconds % 60]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':');
+};
+
 export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
   const [open, setOpen] = useState(false);
   const entries = turn.history ?? [];
+  const revertedEntryIds = new Set(
+    entries.flatMap(({ revertsEntryIds }) => revertsEntryIds ?? []),
+  );
+  let actionNumber = 0;
 
   return (
     <>
@@ -73,14 +93,21 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
                     </h4>
                   );
                 }
+                actionNumber += 1;
                 return (
                   <article
-                    className={`fight-history-entry is-${entry.outcome ?? entry.kind}`}
+                    className={`fight-history-entry is-${entry.outcome ?? entry.kind} ${
+                      revertedEntryIds.has(entry.id) ? 'is-undone' : ''
+                    }`}
                     key={entry.id}
                   >
+                    <small className="fight-history-entry-meta">
+                      #{actionNumber} · {formatElapsed(entry.createdAt, turn.startedAt)} · {brasiliaTime.format(entry.createdAt)}
+                    </small>
                     <b>({entry.actorName})</b>
                     <span>
                       {entry.label}
+                      {revertedEntryIds.has(entry.id) ? ' (desfeito)' : ''}
                       {entry.label ? ': ' : ''}
                       {formatHistoryRoll(entry)}
                     </span>

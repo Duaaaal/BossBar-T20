@@ -23,6 +23,8 @@ export type EncounterHistoryEntry = Readonly<{
   outcome?: EncounterRollOutcome;
   visibility?: EncounterRollVisibility;
   rollCategory?: EncounterRollResult['category'];
+  /** History entries superseded by this system action (for example Ctrl+Z). */
+  revertsEntryIds?: readonly string[];
 }>;
 
 const participantName = (

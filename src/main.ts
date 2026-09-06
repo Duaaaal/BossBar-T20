@@ -23,6 +23,9 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeEncounterCheckpoint, resumeEncounterTurns, type EncounterCheckpoint } from './shared/encounter-checkpoint';
+import { CutsceneCoordinator } from './cutscene-coordinator';
+import { cutsceneFade, cutsceneBlackoutSeconds, cutsceneMusicPosition, cutsceneNextMusicPosition, playlistPosition } from './shared/scene';
 import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
@@ -108,6 +111,7 @@ import type { RendererRole } from './shared/preload';
 import {
   historyEntriesForRolls,
   historyEntryForVitalChange,
+  type EncounterHistoryEntry,
 } from './shared/encounter-history';
 import {
   isEncounterDebugOverrideRequest,
@@ -175,6 +179,11 @@ import {
   applySceneBossPatch,
   clampSceneOverflowHealth,
   createScenePlan,
+  createSceneCutscene,
+  sceneMediaOwners,
+  cutscenePosition,
+  type SceneCutscene,
+  type CutscenePlayback,
   normalizeSceneBossPatch,
   validateSceneRanges,
   type SceneBossDirective,
@@ -279,6 +288,7 @@ let hostedSessionServer: MultiplayerSessionServer | null = null;
 let hostedSessionPresence: MultiplayerPresence | null = null;
 let playerHudState: PlayerHudState[] = [];
 let encounterTurnState: EncounterTurnState = emptyEncounterTurnState();
+let restoredEncounterCheckpoint: EncounterCheckpoint | null = null;
 let localEncounterRollSequence = 0;
 let hostedPublicBaseUrl: string | null = null;
 let hostedPublicInviteUrl: string | null = null;
@@ -322,6 +332,8 @@ let sceneTransitionSequence = 0;
 let sceneTransitionTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingBlackoutPhaseIndex: number | null = null;
 let resumeMusicAfterManualBlackout = false;
+const cutsceneCoordinator = new CutsceneCoordinator();
+let cutsceneFinishTimer: ReturnType<typeof setTimeout> | null = null;
 let activeBackgroundFilePath: string | null = null;
 let configuredBackgroundFilePath: string | null = null;
 let configuredBackgroundName: string | null = null;
@@ -437,6 +449,11 @@ const defaultEncounterSoundDefinitions: Array<{
       { fileName: 'sucesso_natural_inimigo.mp3', label: 'Sucesso natural do inimigo' },
     ],
   },
+  {
+    kind: 'grave-action',
+    directory: 'Acao_Grave',
+    sounds: [],
+  },
 ];
 const defaultEncounterSoundEnabled = new Map<string, boolean>();
 const previousEncounterSoundIndex = new Map<EncounterSoundEffectKind, number>();
@@ -477,6 +494,7 @@ let encounterEffectsAudioState = {
   revision: initialEncounterEffectsState.revision,
 };
 type AppUndoSnapshot = {
+  initialEncounterSnapshot: BossLibraryEntry | null;
   battleState: BattleState;
   scenePlan: ScenePlan;
   sceneMediaPaths: Array<[string, string]>;
@@ -496,6 +514,7 @@ type AppUndoSnapshot = {
   soundboardSlots: Array<InternalSoundboardSlot | null>;
   soundboardAudioState: typeof soundboardAudioState;
   encounterEffectsAudioState: typeof encounterEffectsAudioState;
+  historyEntryIds: string[];
 };
 const appUndoHistory: AppUndoSnapshot[] = [];
 const MAX_APP_UNDO_HISTORY = 5;
@@ -503,6 +522,7 @@ let lastAppUndoKey: string | null = null;
 let lastAppUndoRecordedAt = 0;
 
 const captureAppUndoSnapshot = (): AppUndoSnapshot => structuredClone({
+  initialEncounterSnapshot,
   battleState,
   scenePlan,
   sceneMediaPaths: [...sceneMediaPaths],
@@ -519,6 +539,7 @@ const captureAppUndoSnapshot = (): AppUndoSnapshot => structuredClone({
   soundboardSlots,
   soundboardAudioState,
   encounterEffectsAudioState,
+  historyEntryIds: (encounterTurnState.history ?? []).map(({ id }) => id),
 });
 
 const rememberAppChange = (
@@ -608,7 +629,13 @@ type StoredScenePlaylist = Omit<
   revision?: number;
 };
 
-type StoredScenePhase = Omit<ScenePhase, 'background' | 'transitionSound' | 'music'> & {
+type StoredSceneCutscene = Omit<SceneCutscene, 'background' | 'transitionSound' | 'music'> & {
+  background: StoredSceneMedia | null;
+  transitionSound: StoredScenePlaylist | null;
+  music: StoredScenePlaylist | null;
+};
+type StoredScenePhase = Omit<ScenePhase, 'background' | 'transitionSound' | 'music' | 'cutscene'> & {
+  cutscene?: StoredSceneCutscene | null;
   background: StoredSceneMedia | null;
   transitionSound: StoredScenePlaylist | null;
   music: StoredScenePlaylist | null;
@@ -619,11 +646,14 @@ type StoredScenePlan = Pick<
   'bossSlots' | 'showPhaseMarkers' | 'activePhaseIndex' | 'activePhaseIds' | 'blackoutActive'
 > & {
   phases: StoredScenePhase[];
+  cutscenePlayback?: Pick<CutscenePlayback, 'cutsceneId' | 'targetPhaseIndex' | 'offsetSeconds'> | null;
   templates: StoredLibraryBoss[];
 };
 
 type BossLibraryEntry = {
-  schemaVersion: 5;
+  initialState?: Omit<BossLibraryEntry, 'initialState'> | null;
+  schemaVersion: 6;
+  checkpoint?: EncounterCheckpoint | null;
   id: string;
   isAutosave: boolean;
   createdAt: string;
@@ -648,6 +678,20 @@ type BossLibraryEntry = {
 };
 
 let bossLibraryEntries: BossLibraryEntry[] = [];
+let initialEncounterSnapshot: BossLibraryEntry | null = null;
+let initialEncounterSheetsReady: Promise<void> = Promise.resolve();
+const preserveInitialCharacterSheets = () => {
+  const initial = initialEncounterSnapshot;
+  const server = hostedSessionServer;
+  if (!initial?.checkpoint || !server) return;
+  initialEncounterSheetsReady = server.includeCharacterSheets(initial.checkpoint.multiplayer).then((saved) => {
+    if (initialEncounterSnapshot !== initial) return;
+    for (const player of initial.checkpoint!.multiplayer.players) {
+      const document = saved.players.find((item) => item.profileId === player.profileId)?.sheetDocument;
+      if (document && !player.sheetDocument) player.sheetDocument = document;
+    }
+  });
+};
 let linkedLibraryEntryId: string | null = null;
 let libraryWriteQueue: Promise<void> = Promise.resolve();
 let encounterEffectsWriteQueue: Promise<void> = Promise.resolve();
@@ -658,7 +702,9 @@ const supportedBackgroundExtensions: ReadonlySet<string> = new Set([
   ...backgroundVideoExtensions,
 ]);
 
+let backgroundPlayback = { revision: -1, time: 0 };
 const getBackgroundState = (): BackgroundState => ({
+  resumeTime: backgroundPlayback.revision === backgroundRevision ? backgroundPlayback.time : 0,
   url: activeBackgroundFilePath
     ? `boss-media://background/current?v=${backgroundRevision}`
     : null,
@@ -987,15 +1033,31 @@ const loadRenderer = (
   void window.loadURL(allowedUrl);
 };
 
-const getMusicState = (): MusicState => ({
-  ...musicState,
-  tracks: musicTracks.map(({ id, name, duration }) => ({
-    id,
-    name,
-    duration,
-    url: `boss-media://audio/${id}`,
-  })),
-});
+let activeMusicOwnerId: string | null = null;
+let pendingRestoredCutscene: { cutsceneId: string; targetPhaseIndex: number; offsetSeconds: number } | null = null;
+const getMusicState = (): MusicState => {
+  if (hostedSessionServer?.getConnectionPause()?.reason === 'restoring') return {
+    ...musicState, tracks: [], isPlaying: false, externalPlayback: true,
+  };
+  const cut = scenePlan.cutscenePlayback;
+  const fadeMs = cut ? cutsceneFade(cut, 'audio', 'in') * 1000 : 0;
+  if (cut && cut.startedAt !== null && (Date.now() >= cut.startedAt + fadeMs || (cut.stage === 'ending' && Date.now() >= (cut.endingAt ?? Infinity)))) {
+    const exiting = cut.stage === 'ending' && Date.now() >= (cut.endingAt ?? Infinity);
+    const playlist = exiting ? cut.nextMusic ?? null : cut.music;
+    const current = playlistPosition(playlist, exiting ? cutsceneNextMusicPosition(cut) : cutsceneMusicPosition(cut));
+    return { ...musicState, sceneOwnerId: exiting ? cut.nextMusicOwnerId ?? null : cut.cutsceneId, externalPlayback: true,
+      tracks: playlist?.tracks ?? [], currentTrackId: current.track?.id ?? null,
+      resumeTime: current.time, isPlaying: Boolean(current.track && (exiting ? cut.nextMusicTransport : cut.musicTransport)?.playing !== false),
+      volume: playlist?.volume ?? 0.8, muted: playlist?.muted ?? false, loop: playlist?.loop ?? false,
+      revision: scenePlan.revision + musicState.revision };
+  }
+  return { ...musicState, sceneOwnerId: battleState.battleStarted ? activeMusicOwnerId : null, externalPlayback: false,
+    resumeTime: musicPlaybackState.currentTime,
+    tracks: musicTracks.map(({ id, name, duration }) => ({ id, name, duration,
+      url: activeMusicOwnerId && scenePlaylistPaths.has(scenePlaylistTrackKey(activeMusicOwnerId, 'music', id))
+        ? scenePlaylistTrackUrl(activeMusicOwnerId, 'music', id) : `boss-media://audio/${id}` })),
+  };
+};
 
 const getSoundboardState = (): SoundboardState => ({
   slots: soundboardSlots.map((slot, arrayIndex) => ({
@@ -1047,13 +1109,14 @@ const createHostedEncounterSoundUrls = (mediaUrl: (id: string) => string) =>
     ))
     .filter(Boolean);
 
-const createHostedPreloadMediaUrls = (mediaUrl: (id: string) => string) => {
+let presentationMediaRevision = 0;
+const createPresentationSourceUrls = () => {
   const sourceUrls = [
     ...musicTracks.map(({ id }) => `boss-media://audio/${encodeURIComponent(id)}`),
     ...soundboardSlots.flatMap((slot, index) => slot
       ? [`boss-media://soundboard/${index + 1}`]
       : []),
-    ...scenePlan.phases.flatMap((phase) => [
+    ...sceneMediaOwners(scenePlan.phases).flatMap((phase) => [
       ...(phase.background
         ? [`boss-media://scene-background/${encodeURIComponent(phase.id)}`]
         : []),
@@ -1066,7 +1129,10 @@ const createHostedPreloadMediaUrls = (mediaUrl: (id: string) => string) => {
       .filter((option) => option.enabled)
       .map((option) => encounterSoundSourceUrl(option.id)),
   ];
-  return [...new Set(sourceUrls
+  return [...new Set([...(getBackgroundState().url ? [getBackgroundState().url!] : []), ...sourceUrls])];
+};
+const createHostedPreloadMediaUrls = (mediaUrl: (id: string) => string) => {
+  return [...new Set(createPresentationSourceUrls()
     .map((sourceUrl) => rewriteHostedMediaUrl(sourceUrl, mediaUrl))
     .filter(Boolean))];
 };
@@ -1126,6 +1192,7 @@ const getHostedSessionState = (): HostedSessionState => {
     connectedPlayers: presence.connectedPlayers,
     maxPlayers: presence.maxPlayers,
     players: presence.players.map((player) => ({ ...player })),
+    waitingPlayers: presence.waitingPlayers ?? [],
     pendingJoinRequests: server.getPendingJoinRequests(),
     pendingActionPointRequests: server.getPendingActionPointRequests(),
     pendingSheetChangeRequests: server.getPendingSheetChangeRequests(),
@@ -1220,18 +1287,40 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
       preloadMediaUrls: ({ mediaUrl }) => createHostedPreloadMediaUrls(mediaUrl),
       onPresenceChanged: (presence) => {
         hostedSessionPresence = presence;
+        cutsceneCoordinator.updateParticipants(cutsceneParticipants());
         broadcastHostedSessionState();
       },
+      onCutsceneReady: (playerId, id, duration) => acknowledgeCutscene(id, playerId, duration),
       onJoinRequestsChanged: () => broadcastHostedSessionState(),
       onActionPointRequestsChanged: () => broadcastHostedSessionState(),
       onSheetChangeRequestsChanged: () => broadcastHostedSessionState(),
       onPlayerHudsChanged: (huds) => {
         playerHudState = huds;
+        if (initialEncounterSnapshot?.checkpoint && hostedSessionServer) {
+          const initialPlayers = initialEncounterSnapshot.checkpoint.multiplayer.players;
+          let added = false;
+          for (const player of hostedSessionServer.captureEncounter().players) {
+            const index = initialPlayers.findIndex((saved) => saved.profileId === player.profileId);
+            if (player.validation && (index < 0 || !initialPlayers[index].validation)) {
+              if (index < 0) initialPlayers.push(player); else initialPlayers[index] = player;
+              added = true;
+            }
+          }
+          if (added) preserveInitialCharacterSheets();
+        }
         broadcastPlayerHuds();
       },
       onTurnStateChanged: (turnState) => {
+        const resuming = encounterTurnState.connectionPause?.reason === 'restoring' && turnState.connectionPause?.reason !== 'restoring';
         encounterTurnState = turnState;
         broadcastEncounterTurnState();
+        if (resuming && battleState.battleStarted) {
+          broadcastMusicState();
+          const cutscene = pendingRestoredCutscene;
+          pendingRestoredCutscene = null;
+          if (cutscene) setTimeout(() => beginCutscene(cutscene.targetPhaseIndex, cutscene.offsetSeconds), 0);
+          else if (queuedScenePhaseIndexes.length && !sceneTransitioning) setTimeout(processScenePhaseQueue, 0);
+        }
       },
       onTurnStarted: (participant) => {
         if (participant.kind === 'boss') {
@@ -1329,6 +1418,9 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
     reportHostedSessionStartupProgress(94, 'Validando o convite dos jogadores...');
     const publicInvite = server.publicInviteUrl(tunnel.publicBaseUrl);
     hostedSessionServer = server;
+    if (restoredEncounterCheckpoint) {
+      server.restoreEncounter({ ...restoredEncounterCheckpoint.multiplayer, turns: encounterTurnState });
+    }
     hostedQuickTunnel = tunnel;
     hostedSessionPresence = server.getPresence();
     hostedPublicBaseUrl = publicInvite.baseUrl;
@@ -1880,7 +1972,7 @@ const normalizeStoredScene = (
       return [{
         bossId: directive.bossId,
         presence: directive.presence as SceneBossDirective['presence'],
-        carryOverflowDamage: directive.carryOverflowDamage !== false,
+        carryOverflowDamage: true,
         patch: normalizeSceneBossPatch(directive.patch),
       }];
     });
@@ -1929,6 +2021,10 @@ const normalizeStoredScene = (
     return [{
       id: rawPhase.id,
       name: rawPhase.name,
+      visualFadeInSeconds: clampFadeSeconds(rawPhase.visualFadeInSeconds),
+      audioFadeInSeconds: clampFadeSeconds(rawPhase.audioFadeInSeconds),
+      hudFadeInSeconds: clampFadeSeconds(rawPhase.hudFadeInSeconds),
+      hudDelaySeconds: typeof rawPhase.hudDelaySeconds === 'number' && Number.isFinite(rawPhase.hudDelaySeconds) ? Math.max(0, Math.min(60, rawPhase.hudDelaySeconds)) : 0,
       triggerBossId: rawPhase.triggerBossId,
       startHealth,
       endHealth,
@@ -1942,6 +2038,16 @@ const normalizeStoredScene = (
       transitionSound,
       music,
       bosses: directives,
+      cutscene: (() => {
+        const options = cutsceneOptions(rawPhase.cutscene);
+        if (!options || !isRecord(rawPhase.cutscene)) return null;
+        const cut = rawPhase.cutscene;
+        return { ...options,
+          background: isStoredSceneMedia(cut.background) ? cut.background : null,
+          music: normalizeStoredScenePlaylist(cut.music, options.id, 'music') ?? null,
+          transitionSound: normalizeStoredScenePlaylist(cut.transitionSound, options.id, 'transitionSound') ?? null,
+        };
+      })(),
     }];
   });
   if (phases.length !== rawPhases.length) return null;
@@ -1982,18 +2088,27 @@ const normalizeStoredScene = (
     showPhaseMarkers: value.showPhaseMarkers === true,
     activePhaseIndex,
     activePhaseIds,
-    blackoutActive: false,
+    blackoutActive: value.blackoutActive === true,
+    cutscenePlayback: isRecord(value.cutscenePlayback) &&
+      typeof value.cutscenePlayback.cutsceneId === 'string' &&
+      typeof value.cutscenePlayback.targetPhaseIndex === 'number' &&
+      typeof value.cutscenePlayback.offsetSeconds === 'number' &&
+      Number.isFinite(value.cutscenePlayback.offsetSeconds)
+      ? { cutsceneId: value.cutscenePlayback.cutsceneId,
+          targetPhaseIndex: clampInteger(value.cutscenePlayback.targetPhaseIndex, 1, 7),
+          offsetSeconds: Math.max(0, Math.min(3600, value.cutscenePlayback.offsetSeconds)) } : null,
     templates,
   };
 };
 
 const normalizeStoredLibraryEntry = (
   value: unknown,
+  includeInitial = true,
 ): BossLibraryEntry | null => {
   if (!isStoredLibraryEnvelope(value)) return null;
 
   if (
-    (value.schemaVersion === 5 || value.schemaVersion === 4 || value.schemaVersion === 3 || value.schemaVersion === 2) &&
+    ([2, 3, 4, 5, 6].includes(Number(value.schemaVersion))) &&
     Array.isArray(value.bosses) &&
     value.bosses.length >= 1 &&
     value.bosses.length <= 3 &&
@@ -2004,19 +2119,21 @@ const normalizeStoredLibraryEntry = (
     const bosses = value.bosses.map((boss, index) =>
       normalizeStoredLibraryBoss(
         boss,
-        value.schemaVersion === 5 || value.schemaVersion === 4 || value.schemaVersion === 3,
-        value.schemaVersion === 5 || value.schemaVersion === 4,
+        Number(value.schemaVersion) >= 3,
+        Number(value.schemaVersion) >= 4,
         `boss-${index + 1}`,
       ),
     );
     if (bosses.some((boss) => boss === null)) return null;
     const normalizedBosses = bosses as StoredLibraryBoss[];
-    const scene = value.schemaVersion === 5
+    const scene = Number(value.schemaVersion) >= 5
       ? normalizeStoredScene(value.scene, normalizedBosses)
       : defaultStoredScene(normalizedBosses);
     if (!scene) return null;
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
+      checkpoint: normalizeEncounterCheckpoint(value.checkpoint),
+      initialState: includeInitial && isRecord(value.initialState) ? normalizeStoredLibraryEntry(value.initialState, false) : null,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
@@ -2034,7 +2151,7 @@ const normalizeStoredLibraryEntry = (
     const boss = normalizeStoredLibraryBoss(value.boss, false, false, 'boss-1');
     if (!boss) return null;
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       id: value.id,
       isAutosave: value.isAutosave,
       createdAt: value.createdAt,
@@ -2072,7 +2189,7 @@ const persistBossLibrary = () => {
   const filePath = bossLibraryPath();
   const temporaryPath = `${filePath}.tmp`;
   const contents = JSON.stringify(
-    { schemaVersion: 5, entries: bossLibraryEntries },
+    { schemaVersion: 6, entries: bossLibraryEntries },
     null,
     2,
   );
@@ -2188,15 +2305,18 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
 };
 
 const captureLibraryEntry = (
-  draft: BossLibraryDraft,
   existingEntry: BossLibraryEntry | null,
   isAutosave: boolean,
 ): BossLibraryEntry => {
   const now = new Date().toISOString();
+  const liveMusic = getMusicState();
   const currentTrack = musicTracks.find(
-    (track) => track.id === musicState.currentTrackId,
-  );
-  const bosses = draft.bosses.map((boss) => ({
+    (track) => track.id === liveMusic.currentTrackId,
+  ) ?? musicTracks.find((track) => track.id === musicState.currentTrackId);
+  // Save committed encounter data, never a stale renderer draft.
+  const bosses = battleState.bosses.map((state) => {
+    const boss = { ...state, bossId: state.id, amount: state.controlAmount, description: state.nextAction };
+    return ({
     bossId: boss.bossId,
     bossName: boss.bossName,
     amount: boss.amount,
@@ -2217,41 +2337,9 @@ const captureLibraryEntry = (
     actionSeverity: boss.actionSeverity,
     turnCount: boss.turnCount,
     activeStatuses: boss.activeStatuses,
-  }));
-  const storedScene: StoredScenePlan = {
-    bossSlots: scenePlan.bossSlots.map((slot) => ({ ...slot })),
-    showPhaseMarkers: scenePlan.showPhaseMarkers,
-    activePhaseIndex: scenePlan.activePhaseIndex,
-    activePhaseIds: { ...scenePlan.activePhaseIds },
-    blackoutActive: false,
-    templates: scenePlan.bossSlots.flatMap((slot): StoredLibraryBoss[] => {
-      const boss = battleState.bosses.find((item) => item.id === slot.bossId) ??
-        sceneBossArchive.get(slot.bossId);
-      if (!boss) return [];
-      return [{
-        bossId: boss.id,
-        bossName: boss.bossName,
-        amount: boss.controlAmount,
-        maxHealth: boss.maxHealth,
-        currentHealth: boss.currentHealth,
-        attack: boss.attack,
-        rangedAttack: boss.rangedAttack,
-        defense: boss.defense,
-        rangedDefense: boss.rangedDefense,
-        shield: boss.shield,
-        skills: boss.skills,
-        skillValues: boss.skillValues,
-        skillOverrides: boss.skillOverrides,
-        damageReduction: boss.damageReduction,
-        attacks: boss.attacks,
-        selectedAttackId: boss.selectedAttackId,
-        description: boss.nextAction,
-        actionSeverity: boss.actionSeverity,
-        turnCount: boss.turnCount,
-        activeStatuses: boss.activeStatuses,
-      }];
-    }),
-    phases: scenePlan.phases.map((phase) => {
+    });
+  });
+  const captureOwnerMedia = (phase: ScenePhase | SceneCutscene) => {
       const storedBackground = (): StoredSceneMedia | null => {
         const filePath = sceneMediaPaths.get(sceneMediaKey(phase.id, 'background'));
         const summary = phase.background;
@@ -2288,20 +2376,72 @@ const captureLibraryEntry = (
           revision: summary.revision,
         };
       };
-      return {
-        ...phase,
-        bosses: phase.bosses.map((directive) => ({
-          ...directive,
-          patch: { ...directive.patch },
-        })),
-        background: storedBackground(),
-        transitionSound: storedPlaylist('transitionSound'),
-        music: storedPlaylist('music'),
-      };
+
+    return { background: storedBackground(), transitionSound: storedPlaylist('transitionSound'), music: storedPlaylist('music') };
+  };
+  const storedScene: StoredScenePlan = {
+    bossSlots: scenePlan.bossSlots.map((slot) => ({ ...slot })),
+    showPhaseMarkers: scenePlan.showPhaseMarkers,
+    activePhaseIndex: scenePlan.activePhaseIndex,
+    activePhaseIds: { ...scenePlan.activePhaseIds },
+    blackoutActive: scenePlan.blackoutActive,
+    cutscenePlayback: scenePlan.cutscenePlayback && !(scenePlan.cutscenePlayback.stage === 'ending' && scenePlan.activePhaseIndex === scenePlan.cutscenePlayback.targetPhaseIndex) ? {
+      cutsceneId: scenePlan.cutscenePlayback.cutsceneId,
+      targetPhaseIndex: scenePlan.cutscenePlayback.targetPhaseIndex,
+      offsetSeconds: cutscenePosition(scenePlan.cutscenePlayback),
+    } : pendingRestoredCutscene ? { ...pendingRestoredCutscene } : null,
+    templates: scenePlan.bossSlots.flatMap((slot): StoredLibraryBoss[] => {
+      const boss = battleState.bosses.find((item) => item.id === slot.bossId) ??
+        sceneBossArchive.get(slot.bossId);
+      if (!boss) return [];
+      return [{
+        bossId: boss.id,
+        bossName: boss.bossName,
+        amount: boss.controlAmount,
+        maxHealth: boss.maxHealth,
+        currentHealth: boss.currentHealth,
+        attack: boss.attack,
+        rangedAttack: boss.rangedAttack,
+        defense: boss.defense,
+        rangedDefense: boss.rangedDefense,
+        shield: boss.shield,
+        skills: boss.skills,
+        skillValues: boss.skillValues,
+        skillOverrides: boss.skillOverrides,
+        damageReduction: boss.damageReduction,
+        attacks: boss.attacks,
+        selectedAttackId: boss.selectedAttackId,
+        description: boss.nextAction,
+        actionSeverity: boss.actionSeverity,
+        turnCount: boss.turnCount,
+        activeStatuses: boss.activeStatuses,
+      }];
     }),
+    phases: scenePlan.phases.map((phase) => ({
+      ...phase, ...captureOwnerMedia(phase),
+      cutscene: phase.cutscene ? { ...phase.cutscene, ...captureOwnerMedia(phase.cutscene) } : null,
+    })),
   };
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    checkpoint: {
+      bossRuntime: battleState.bosses.map(({ id, setupStatus, identityPrepared, actionPrepared, applyDamageReduction, actionVersion }) => ({ id, setupStatus, identityPrepared, actionPrepared, applyDamageReduction, actionVersion })),
+      savedAt: Date.now(),
+      battleStarted: battleState.battleStarted,
+      hudVisible: battleState.hudVisible,
+      musicPlaying: hostedSessionServer?.getConnectionPause()?.reason === 'restoring' ? musicState.isPlaying : liveMusic.isPlaying,
+      musicTime: liveMusic.resumeTime ?? musicPlaybackState.currentTime,
+      backgroundTime: getBackgroundState().resumeTime ?? 0,
+      activeBackgroundPath: activeBackgroundFilePath,
+      pendingBlackoutPhaseIndex,
+      queuedPhaseIndexes: [...queuedScenePhaseIndexes],
+      resumeMusicAfterBlackout: resumeMusicAfterManualBlackout,
+      multiplayer: hostedSessionServer?.captureEncounter() ?? {
+        players: restoredEncounterCheckpoint?.multiplayer.players ?? [],
+        turns: structuredClone(encounterTurnState),
+      },
+    },
+    initialState: initialEncounterSnapshot ? (() => { const initial = structuredClone(initialEncounterSnapshot); delete initial.initialState; return initial; })() : null,
     id: existingEntry?.id ?? (isAutosave ? 'autosave' : randomUUID()),
     isAutosave,
     createdAt: existingEntry?.createdAt ?? now,
@@ -2309,7 +2449,7 @@ const captureLibraryEntry = (
     bosses,
     activeBossIndex: Math.max(
       0,
-      draft.bosses.findIndex((boss) => boss.bossId === draft.activeBossId),
+      battleState.bosses.findIndex((boss) => boss.id === battleState.activeBossId),
     ),
     background: configuredBackgroundFilePath
       ? {
@@ -2409,7 +2549,7 @@ const findMissingLibraryFiles = async (
       filePath: slot.filePath,
     });
   });
-  entry.scene.phases.forEach((phase) => {
+  entry.scene.phases.flatMap<StoredScenePhase | StoredSceneCutscene>((phase) => phase.cutscene ? [phase, phase.cutscene] : [phase]).forEach((phase) => {
     if (phase.background) {
       candidates.push({
         key: `scene:${phase.id}:background`,
@@ -2447,7 +2587,7 @@ const findMissingLibraryFiles = async (
 
 const broadcastMusicState = () => {
   const nextState = getMusicState();
-  for (const window of [masterWindow, playerWindow, controlWindow]) {
+  for (const window of [masterWindow, playerWindow, controlWindow, sceneEditorWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('music:state-changed', nextState);
     }
@@ -2637,28 +2777,6 @@ const restoreMusicDuck = () => {
   publishMusicDuck(event);
 };
 
-const beginTransientMusicDuck = (
-  durationMs: number,
-  soundEffect: EncounterSoundEffect | null = null,
-) => {
-  if (activeMusicDuckId !== null) return false;
-  const event: MusicDuckEvent = {
-    id: ++musicDuckSequence,
-    phase: 'duck',
-    duration: 160,
-    targetVolume: 0.12,
-    soundEffect,
-  };
-  activeMusicDuckId = event.id;
-  publishMusicDuck(event);
-  if (musicDuckRestoreTimer) clearTimeout(musicDuckRestoreTimer);
-  musicDuckRestoreTimer = setTimeout(() => {
-    musicDuckRestoreTimer = null;
-    restoreMusicDuck();
-  }, Math.max(650, Math.min(8_000, Math.ceil(durationMs) + 120)));
-  return true;
-};
-
 const sendSoundboardStop = (stop: SoundboardStop) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
     playerWindow.webContents.send('soundboard:stop', stop);
@@ -2732,15 +2850,9 @@ const publishDiceRollSound = (result?: EncounterRollResult) => {
   if (!soundKind) return;
   const prepared = prepareEncounterSound(soundKind);
   if (!prepared) return;
-  const shouldDuckMusic = soundKind === 'natural-failure' ||
-    soundKind === 'natural-success-player' ||
-    soundKind === 'natural-success-enemy';
-  if (
-    !shouldDuckMusic ||
-    !beginTransientMusicDuck(prepared.durationMs, prepared.encounterEffect)
-  ) {
-    sendEncounterEffect(prepared.encounterEffect);
-  }
+  // Each presentation follows the actual SFX playback, including its media
+  // readiness, instead of restoring from an unrelated host-side timeout.
+  sendEncounterEffect(prepared.encounterEffect);
 };
 
 const stopSoundboardPlayback = (index?: number) => {
@@ -3662,6 +3774,7 @@ const createPlayerWindow = (
   window.on('closed', () => {
     if (playerWindow === window) {
       playerWindow = null;
+      cutsceneCoordinator.updateParticipants(cutsceneParticipants());
       playerWindowReady = false;
       allowPlayerWindowClose = false;
       playerWindowClosePending = false;
@@ -3908,6 +4021,7 @@ const syncLocalEncounterTurns = () => {
   }
   encounterTurnState = {
     ...encounterTurnState,
+    startedAt: encounterTurnState.startedAt ?? Date.now(),
     participants,
     activeParticipantId: nextActiveParticipantId,
     initiativeReady: encounterTurnState.started
@@ -4067,7 +4181,7 @@ const cloneScenePlaylistSummary = (
 });
 
 const getScenePlaylistPhase = (phaseId: string) =>
-  scenePlan.phases.find((phase) => phase.id === phaseId) ?? null;
+  sceneMediaOwners(scenePlan.phases).find((phase) => phase.id === phaseId) ?? null;
 
 const getScenePlaylistSummary = (
   phaseId: string,
@@ -4130,15 +4244,22 @@ const broadcastScenePlaylist = (phaseId: string, slot: SceneAudioSlot) => {
 };
 
 const broadcastScenePlan = () => {
+  scenePlan = { ...scenePlan, mediaRevision: presentationMediaRevision };
   for (const window of [masterWindow, playerWindow, sceneEditorWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send('scene:state-changed', scenePlan);
     }
   }
-  hostedSessionServer?.publishScene(toPublicSceneState(scenePlan));
+  const server = hostedSessionServer;
+  if (server) server.publishScene(toPublicSceneState(scenePlan, (url) => rewriteHostedMediaUrl(url, (id) => server.mediaUrl(id))));
 };
 
-const resetScenePlan = () => {
+const resetScenePlan = (broadcast = true) => {
+  activeMusicOwnerId = null;
+  presentationMediaRevision += 1;
+  cutsceneCoordinator.cancel();
+  if (cutsceneFinishTimer) clearTimeout(cutsceneFinishTimer);
+  cutsceneFinishTimer = null;
   if (sceneTransitionTimer) clearTimeout(sceneTransitionTimer);
   sceneTransitionTimer = null;
   queuedScenePhaseIndexes.length = 0;
@@ -4153,7 +4274,7 @@ const resetScenePlan = () => {
   sceneBossArchive.clear();
   battleState.bosses.forEach((boss) => sceneBossArchive.set(boss.id, boss));
   scenePlan = createScenePlan(battleState.bosses);
-  broadcastScenePlan();
+  if (broadcast) broadcastScenePlan();
 };
 
 const syncSceneBossSlots = () => {
@@ -4252,6 +4373,40 @@ const normalizeScenePlaylistSummary = (
   };
 };
 
+const clampFadeSeconds = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(10, value)) : 0;
+
+const cutsceneOptions = (value: unknown) => {
+  if (!isRecord(value) || !isSafeSceneIdentifier(value.id)) return null;
+  return {
+    ...createSceneCutscene(value.id),
+    blackoutSeconds: clampFadeSeconds(value.blackoutSeconds ?? value.visualFadeOutSeconds ?? value.transitionDurationSeconds ?? 1),
+    videoVolume: typeof value.videoVolume === 'number' && Number.isFinite(value.videoVolume) ? Math.max(0, Math.min(1, value.videoVolume)) : 0.8,
+    videoMuted: value.videoMuted === true,
+    ...Object.fromEntries(['visualFadeInSeconds', 'visualFadeOutSeconds', 'audioFadeInSeconds', 'audioFadeOutSeconds'].map((key) => [key,
+      typeof value[key] === 'number' && Number.isFinite(value[key]) ? Math.max(0, Math.min(10, value[key] as number)) : undefined])),
+    name: typeof value.name === 'string' ? value.name.slice(0, 60) : 'Cutscene',
+    advanceMode: value.advanceMode === 'automatic' ? 'automatic' as const : 'manual' as const,
+    durationSeconds: typeof value.durationSeconds === 'number' && Number.isFinite(value.durationSeconds)
+      ? Math.max(0.1, Math.min(3600, value.durationSeconds)) : 10,
+    transition: value.transition === 'blackout' ? 'blackout' as const : 'fade' as const,
+    transitionDurationSeconds: typeof value.transitionDurationSeconds === 'number' && Number.isFinite(value.transitionDurationSeconds)
+      ? Math.max(0, Math.min(10, value.transitionDurationSeconds)) : 1,
+  };
+};
+
+const normalizeCutscene = (value: unknown): SceneCutscene | null => {
+  const options = cutsceneOptions(value);
+  if (!options || !isRecord(value)) return null;
+  const background = isRecord(value.background) &&
+    ['image', 'video'].includes(String(value.background.mediaType)) && typeof value.background.name === 'string'
+    ? { configured: true, name: value.background.name.slice(0, 255), mediaType: value.background.mediaType as 'image' | 'video' }
+    : null;
+  return { ...options, background,
+    music: normalizeScenePlaylistSummary(value.music, options.id, 'music') ?? null,
+    transitionSound: normalizeScenePlaylistSummary(value.transitionSound, options.id, 'transitionSound') ?? null,
+  };
+};
+
 const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
   if (
     !isRecord(value) ||
@@ -4314,7 +4469,7 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
       return [{
         bossId: rawDirective.bossId,
         presence: rawDirective.presence as SceneBossDirective['presence'],
-        carryOverflowDamage: rawDirective.carryOverflowDamage !== false,
+        carryOverflowDamage: true,
         patch: normalizeSceneBossPatch(rawDirective.patch),
       }];
     });
@@ -4350,6 +4505,10 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
     return [{
       id: phaseId,
       name: rawPhase.name.trim().slice(0, 60) || 'Fase',
+      visualFadeInSeconds: clampFadeSeconds(rawPhase.visualFadeInSeconds),
+      audioFadeInSeconds: clampFadeSeconds(rawPhase.audioFadeInSeconds),
+      hudFadeInSeconds: clampFadeSeconds(rawPhase.hudFadeInSeconds),
+      hudDelaySeconds: typeof rawPhase.hudDelaySeconds === 'number' && Number.isFinite(rawPhase.hudDelaySeconds) ? Math.max(0, Math.min(60, rawPhase.hudDelaySeconds)) : 0,
       triggerBossId: rawPhase.triggerBossId,
       startHealth: Math.round(rawPhase.startHealth),
       endHealth: Math.round(rawPhase.endHealth),
@@ -4363,10 +4522,13 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
       transitionSound,
       music,
       bosses,
+      cutscene: normalizeCutscene(rawPhase.cutscene),
     }];
   });
   if (phases.length !== value.phases.length) return null;
   if (new Set(phases.map((phase) => phase.id)).size !== phases.length) return null;
+  const mediaOwners = sceneMediaOwners(phases);
+  if (new Set(mediaOwners.map(({ id }) => id)).size !== mediaOwners.length) return null;
   return {
     phases,
     bossSlots,
@@ -4377,6 +4539,7 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
 const saveScenePlan = (value: unknown): SceneSaveResult => {
   const draft = normalizeScenePlanDraft(value);
   if (!draft) return { ok: false, error: 'Os dados da cena são inválidos.' };
+  if (scenePlan.cutscenePlayback) return { ok: false, error: 'Conclua a cutscene antes de salvar a edição da cena.' };
   const rangeError = validateSceneRanges(draft.phases);
   if (rangeError) return { ok: false, error: rangeError };
   const primaryBossId = draft.bossSlots[0]?.bossId;
@@ -4399,7 +4562,6 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
       error: `A Fase 1 deve começar com a vida atual do chefão (${firstTrigger.currentHealth} PV).`,
     };
   }
-  const previousPhases = new Map(scenePlan.phases.map((phase) => [phase.id, phase]));
   const activePhaseId = scenePlan.phases[scenePlan.activePhaseIndex]?.id;
   for (const [index, slot] of draft.bossSlots.entries()) {
     if (!sceneBossArchive.has(slot.bossId)) {
@@ -4412,18 +4574,9 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
   }
   const committedMediaPaths = new Map(sceneMediaPaths);
   const committedPlaylistPaths = new Map(scenePlaylistPaths);
-  scenePlan = {
-    ...scenePlan,
-    bossSlots: draft.bossSlots.map((slot) => ({
-      ...slot,
-      label: draft.phases
-        .map((phase) => phase.bosses.find(
-          (directive) => directive.bossId === slot.bossId,
-        )?.patch.bossName)
-        .find((name): name is string => Boolean(name)) ?? slot.label,
-    })),
-    phases: draft.phases.map((phase) => {
-      const previous = previousPhases.get(phase.id);
+  const previousOwners = new Map(sceneMediaOwners(scenePlan.phases).map((owner) => [owner.id, owner]));
+  const commitOwnerMedia = (phase: ScenePhase | SceneCutscene) => {
+      const previous = previousOwners.get(phase.id);
       const backgroundFor = () => {
         const key = sceneMediaKey(phase.id, 'background');
         if (pendingSceneMediaPaths.has(key)) {
@@ -4465,12 +4618,28 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
         return cloneScenePlaylistSummary(summary);
       };
       return {
-        ...phase,
         background: backgroundFor(),
         transitionSound: playlistFor('transitionSound'),
         music: playlistFor('music'),
       };
-    }),
+
+  };
+  scenePlan = {
+    ...scenePlan,
+    bossSlots: draft.bossSlots.map((slot) => ({
+      ...slot,
+      label: draft.phases
+        .map((phase) => phase.bosses.find(
+          (directive) => directive.bossId === slot.bossId,
+        )?.patch.bossName)
+        .find((name): name is string => Boolean(name)) ?? slot.label,
+    })),
+    phases: draft.phases.map((phase, index) => ({
+      ...phase,
+      ...commitOwnerMedia(phase),
+      cutscene: index < draft.phases.length - 1 && phase.cutscene
+        ? { ...phase.cutscene, ...commitOwnerMedia(phase.cutscene) } : null,
+    })),
     showPhaseMarkers: draft.showPhaseMarkers,
     activePhaseIndex: activePhaseId
       ? Math.max(-1, draft.phases.findIndex((phase) => phase.id === activePhaseId))
@@ -4485,7 +4654,7 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
     })),
     revision: scenePlan.revision + 1,
   };
-  const retainedIds = new Set(scenePlan.phases.map((phase) => phase.id));
+  const retainedIds = new Set(sceneMediaOwners(scenePlan.phases).map((phase) => phase.id));
   for (const key of committedMediaPaths.keys()) {
     if (!retainedIds.has(key.split(':')[0])) committedMediaPaths.delete(key);
   }
@@ -4499,11 +4668,12 @@ const saveScenePlan = (value: unknown): SceneSaveResult => {
   pendingSceneMediaPaths.clear();
   pendingScenePlaylists.clear();
   applySavedSceneMediaImmediately();
+  presentationMediaRevision += 1;
   broadcastScenePlan();
   return { ok: true, state: scenePlan };
 };
 
-const activatePhaseMusic = (phase: ScenePhase, playImmediately = true) => {
+const activatePhaseMusic = (phase: ScenePhase, playImmediately = true, elapsed = 0) => {
   const playlist = phase.music;
   if (!playlist || playlist.tracks.length === 0) return;
   const nextTracks = playlist.tracks.flatMap((track): InternalMusicTrack[] => {
@@ -4513,23 +4683,25 @@ const activatePhaseMusic = (phase: ScenePhase, playImmediately = true) => {
     if (!filePath) return [];
     musicTrackSequence += 1;
     return [{
-      id: String(musicTrackSequence),
+      id: track.id,
       name: track.name,
       filePath,
       duration: track.duration,
     }];
   });
   if (nextTracks.length === 0) return;
+  activeMusicOwnerId = phase.id;
   musicTracks.splice(0, musicTracks.length, ...nextTracks);
   const selectedIndex = Math.max(
     0,
     playlist.tracks.findIndex((track) => track.id === playlist.currentTrackId),
   );
-  const track = nextTracks[Math.min(selectedIndex, nextTracks.length - 1)];
+  const resumed = playlistPosition(playlist, elapsed);
+  const track = nextTracks.find((item) => item.id === resumed.track?.id) ?? nextTracks[Math.min(selectedIndex, nextTracks.length - 1)];
   musicState = {
     ...musicState,
     currentTrackId: track.id,
-    isPlaying: playImmediately && battleState.battleStarted,
+    isPlaying: playImmediately && battleState.battleStarted && (elapsed === 0 || Boolean(resumed.track)),
     loop: playlist.loop,
     volume: playlist.volume,
     muted: playlist.muted,
@@ -4537,6 +4709,7 @@ const activatePhaseMusic = (phase: ScenePhase, playImmediately = true) => {
     revision: musicState.revision + 1,
   };
   resetMusicPlayback(track.id);
+  if (elapsed > 0) musicPlaybackState = { ...musicPlaybackState, currentTime: resumed.time };
   broadcastMusicState();
 };
 
@@ -4565,6 +4738,7 @@ const resolveSceneMediaPhase = (
 const activateSceneMediaForPhase = (
   phaseIndex: number,
   playMusicImmediately: boolean,
+  elapsed = 0,
 ) => {
   const backgroundPhase = resolveSceneMediaPhase(phaseIndex, 'background');
   const backgroundPath = backgroundPhase
@@ -4583,7 +4757,7 @@ const activateSceneMediaForPhase = (
   broadcastBattleState();
 
   const musicPhase = resolveSceneMediaPhase(phaseIndex, 'music');
-  if (musicPhase) activatePhaseMusic(musicPhase, playMusicImmediately);
+  if (musicPhase) activatePhaseMusic(musicPhase, playMusicImmediately, elapsed);
 };
 
 function applySavedSceneMediaImmediately() {
@@ -4594,7 +4768,7 @@ function applySavedSceneMediaImmediately() {
   activateSceneMediaForPhase(phaseIndex, battleState.battleStarted);
 }
 
-const applyScenePhase = (phaseIndex: number) => {
+const applyScenePhase = (phaseIndex: number, musicElapsed = 0, entranceAt = Date.now(), visualEntranceAt = entranceAt) => {
   const phase = scenePlan.phases[phaseIndex];
   if (!phase) return;
   battleState.bosses.forEach((boss) => sceneBossArchive.set(boss.id, boss));
@@ -4623,11 +4797,7 @@ const applyScenePhase = (phaseIndex: number) => {
       continue;
     }
     const patched = applySceneBossPatch(boss, directive.patch);
-    const currentHealth = phaseIndex === 0 || entering
-      ? patched.currentHealth
-      : directive.patch.currentHealth === undefined
-        ? patched.currentHealth
-        : Math.min(boss.currentHealth, patched.currentHealth);
+    const currentHealth = patched.currentHealth;
     currentById.set(directive.bossId, {
       ...patched,
       setupStatus: 'ready',
@@ -4652,10 +4822,10 @@ const applyScenePhase = (phaseIndex: number) => {
       : bosses[0].id,
     revision: battleState.revision + 1,
   };
-  activateSceneMediaForPhase(phaseIndex, phaseIndex > 0);
   scenePlan = {
     ...scenePlan,
     activePhaseIndex: phaseIndex,
+    phaseEntrance: { phaseId: phase.id, startedAt: entranceAt, visualStartedAt: visualEntranceAt, visualSeconds: phase.visualFadeInSeconds ?? 0, audioSeconds: phase.audioFadeInSeconds ?? 0, hudDelaySeconds: phase.hudDelaySeconds ?? 0, hudFadeInSeconds: phase.hudFadeInSeconds ?? 0 },
     activePhaseIds: Object.fromEntries(
       scenePlan.bossSlots.map((slot) => [slot.bossId, phase.id]),
     ),
@@ -4666,9 +4836,120 @@ const applyScenePhase = (phaseIndex: number) => {
     }),
     revision: scenePlan.revision + 1,
   };
+  // Publish the envelope before the transport starts, avoiding a full-volume
+  // first frame while the renderer is waiting for the scene notification.
+  broadcastScenePlan();
+  activateSceneMediaForPhase(phaseIndex, battleState.battleStarted, musicElapsed);
   broadcastBattleState();
   broadcastScenePlan();
 };
+
+const cutsceneParticipants = () => [
+  ...(playerWindow && !playerWindow.isDestroyed() ? ['electron-player'] : []),
+  ...(hostedSessionPresence?.players.map(({ id }) => id) ?? []),
+];
+
+const acknowledgeCutscene = (id: string, participant: string, duration: number | null) => {
+  const current = scenePlan.cutscenePlayback;
+  if (!current || current.id !== id || current.stage !== 'loading') return;
+  if (!cutsceneParticipants().includes(participant)) return;
+  if (duration !== null && Number.isFinite(duration) && duration > 0 && duration <= 3600) {
+    scenePlan = { ...scenePlan, cutscenePlayback: { ...current, durationSeconds: duration } };
+  }
+  cutsceneCoordinator.acknowledge(id, participant);
+};
+
+const beginCutscene = (phaseIndex: number, offsetSeconds = 0) => {
+  const cutscene = scenePlan.phases[phaseIndex - 1]?.cutscene;
+  if (!cutscene) return false;
+  cutsceneCoordinator.cancel();
+  if (cutsceneFinishTimer) clearTimeout(cutsceneFinishTimer);
+  sceneTransitioning = true;
+  const playback: CutscenePlayback = {
+    id: randomUUID(), cutsceneId: cutscene.id, targetPhaseIndex: phaseIndex,
+    stage: 'loading', startedAt: null, offsetSeconds,
+    durationSeconds: cutscene.durationSeconds, advanceMode: cutscene.advanceMode,
+    videoVolume: cutscene.videoVolume, videoMuted: cutscene.videoMuted,
+    backgroundUrl: cutscene.background && sceneMediaPaths.has(sceneMediaKey(cutscene.id, 'background'))
+      ? `boss-media://scene-background/${encodeURIComponent(cutscene.id)}` : null,
+    mediaType: cutscene.background?.mediaType === 'video' ? 'video' : 'image',
+    music: cutscene.music, sound: cutscene.transitionSound,
+    nextMusic: resolveSceneMediaPhase(phaseIndex, 'music')?.music ?? null,
+    nextMusicOwnerId: resolveSceneMediaPhase(phaseIndex, 'music')?.id ?? null,
+    nextAudioFadeInSeconds: scenePlan.phases[phaseIndex]?.audioFadeInSeconds ?? 0,
+    visualFadeInSeconds: cutsceneFade(cutscene, 'visual', 'in'),
+    visualFadeOutSeconds: cutsceneFade(cutscene, 'visual', 'out'),
+    blackoutSeconds: cutsceneBlackoutSeconds(cutscene),
+    audioFadeInSeconds: cutsceneFade(cutscene, 'audio', 'in'),
+    audioFadeOutSeconds: cutsceneFade(cutscene, 'audio', 'out'),
+    transition: cutscene.transition, transitionDurationSeconds: cutscene.transitionDurationSeconds,
+  };
+  scenePlan = { ...scenePlan, blackoutActive: false, cutscenePlayback: playback, revision: scenePlan.revision + 1 };
+  cutsceneCoordinator.prepare(playback.id, cutsceneParticipants(), () => {
+    const current = scenePlan.cutscenePlayback;
+    if (!current || current.id !== playback.id) return;
+    const worstPing = Math.max(0, ...(hostedSessionPresence?.players.map(({ latencyMs }) => latencyMs ?? 0) ?? []));
+    const lead = Math.max(750, Math.min(10_000, worstPing * 2 + 500));
+    const startedAt = Date.now() + lead;
+    scenePlan = { ...scenePlan, cutscenePlayback: { ...current, stage: 'playing', startedAt }, revision: scenePlan.revision + 1 };
+    broadcastScenePlan();
+    if (sceneTransitionTimer) clearTimeout(sceneTransitionTimer);
+    sceneTransitionTimer = setTimeout(() => {
+      sceneTransitionTimer = null;
+      if (scenePlan.cutscenePlayback?.id === current.id) broadcastMusicState();
+    }, lead + cutsceneFade(current, 'audio', 'in') * 1000);
+    if (current.advanceMode === 'automatic') {
+      const endingAt = startedAt + Math.max(0, (current.durationSeconds - current.offsetSeconds) * 1000);
+      cutsceneFinishTimer = setTimeout(() => finishCutscene(playback.id, endingAt), Math.max(0, endingAt - Date.now() - lead));
+    }
+  });
+  broadcastScenePlan();
+  return true;
+};
+
+const finishCutscene = (expectedId?: string, scheduledEndingAt?: number) => {
+  const current = scenePlan.cutscenePlayback;
+  if (!current || (expectedId && current.id !== expectedId) || current.stage === 'ending') return false;
+  cutsceneCoordinator.cancel();
+  if (cutsceneFinishTimer) clearTimeout(cutsceneFinishTimer);
+  const duration = Math.max(cutsceneBlackoutSeconds(current), cutsceneFade(current, 'audio', 'out')) * 1000;
+  const lead = Math.min(10_000, Math.max(500, ...(hostedSessionPresence?.players ?? []).map((player) => (player.latencyMs ?? 0) * 2 + 500)));
+  const endingAt = scheduledEndingAt ?? Date.now() + lead;
+  scenePlan = { ...scenePlan, cutscenePlayback: { ...current, stage: 'ending', endingAt }, revision: scenePlan.revision + 1 };
+  broadcastScenePlan();
+  cutsceneFinishTimer = setTimeout(() => {
+    if (scenePlan.cutscenePlayback?.id !== current.id) return;
+    // The next phase starts at the media boundary, not after the fade tail.
+    applyScenePhase(current.targetPhaseIndex, 0, endingAt, endingAt + cutsceneBlackoutSeconds(current) * 1000);
+    broadcastMusicState();
+    pendingScenePhaseIndexes.delete(current.targetPhaseIndex);
+    cutsceneFinishTimer = setTimeout(() => {
+      cutsceneFinishTimer = null;
+      if (scenePlan.cutscenePlayback?.id !== current.id) return;
+      const outgoing = scenePlan.cutscenePlayback;
+      scenePlan = { ...scenePlan, cutscenePlayback: null, revision: scenePlan.revision + 1 };
+      // Release the cutscene's decoder to the handoff before publishing the
+      // regular music transport. IPC/web messages preserve this ordering.
+      broadcastScenePlan();
+      const musicPhase = resolveSceneMediaPhase(current.targetPhaseIndex, 'music');
+      if (musicPhase) activatePhaseMusic(musicPhase, outgoing.nextMusicTransport?.playing !== false, cutsceneNextMusicPosition(outgoing));
+      sceneTransitioning = false;
+      processScenePhaseQueue();
+    }, duration);
+  }, Math.max(0, endingAt - Date.now()));
+  return true;
+};
+
+ipcMain.handle('scene:continue-cutscene', (event) => isMasterSender(event.sender.id) && finishCutscene());
+ipcMain.handle('presentation:media', (event) => {
+  assertAuthorizedIpcSender(isPlayerSender(event.sender.id));
+  return createPresentationSourceUrls().map((url) => `${url}${url.includes('?') ? '&' : '?'}warm=${presentationMediaRevision}`);
+});
+ipcMain.on('scene:cutscene-ready', (event, id: unknown, duration: unknown) => {
+  if (!isPlayerSender(event.sender.id) || typeof id !== 'string') return;
+  if (duration !== null && (typeof duration !== 'number' || !Number.isFinite(duration))) return;
+  acknowledgeCutscene(id, 'electron-player', duration as number | null);
+});
 
 const processScenePhaseQueue = () => {
   if (sceneTransitioning) return;
@@ -4682,6 +4963,10 @@ const processScenePhaseQueue = () => {
   }
   sceneTransitioning = true;
   const transitionPhase = scenePlan.phases[phaseIndex - 1] ?? phase;
+  if (transitionPhase.cutscene) {
+    beginCutscene(phaseIndex);
+    return;
+  }
   const durationMs = transitionPhase.transition === 'blackout'
     ? 0
     : Math.round(transitionPhase.transitionDurationSeconds * 1000);
@@ -4938,6 +5223,7 @@ const isBattleStateReader = (senderId: number) =>
 
 const isMusicStateReader = (senderId: number) =>
   isMasterSender(senderId) ||
+  isSceneEditorSender(senderId) ||
   isControlSender(senderId) ||
   isPlayerSender(senderId);
 
@@ -5055,6 +5341,7 @@ ipcMain.handle(
     event,
     requested: unknown,
   ): EncounterFormulaRollResult => {
+    if (hostedSessionServer?.getConnectionPause()) return { ok: false, error: 'Aguarde a reconexão dos jogadores para continuar.' };
     if (!isControlSender(event.sender.id)) {
       return { ok: false, error: 'Ação não autorizada.' };
     }
@@ -5106,6 +5393,10 @@ ipcMain.handle(
       retainedByParticipantId: encounterTurnState.activeParticipantId,
       rollMode: request.rollMode ?? 'sum',
       natural: getEncounterRollNatural(expression, rolled.rolls, request.rollMode),
+      ...(request.targetParticipantId
+        ? { targetParticipantId: request.targetParticipantId }
+        : {}),
+      ...(request.targetName ? { targetName: request.targetName } : {}),
       ...(request.correlationId === undefined
         ? {}
         : { correlationId: request.correlationId }),
@@ -5141,7 +5432,7 @@ ipcMain.handle(
       broadcastEncounterTurnState();
     }
     if (!hostedSessionServer) publishDiceRollSound(result);
-    return { ok: true, total: rolled.total };
+    return { ok: true, total: rolled.total, resultId: result.id };
   },
 );
 ipcMain.handle('app:get-version', (event) => {
@@ -5332,7 +5623,9 @@ ipcMain.handle('scene:open-active-playlist', (event) => {
   const activeIndex = scenePlan.activePhaseIndex >= 0
     ? scenePlan.activePhaseIndex
     : 0;
-  const musicPhase = resolveSceneMediaPhase(activeIndex, 'music');
+  const musicPhase = scenePlan.cutscenePlayback
+    ? getScenePlaylistPhase(scenePlan.cutscenePlayback.cutsceneId)
+    : resolveSceneMediaPhase(activeIndex, 'music');
   if (!musicPhase?.music?.tracks.length) return false;
   pendingActivePlaylistPhaseId = musicPhase.id;
   const editor = createSceneEditorWindow();
@@ -5742,7 +6035,7 @@ ipcMain.on('scene-playlist:dispatch', (
   const activeSceneIndex = scenePlan.activePhaseIndex >= 0
     ? scenePlan.activePhaseIndex
     : 0;
-  const activeMusicPhaseId = resolveSceneMediaPhase(
+  const activeMusicPhaseId = getMusicState().sceneOwnerId ?? resolveSceneMediaPhase(
     activeSceneIndex,
     'music',
   )?.id;
@@ -5760,7 +6053,7 @@ ipcMain.on('scene-playlist:dispatch', (
     };
     broadcastMusicState();
   }
-  const committed = scenePlan.phases.find((phase) => phase.id === phaseId)?.[slot];
+  const committed = getScenePlaylistPhase(phaseId)?.[slot];
   const playbackOnly = [
     'previous',
     'next',
@@ -5783,9 +6076,25 @@ ipcMain.on('scene-playlist:dispatch', (
       ...scenePlan,
       phases: scenePlan.phases.map((phase) => phase.id === phaseId
         ? { ...phase, [slot]: cloneScenePlaylistSummary(next) }
-        : phase),
+        : phase.cutscene?.id === phaseId ? { ...phase, cutscene: { ...phase.cutscene, [slot]: cloneScenePlaylistSummary(next) } } : phase),
       revision: scenePlan.revision + 1,
     };
+    const cut = scenePlan.cutscenePlayback;
+    if (cut?.cutsceneId === phaseId) {
+      scenePlan = { ...scenePlan, cutscenePlayback: { ...cut,
+        [slot === 'music' ? 'music' : 'sound']: cloneScenePlaylistSummary(next),
+        ...(slot === 'music' && ['previous', 'next', 'select-track'].includes(command.type)
+          ? { musicTransport: { position: 0, updatedAt: Date.now(), playing: true } } : {}),
+      } };
+      broadcastMusicState();
+    }
+    if (cut?.nextMusicOwnerId === phaseId && slot === 'music') {
+      scenePlan = { ...scenePlan, cutscenePlayback: { ...scenePlan.cutscenePlayback!, nextMusic: cloneScenePlaylistSummary(next),
+        ...(['previous', 'next', 'select-track'].includes(command.type)
+          ? { nextMusicTransport: { position: 0, updatedAt: Date.now(), playing: true } } : {}),
+      } };
+      broadcastMusicState();
+    }
     if (
       slot === 'music' &&
       activeMusicPhaseId === phaseId &&
@@ -5812,6 +6121,10 @@ ipcMain.handle('library:has-entries', (event) => {
 });
 
 const prepareFreshEncounter = () => {
+  initialEncounterSnapshot = null;
+  restoredEncounterCheckpoint = null;
+  playerHudState = [];
+  encounterTurnState = emptyEncounterTurnState();
   appUndoHistory.length = 0;
   lastAppUndoKey = null;
   lastAppUndoRecordedAt = 0;
@@ -5922,6 +6235,11 @@ ipcMain.handle('multiplayer:approve-player', (event, requestId: unknown) => {
     return false;
   }
   return hostedSessionServer?.approveJoinRequest(requestId) ?? false;
+});
+
+ipcMain.handle('multiplayer:kick-player', (event, playerId: unknown) => {
+  if (!isMasterSender(event.sender.id) || typeof playerId !== 'string' || playerId.length > 128) return false;
+  return hostedSessionServer?.kickPlayer(playerId) ?? false;
 });
 
 ipcMain.handle(
@@ -6319,11 +6637,12 @@ ipcMain.handle(
       };
     }
 
+    await initialEncounterSheetsReady;
     const entry = captureLibraryEntry(
-      draft,
       mode === 'overwrite' ? linkedEntry : null,
       false,
     );
+    if (hostedSessionServer && entry.checkpoint) entry.checkpoint.multiplayer = await hostedSessionServer.includeCharacterSheets(entry.checkpoint.multiplayer);
     const previousEntries = bossLibraryEntries;
     bossLibraryEntries = linkedEntry && mode === 'overwrite'
       ? bossLibraryEntries.map((item) => item.id === linkedEntry.id ? entry : item)
@@ -6353,7 +6672,9 @@ ipcMain.handle(
 
     const currentAutosave =
       bossLibraryEntries.find((entry) => entry.isAutosave) ?? null;
-    const entry = captureLibraryEntry(draft, currentAutosave, true);
+    await initialEncounterSheetsReady;
+    const entry = captureLibraryEntry(currentAutosave, true);
+    if (hostedSessionServer && entry.checkpoint) entry.checkpoint.multiplayer = await hostedSessionServer.includeCharacterSheets(entry.checkpoint.multiplayer);
     const previousEntries = bossLibraryEntries;
     bossLibraryEntries = currentAutosave
       ? bossLibraryEntries.map((item) => item.id === currentAutosave.id ? entry : item)
@@ -6406,6 +6727,9 @@ const restoreLibraryEntry = (
   entry: BossLibraryEntry,
   missingKeys: Set<string>,
 ): BossLibraryLoaded => {
+  pendingRestoredCutscene = null;
+  initialEncounterSnapshot = entry.initialState ? structuredClone(entry.initialState) : null;
+  const checkpoint = entry.checkpoint ?? null;
   pendingHealthTimers.forEach(clearTimeout);
   pendingHealthTimers.clear();
   clearPendingLocalCombatImpacts();
@@ -6454,6 +6778,7 @@ const restoreLibraryEntry = (
       activeStatuses: reconcileStatusIncompatibilities(
         normalizeActiveStatuses(storedBoss.activeStatuses),
       ),
+      ...checkpoint?.bossRuntime?.find(({ id }) => id === storedBoss.bossId),
     };
   });
   const activeBossIndex = Math.min(
@@ -6470,8 +6795,8 @@ const restoreLibraryEntry = (
       entry.background && !missingKeys.has('background')
         ? entry.background.name
         : null,
-    battleStarted: false,
-    hudVisible: true,
+    battleStarted: checkpoint?.battleStarted ?? entry.scene.activePhaseIndex >= 0,
+    hudVisible: checkpoint?.hudVisible ?? true,
     revision: battleState.revision + 1,
   };
   configuredBackgroundFilePath =
@@ -6482,10 +6807,10 @@ const restoreLibraryEntry = (
   activeBackgroundFilePath = configuredBackgroundFilePath;
   pendingBackgroundChange = null;
   backgroundRevision += 1;
-  resetScenePlan();
+  resetScenePlan(false);
   sceneMediaPaths.clear();
   scenePlaylistPaths.clear();
-  const restoredScenePhases: ScenePhase[] = entry.scene.phases.map((phase) => {
+  const restoreOwnerMedia = (phase: StoredScenePhase | StoredSceneCutscene) => {
     const restoreBackground = (): ScenePhase['background'] => {
       const media = phase.background;
       if (!media || missingKeys.has(`scene:${phase.id}:background`)) return null;
@@ -6526,24 +6851,20 @@ const restoreLibraryEntry = (
         revision: playlist.revision ?? 0,
       };
     };
-    return {
-      ...phase,
-      bosses: phase.bosses.map((directive) => ({
-        ...directive,
-        patch: { ...directive.patch },
-      })),
-      background: restoreBackground(),
-      transitionSound: restorePlaylist('transitionSound', phase.transitionSound),
-      music: restorePlaylist('music', phase.music),
-    };
-  });
+
+    return { background: restoreBackground(), transitionSound: restorePlaylist('transitionSound', phase.transitionSound), music: restorePlaylist('music', phase.music) };
+  };
+  const restoredScenePhases: ScenePhase[] = entry.scene.phases.map((phase) => ({
+    ...phase, ...restoreOwnerMedia(phase),
+    cutscene: phase.cutscene ? { ...phase.cutscene, ...restoreOwnerMedia(phase.cutscene) } : null,
+  }));
   scenePlan = {
     bossSlots: entry.scene.bossSlots.map((slot) => ({ ...slot })),
     phases: restoredScenePhases,
     showPhaseMarkers: entry.scene.showPhaseMarkers,
-    activePhaseIndex: -1,
-    activePhaseIds: Object.fromEntries(entry.scene.bossSlots.map((slot) => [slot.bossId, null])),
-    blackoutActive: false,
+    activePhaseIndex: entry.scene.activePhaseIndex,
+    activePhaseIds: { ...entry.scene.activePhaseIds },
+    blackoutActive: entry.scene.blackoutActive,
     revision: scenePlan.revision + 1,
   };
   sceneBossArchive.clear();
@@ -6619,7 +6940,7 @@ const restoreLibraryEntry = (
   ) ?? restoredTracks[0] ?? null;
   musicState = {
     currentTrackId: restoredCurrentTrack?.id ?? null,
-    isPlaying: false,
+    isPlaying: Boolean(restoredCurrentTrack && checkpoint?.musicPlaying),
     loop: Boolean(entry.music.loop),
     volume: Math.max(0, Math.min(1, entry.music.volume)),
     muted: Boolean(entry.music.muted),
@@ -6629,7 +6950,7 @@ const restoreLibraryEntry = (
   };
   musicPlaybackState = {
     trackId: restoredCurrentTrack?.id ?? null,
-    currentTime: 0,
+    currentTime: Math.min(restoredCurrentTrack?.duration ?? 0, checkpoint?.musicTime ?? 0),
     duration: restoredCurrentTrack?.duration ?? 0,
   };
 
@@ -6652,9 +6973,51 @@ const restoreLibraryEntry = (
 
   linkedLibraryEntryId = entry.isAutosave ? null : entry.id;
 
+  const backgroundPhase = resolveSceneMediaPhase(scenePlan.activePhaseIndex, 'background');
+  activeMusicOwnerId = resolveSceneMediaPhase(Math.max(0, scenePlan.activePhaseIndex), 'music')?.id ?? null;
+  activeBackgroundFilePath = backgroundPhase
+    ? sceneMediaPaths.get(sceneMediaKey(backgroundPhase.id, 'background')) ?? null
+    : configuredBackgroundFilePath;
+  battleState = { ...battleState, backgroundName: backgroundPhase?.background?.name ?? configuredBackgroundName };
+  backgroundPlayback = { revision: backgroundRevision, time: checkpoint?.backgroundTime ?? 0 };
+  pendingBlackoutPhaseIndex = checkpoint?.pendingBlackoutPhaseIndex ?? null;
+  resumeMusicAfterManualBlackout = checkpoint?.resumeMusicAfterBlackout ?? false;
+  queuedScenePhaseIndexes.push(...(checkpoint?.queuedPhaseIndexes ?? []));
+  sceneTransitioning = pendingBlackoutPhaseIndex !== null;
+  restoredEncounterCheckpoint = checkpoint ? structuredClone(checkpoint) : null;
+  encounterTurnState = checkpoint
+    ? resumeEncounterTurns(checkpoint.multiplayer.turns, checkpoint.savedAt)
+    : emptyEncounterTurnState();
+  if (restoredEncounterCheckpoint) {
+    restoredEncounterCheckpoint.multiplayer.turns = encounterTurnState;
+    restoredEncounterCheckpoint.savedAt = Date.now();
+  }
+  localEncounterRollSequence = Math.max(0, ...encounterTurnState.rollResults.map((roll) => roll.sequence ?? 0));
+  // Update the battle snapshot first, then atomically restore authoritative
+  // character/turn data; never initialize initiative or replay phase patches.
   broadcastBattleState();
+  if (hostedSessionServer) {
+    hostedSessionServer.restoreEncounter(restoredEncounterCheckpoint?.multiplayer ?? {
+      players: [], turns: encounterTurnState,
+    });
+  } else {
+    playerHudState = [];
+    broadcastPlayerHuds();
+    broadcastEncounterTurnState();
+  }
+
   broadcastBackground();
   broadcastMusicState();
+  playerWindow?.webContents.send('music:seek', musicPlaybackState.currentTime);
+  hostedSessionServer?.publishMusicSeek(musicPlaybackState.currentTime);
+  if (entry.scene.cutscenePlayback && battleState.battleStarted) {
+    const saved = entry.scene.cutscenePlayback;
+    // Opening from the launcher creates the presentation after this function.
+    if (hostedSessionServer?.getConnectionPause()?.reason === 'restoring') pendingRestoredCutscene = saved;
+    else setTimeout(() => beginCutscene(saved.targetPhaseIndex, saved.offsetSeconds), 0);
+  } else if (queuedScenePhaseIndexes.length && !sceneTransitioning && hostedSessionServer?.getConnectionPause()?.reason !== 'restoring') {
+    setTimeout(processScenePhaseQueue, 0);
+  }
   broadcastSoundboardState();
   broadcastScenePlan();
 
@@ -6664,6 +7027,46 @@ const restoreLibraryEntry = (
     bossCount: loadedBosses.length,
   };
 };
+
+const encounterWaitingSnapshot = (entry: BossLibraryEntry): BossLibraryEntry => {
+  const snapshot = structuredClone(entry);
+  delete snapshot.initialState;
+  snapshot.scene = { ...snapshot.scene, activePhaseIndex: -1, blackoutActive: false, cutscenePlayback: null,
+    activePhaseIds: Object.fromEntries(snapshot.scene.bossSlots.map((slot) => [slot.bossId, null])) };
+  snapshot.bosses.forEach((boss) => { boss.turnCount = 0; });
+  if (snapshot.checkpoint) {
+    Object.assign(snapshot.checkpoint, { savedAt: Date.now(), battleStarted: false, hudVisible: true, musicPlaying: false,
+      musicTime: 0, backgroundTime: 0, pendingBlackoutPhaseIndex: null, queuedPhaseIndexes: [], resumeMusicAfterBlackout: false });
+    snapshot.checkpoint.multiplayer = { players: snapshot.checkpoint.multiplayer.players.map((player) => ({
+      ...player, actions: { free: true, movement: true, standard: true }, usedActionIds: [],
+    })), turns: emptyEncounterTurnState() };
+  }
+  return snapshot;
+};
+
+ipcMain.handle('encounter:reset', async (event) => {
+  if (!isMasterSender(event.sender.id)) return false;
+  await initialEncounterSheetsReady;
+  let initial = initialEncounterSnapshot;
+  if (!initial) {
+    // Older saves have no baseline. Use the configured first phase, never generic defaults.
+    initial = captureLibraryEntry(null, false);
+    const first = initial.scene.phases[0];
+    initial.bosses = initial.bosses.map((boss) => {
+      const patch = first?.bosses.find((item) => item.bossId === boss.bossId)?.patch ?? {};
+      return { ...boss, ...patch, currentHealth: patch.currentHealth ?? patch.maxHealth ?? boss.maxHealth,
+        description: patch.nextAction ?? boss.description, activeStatuses: [], turnCount: 0 };
+    });
+  }
+  const baseline = encounterWaitingSnapshot(initial);
+  const linkedId = linkedLibraryEntryId;
+  rememberAppChange();
+  const loaded = restoreLibraryEntry(baseline, new Set());
+  initialEncounterSnapshot = baseline;
+  linkedLibraryEntryId = linkedId;
+  masterWindow?.webContents.send('library:boss-loaded', loaded);
+  return true;
+});
 
 ipcMain.handle(
   'library:load-boss',
@@ -6824,9 +7227,9 @@ ipcMain.handle(
         return { ok: false, error: 'Mídia de fase inválida.' };
       }
       const mediaSlot = rawSlot as SceneMediaSlot;
-      const phaseExists = entry.scene.phases.some((phase) => phase.id === phaseId);
+      const phaseExists = entry.scene.phases.some((phase) => phase.id === phaseId || phase.cutscene?.id === phaseId);
       if (!phaseExists) return { ok: false, error: 'Fase salva inválida.' };
-      const phases = entry.scene.phases.map((phase): StoredScenePhase => {
+      const replaceOwner = <T extends StoredScenePhase | StoredSceneCutscene>(phase: T): T => {
         if (phase.id !== phaseId) return phase;
         if (mediaSlot === 'background') {
           return {
@@ -6855,7 +7258,11 @@ ipcMain.handle(
               : track),
           },
         };
-      });
+      };
+      const phases = entry.scene.phases.map((phase) => ({
+        ...replaceOwner(phase),
+        cutscene: phase.cutscene ? replaceOwner(phase.cutscene) : null,
+      }));
       updatedEntry = {
         ...entry,
         scene: { ...entry.scene, phases },
@@ -6898,11 +7305,58 @@ ipcMain.handle('music:get-state', (event): MusicState => {
   assertAuthorizedIpcSender(isMusicStateReader(event.sender.id));
   return getMusicState();
 });
+ipcMain.handle('scene:music-control', (event, ownerId: unknown, command: unknown) => {
+  if (!isSceneEditorSender(event.sender.id) || typeof ownerId !== 'string' || !isRecord(command)) return false;
+  if (!battleState.battleStarted || scenePlan.blackoutActive) return false;
+  const state = getMusicState();
+  if (state.sceneOwnerId !== ownerId || !state.tracks.length) return false;
+  if (command.type !== 'toggle' && !(command.type === 'seek' && typeof command.time === 'number' && Number.isFinite(command.time))) return false;
+  const cut = scenePlan.cutscenePlayback;
+  if (state.externalPlayback && cut) {
+    const exiting = cut.stage === 'ending' && Date.now() >= (cut.endingAt ?? Infinity);
+    const playlist = exiting ? cut.nextMusic ?? null : cut.music;
+    const elapsed = exiting ? cutsceneNextMusicPosition(cut) : cutsceneMusicPosition(cut);
+    const current = playlistPosition(playlist, elapsed);
+    const basePosition = current.track ? elapsed - current.time : 0;
+    const duration = current.track?.duration ?? playlist?.tracks[0]?.duration ?? 0;
+    const position = basePosition +
+      (command.type === 'seek' ? Math.max(0, Math.min(duration, command.time as number)) : current.time);
+    scenePlan = { ...scenePlan, cutscenePlayback: { ...cut, [exiting ? 'nextMusicTransport' : 'musicTransport']: {
+      position, updatedAt: Date.now(), playing: command.type === 'toggle' ? !state.isPlaying : state.isPlaying,
+    } }, revision: scenePlan.revision + 1 };
+    broadcastScenePlan();
+  } else if (command.type === 'toggle') {
+    musicState = { ...musicState, isPlaying: !musicState.isPlaying, revision: musicState.revision + 1 };
+  } else {
+    const time = Math.max(0, Math.min(musicTracks.find((track) => track.id === state.currentTrackId)?.duration ?? 0, command.time as number));
+    musicPlaybackState = { ...musicPlaybackState, currentTime: time };
+    playerWindow?.webContents.send('music:seek', time);
+    hostedSessionServer?.publishMusicSeek(time);
+  }
+  broadcastMusicState();
+  return true;
+});
 ipcMain.on('music:control', (event, value: unknown) => {
   if (!isEncounterControllerSender(event.sender.id) || !isMusicControlCommand(value)) {
     return;
   }
   const command = value as MusicControlCommand;
+  const cut = scenePlan.cutscenePlayback;
+  if (cut?.music && getMusicState().externalPlayback && getMusicState().sceneOwnerId === cut.cutsceneId) {
+    const next = { ...cut.music,
+      volume: command.type === 'set-volume' ? Math.max(0, Math.min(1, command.volume)) : cut.music.volume,
+      muted: command.type === 'set-muted' ? command.muted : cut.music.muted,
+      loop: command.type === 'set-loop' ? command.loop : cut.music.loop,
+      revision: cut.music.revision + 1 };
+    const pending = pendingScenePlaylists.get(sceneMediaKey(cut.cutsceneId, 'music'));
+    if (pending) pending.summary = { ...pending.summary, volume: next.volume, muted: next.muted, loop: next.loop };
+    scenePlan = { ...scenePlan, cutscenePlayback: { ...cut, music: next },
+      phases: scenePlan.phases.map((phase) => phase.cutscene?.id === cut.cutsceneId
+        ? { ...phase, cutscene: { ...phase.cutscene, music: next } } : phase), revision: scenePlan.revision + 1 };
+    broadcastScenePlaylist(cut.cutsceneId, 'music');
+    broadcastScenePlan(); broadcastMusicState();
+    return;
+  }
   const nextVolume = command.type === 'set-volume'
     ? Math.max(0, Math.min(1, command.volume))
     : musicState.volume;
@@ -6939,6 +7393,7 @@ ipcMain.on('music:control', (event, value: unknown) => {
     }
     scenePlan = {
       ...scenePlan,
+      ...(cut?.nextMusicOwnerId === musicPhase.id && cut.nextMusic ? { cutscenePlayback: { ...cut, nextMusic: { ...cut.nextMusic, volume: nextVolume, muted: nextMuted, loop: nextLoop } } } : {}),
       phases: scenePlan.phases.map((phase) => phase.id === musicPhase.id
         ? {
             ...phase,
@@ -7569,6 +8024,16 @@ ipcMain.on('presentation:ready', (event) => {
   controlWindow?.showInactive();
 });
 
+ipcMain.on('background:progress', (event, url: unknown, time: unknown) => {
+  if (!isPlayerSender(event.sender.id) || url !== getBackgroundState().url || typeof time !== 'number' || !Number.isFinite(time) || time < 0) return;
+  backgroundPlayback = { revision: backgroundRevision, time };
+});
+ipcMain.handle('multiplayer:get-pending-boss-damage', (event, bossId: unknown) => {
+  assertAuthorizedIpcSender(isControlSender(event.sender.id));
+  if (typeof bossId !== 'string' || !battleState.bosses.some(({ id }) => id === bossId)) return null;
+  return hostedSessionServer?.getPendingBossDamage(bossId) ?? null;
+});
+
 ipcMain.on('background:load-error', (event, message: unknown) => {
   if (
     !playerWindow ||
@@ -7624,6 +8089,13 @@ const clampSceneOverflowDamage = (
 const restoreLastAppChange = () => {
   const snapshot = appUndoHistory.pop();
   if (!snapshot) return false;
+  const previousHistoryIds = new Set(snapshot.historyEntryIds ?? []);
+  const revertedEntries = (encounterTurnState.history ?? []).filter((entry) =>
+    entry.kind !== 'round' &&
+    entry.kind !== 'turn' &&
+    entry.kind !== 'system' &&
+    !previousHistoryIds.has(entry.id),
+  );
   lastAppUndoKey = null;
   lastAppUndoRecordedAt = 0;
 
@@ -7670,6 +8142,7 @@ const restoreLastAppChange = () => {
   configuredBackgroundName = snapshot.configuredBackgroundName;
   pendingBackgroundChange = structuredClone(snapshot.pendingBackgroundChange);
   linkedLibraryEntryId = snapshot.linkedLibraryEntryId;
+  initialEncounterSnapshot = snapshot.initialEncounterSnapshot;
   backgroundRevision += 1;
   musicTracks.splice(
     0,
@@ -7701,6 +8174,31 @@ const restoreLastAppChange = () => {
   broadcastSoundboardState();
   broadcastEncounterEffectsState();
   persistEncounterEffectsSettingsSafely();
+  const revertedLabel = revertedEntries.length > 0
+    ? revertedEntries.map(({ actorName, label }) => `${actorName}: ${label}`).join(', ')
+    : 'a última alteração';
+  const undoEntry: EncounterHistoryEntry = {
+    id: `history:undo:${randomUUID()}`,
+    kind: 'system',
+    round: encounterTurnState.round,
+    turnParticipantId: encounterTurnState.activeParticipantId,
+    actorParticipantId: null,
+    actorName: 'Mestre',
+    label: 'Desfazer',
+    detail: `O mestre reverteu ${revertedLabel}.`,
+    createdAt: Date.now(),
+    revertsEntryIds: revertedEntries.map(({ id }) => id),
+  };
+  if (hostedSessionServer) {
+    hostedSessionServer.publishHistoryEntry(undoEntry);
+  } else {
+    encounterTurnState = {
+      ...encounterTurnState,
+      history: [...(encounterTurnState.history ?? []), undoEntry],
+      revision: encounterTurnState.revision + 1,
+    };
+    broadcastEncounterTurnState();
+  }
   return true;
 };
 
@@ -7800,9 +8298,6 @@ const applyHealthMutation = (
       shieldTo: nextBoss.shield,
     };
     const preparedSound = prepareEncounterMechanicSound(effect);
-    if (preparedSound && effect.intensity === 'critical') {
-      beginTransientMusicDuck(preparedSound.durationMs);
-    }
     if (playerWindow && !playerWindow.isDestroyed()) {
       enqueueLocalCombatImpact(
         battleState,
@@ -7837,6 +8332,8 @@ const applyHealthMutation = (
 ipcMain.handle(
   'health:sequence',
   (event, request: HealthSequenceRequest): HealthSequenceResult => {
+    if (hostedSessionServer?.getConnectionPause()) return { ok: false, error: 'Aguarde a reconexão dos jogadores para continuar.' };
+    if (scenePlan.cutscenePlayback) return { ok: false, error: 'Conclua a cutscene antes de alterar a vida.' };
     if (!isEncounterControllerSender(event.sender.id)) {
       return { ok: false, error: 'Ação não autorizada.' };
     }
@@ -7851,7 +8348,12 @@ ipcMain.handle(
       request.hits < 1 ||
       request.hits > 1000 ||
       (request.ignoreDamageReduction !== undefined &&
-        typeof request.ignoreDamageReduction !== 'boolean')
+        typeof request.ignoreDamageReduction !== 'boolean') ||
+      (request.relatedRollId !== undefined && (
+        typeof request.relatedRollId !== 'string' ||
+        request.relatedRollId.length < 1 ||
+        request.relatedRollId.length > 240
+      ))
     ) {
       return { ok: false, error: 'Valor ou quantidade de parcelas inválida.' };
     }
@@ -7881,7 +8383,14 @@ ipcMain.handle(
       ignoreDamageReduction: request.ignoreDamageReduction,
     });
 
-    rememberAppChange();
+    const snapshot = captureAppUndoSnapshot();
+    if (request.relatedRollId) {
+      const relatedHistoryId = `history:${request.relatedRollId}`;
+      snapshot.historyEntryIds = snapshot.historyEntryIds.filter(
+        (id) => id !== relatedHistoryId,
+      );
+    }
+    rememberAppChange(snapshot);
     applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
 
     if (request.hits > 1) {
@@ -8187,6 +8696,15 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   if (!isBattleCommand(command)) {
     return;
   }
+  if (hostedSessionServer?.getConnectionPause() && !['end-battle', 'reset-all', 'select-boss', 'mark-identity-unprepared', 'mark-action-unprepared'].includes(command.type)) return;
+  if (['start-battle', 'end-battle', 'reset-all'].includes(command.type)) {
+    pendingRestoredCutscene = null;
+    cutsceneCoordinator.cancel();
+    if (cutsceneFinishTimer) clearTimeout(cutsceneFinishTimer);
+    cutsceneFinishTimer = null;
+    scenePlan = { ...scenePlan, cutscenePlayback: null };
+    if (command.type === 'reset-all') restoredEncounterCheckpoint = null;
+  }
 
   if (command.type === 'start-turn') {
     beginBossStatusTurn(command.bossId);
@@ -8233,6 +8751,16 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
 
   battleState = applyBattleCommand(battleState, command);
   let backgroundChanged = false;
+  let graveActionEffect: EncounterSoundEffect | null = null;
+
+  if (
+    command.type === 'publish-action' &&
+    command.severity === 'grave' &&
+    command.text.trim()
+  ) {
+    const prepared = prepareEncounterSound('grave-action');
+    graveActionEffect = prepared?.encounterEffect ?? null;
+  }
 
 
   if (command.type === 'commit-background' && pendingBackgroundChange) {
@@ -8257,6 +8785,8 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   }
 
   if (command.type === 'reset-all') {
+    hostedSessionServer?.forgetSavedParticipants();
+    initialEncounterSnapshot = null;
     linkedLibraryEntryId = null;
     pendingHealthTimers.forEach(clearTimeout);
     pendingHealthTimers.clear();
@@ -8304,10 +8834,14 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
     backgroundRevision += 1;
     backgroundChanged = true;
     if (scenePlan.phases[0]) applyScenePhase(0);
+    initialEncounterSnapshot = encounterWaitingSnapshot(captureLibraryEntry(
+      bossLibraryEntries.find((entry) => entry.id === linkedLibraryEntryId) ?? null, false,
+    ));
+    preserveInitialCharacterSheets();
     if (battleMusicStartTimer) clearTimeout(battleMusicStartTimer);
     battleMusicStartTimer = setTimeout(() => {
       battleMusicStartTimer = null;
-      if (!battleState.battleStarted || !musicState.currentTrackId) return;
+      if (!battleState.battleStarted || !musicState.currentTrackId || musicState.isPlaying) return;
       musicState = {
         ...musicState,
         isPlaying: true,
@@ -8355,6 +8889,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
   }
 
   broadcastBattleState();
+  if (graveActionEffect) sendEncounterEffect(graveActionEffect);
   if (backgroundChanged) broadcastBackground();
   if (commandSnapshot) rememberAppChange(commandSnapshot);
 });
@@ -8454,6 +8989,10 @@ app.whenReady().then(async () => {
       if (requestUrl.hostname === 'background') {
         mediaPath = activeBackgroundFilePath;
         errorLabel = 'fundo';
+      } else if (requestUrl.hostname === 'scene-background') {
+        const ownerId = decodeURIComponent(requestUrl.pathname.slice(1));
+        mediaPath = sceneMediaPaths.get(sceneMediaKey(ownerId, 'background')) ?? null;
+        errorLabel = 'fundo da cutscene';
       } else if (requestUrl.hostname === 'audio') {
         const trackId = decodeURIComponent(requestUrl.pathname.slice(1));
         mediaPath =

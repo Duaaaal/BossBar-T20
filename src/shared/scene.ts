@@ -88,6 +88,11 @@ export type SceneBossSlot = {
 };
 
 export type ScenePhase = {
+  hudDelaySeconds?: number;
+  hudFadeInSeconds?: number;
+  visualFadeInSeconds?: number;
+  audioFadeInSeconds?: number;
+  cutscene?: SceneCutscene | null;
   id: string;
   name: string;
   triggerBossId: string;
@@ -103,6 +108,9 @@ export type ScenePhase = {
 };
 
 export type ScenePlan = {
+  phaseEntrance?: { phaseId: string; startedAt: number; visualStartedAt?: number; visualSeconds: number; audioSeconds: number; hudDelaySeconds?: number; hudFadeInSeconds?: number } | null;
+  mediaRevision?: number;
+  cutscenePlayback?: CutscenePlayback | null;
   phases: ScenePhase[];
   bossSlots: SceneBossSlot[];
   showPhaseMarkers: boolean;
@@ -113,6 +121,13 @@ export type ScenePlan = {
 };
 
 export type ScenePhaseDraft = ScenePhase;
+
+export const phaseHudOpacity = (entrance: ScenePlan['phaseEntrance'], now: number) => {
+  if (!entrance) return 1;
+  const elapsed = (now - (entrance.visualStartedAt ?? entrance.startedAt)) / 1000 - (entrance.hudDelaySeconds ?? 0);
+  if (elapsed < 0) return 0;
+  return entrance.hudFadeInSeconds ? Math.min(1, elapsed / entrance.hudFadeInSeconds) : 1;
+};
 
 export type ScenePlanDraft = {
   phases: ScenePhaseDraft[];
@@ -413,4 +428,112 @@ export const applySceneBossPatch = (
     attacks: normalized.attacks ?? boss.attacks,
     selectedAttackId: normalized.selectedAttackId ?? boss.selectedAttackId,
   };
+};
+
+export type SceneCutscene = {
+  blackoutSeconds?: number;
+  visualFadeInSeconds?: number;
+  visualFadeOutSeconds?: number;
+  audioFadeInSeconds?: number;
+  audioFadeOutSeconds?: number;
+  videoVolume?: number;
+  videoMuted?: boolean;
+  id: string;
+  name: string;
+  background: SceneMediaSummary | null;
+  music: ScenePlaylistSummary | null;
+  transitionSound: ScenePlaylistSummary | null;
+  advanceMode: 'manual' | 'automatic';
+  durationSeconds: number;
+  transition: 'fade' | 'blackout';
+  transitionDurationSeconds: number;
+};
+
+export type CutscenePlayback = {
+  blackoutSeconds?: number;
+  visualFadeInSeconds?: number;
+  visualFadeOutSeconds?: number;
+  audioFadeInSeconds?: number;
+  audioFadeOutSeconds?: number;
+  nextMusic?: ScenePlaylistSummary | null;
+  nextMusicOwnerId?: string | null;
+  nextAudioFadeInSeconds?: number;
+  nextMusicTransport?: { position: number; updatedAt: number; playing: boolean };
+  videoVolume?: number;
+  videoMuted?: boolean;
+  musicTransport?: { position: number; updatedAt: number; playing: boolean };
+  endingAt?: number | null;
+  id: string;
+  cutsceneId: string;
+  targetPhaseIndex: number;
+  stage: 'loading' | 'playing' | 'ending';
+  startedAt: number | null;
+  offsetSeconds: number;
+  durationSeconds: number;
+  advanceMode: 'manual' | 'automatic';
+  backgroundUrl: string | null;
+  mediaType: 'image' | 'video';
+  music: ScenePlaylistSummary | null;
+  sound: ScenePlaylistSummary | null;
+  transition: 'fade' | 'blackout';
+  transitionDurationSeconds: number;
+};
+
+export const createSceneCutscene = (id: string): SceneCutscene => ({
+  videoVolume: 0.8, videoMuted: false,
+  id, name: 'Cutscene', background: null, music: null, transitionSound: null,
+  advanceMode: 'manual', durationSeconds: 10, transition: 'fade', transitionDurationSeconds: 1,
+});
+
+export const cutsceneFade = (
+  cutscene: Pick<SceneCutscene, 'transition' | 'transitionDurationSeconds' | 'visualFadeInSeconds' | 'visualFadeOutSeconds' | 'audioFadeInSeconds' | 'audioFadeOutSeconds'>,
+  channel: 'visual' | 'audio', direction: 'in' | 'out',
+) => {
+  if (cutscene.transition !== 'fade') return 0;
+  const key = `${channel}Fade${direction === 'in' ? 'In' : 'Out'}Seconds` as const;
+  const value = cutscene[key] ?? cutscene.transitionDurationSeconds;
+  return Number.isFinite(value) ? Math.max(0, Math.min(10, value)) : 1;
+};
+
+export const cutsceneBlackoutSeconds = (cutscene: { blackoutSeconds?: number; visualFadeOutSeconds?: number; transitionDurationSeconds: number }) => {
+  const duration = cutscene.blackoutSeconds ?? cutscene.visualFadeOutSeconds ?? cutscene.transitionDurationSeconds;
+  return Number.isFinite(duration) ? Math.max(0, Math.min(10, duration)) : 1;
+};
+
+export const sceneMediaOwners = (phases: readonly ScenePhase[]): Array<ScenePhase | SceneCutscene> =>
+  phases.flatMap((phase, index) => phase.cutscene && index < phases.length - 1
+    ? [phase, phase.cutscene] : [phase]);
+
+export const cutsceneMediaUrls = (playback?: CutscenePlayback | null): string[] => playback
+  ? [playback.backgroundUrl, ...(playback.music?.tracks.map((track) => track.url) ?? []),
+    ...(playback.sound?.tracks.map((track) => track.url) ?? []),
+    ...(playback.nextMusic?.tracks.map((track) => track.url) ?? [])].filter((url): url is string => Boolean(url))
+  : [];
+
+export const cutscenePosition = (playback: CutscenePlayback, now = Date.now()) =>
+  playback.offsetSeconds + (playback.startedAt === null ? 0 : Math.max(0, now - playback.startedAt) / 1000);
+
+export const cutsceneMusicPosition = (playback: CutscenePlayback, now = Date.now()) => {
+  const transport = playback.musicTransport;
+  return transport ? Math.max(0, transport.position + (transport.playing ? Math.max(0, now - transport.updatedAt) / 1000 : 0))
+    : cutscenePosition(playback, now);
+};
+
+export const cutsceneNextMusicPosition = (playback: CutscenePlayback, now = Date.now()) => {
+  const transport = playback.nextMusicTransport;
+  return transport ? Math.max(0, transport.position + (transport.playing ? Math.max(0, now - transport.updatedAt) / 1000 : 0))
+    : Math.max(0, now - (playback.endingAt ?? now)) / 1000;
+};
+
+export const playlistPosition = (playlist: ScenePlaylistSummary | null, seconds: number) => {
+  if (!playlist?.tracks.length) return { track: null, time: 0 };
+  const first = Math.max(0, playlist.tracks.findIndex((track) => track.id === playlist.currentTrackId));
+  const tracks = [...playlist.tracks.slice(first), ...playlist.tracks.slice(0, first)];
+  const total = tracks.reduce((sum, track) => sum + track.duration, 0);
+  let time = playlist.loop && total > 0 ? seconds % total : seconds;
+  for (const track of tracks) {
+    if (time < track.duration || track.duration <= 0) return { track, time };
+    time -= track.duration;
+  }
+  return { track: null, time: 0 };
 };

@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+import { connectSfxMusicDucking, sfxMusicDucking } from './sfx-music-ducking';
 import {
   BOSS_CRITICAL_DUCK_FADE_MS,
   BOSS_CRITICAL_IMPACT_MIN_DURATION_MS,
@@ -37,8 +38,15 @@ import {
   escalatingCriticalShakeKeyframes,
 } from './critical-presentation';
 import type { ScenePlan, SceneTransitionEvent } from './shared/scene';
+import { cutsceneFade } from './shared/scene';
+import { PhaseEntrance, PhaseHudEntrance } from './PhaseEntrance';
+import { finishPhaseAudioHandoff, takePhaseAudioHandoff } from './phase-audio-handoff';
+import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback } from './gapless-audio-loop';
+import { CutscenePlayer } from './CutscenePlayer';
+import { warmPresentationMedia, presentationMediaUrl, clearPresentationMedia } from './presentation-media-cache';
 import {
   createUnarmedAttack,
+  actionPointRecoveryFormulas,
   emptyEncounterTurnState,
   formatEncounterDiceRolls,
   type AttackType,
@@ -73,6 +81,7 @@ import {
 } from './StatusRichText';
 import { FightHistory } from './FightHistory';
 import './player.css';
+import './encounter-presence.css';
 import './scrollbars.css';
 
 installDisabledControlTooltips();
@@ -104,6 +113,7 @@ const healthPercent = (current: number, maximum: number) =>
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
 const shieldBreakParticles = Array.from({ length: 24 }, (_, index) => index);
 const noHealthEffects: HealthEffect[] = [];
+const emptyStringSet: ReadonlySet<string> = new Set();
 const splitStatusRows = <Item,>(items: Item[], rowSize = 10) =>
   Array.from({ length: Math.ceil(items.length / rowSize) }, (_, rowIndex) =>
     items.slice(rowIndex * rowSize, (rowIndex + 1) * rowSize),
@@ -886,16 +896,29 @@ const MusicPlayer = ({
   clientPreferences: ClientPresentationPreferences;
 }) => {
   const [music, setMusic] = useState<MusicState | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioMountRef = useRef<HTMLSpanElement>(null);
+  const adoptedRelease = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const audio = new Audio();
+    audio.crossOrigin = 'anonymous';
+    audio.className = 'music-player';
+    audioRef.current = audio;
+    audioMountRef.current?.append(audio);
+    return () => { audioRef.current?.pause(); audioRef.current?.remove(); };
+  }, []);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const muteGainNodeRef = useRef<GainNode | null>(null);
+  const phaseGainRef = useRef<GainNode | null>(null);
+  const phaseEntranceRef = useRef<ScenePlan['phaseEntrance']>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const fadeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fading = useRef(false);
   const duckCompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ducking = useRef(false);
   const activeDuckId = useRef<number | null>(null);
+  const releaseSfxDucking = useRef<(() => void) | null>(null);
   const musicVolumeRef = useRef(0.8);
 
   useEffect(() => {
@@ -915,6 +938,10 @@ const MusicPlayer = ({
   );
   const outputMuted = Boolean(music?.muted || music?.universalMuted);
 
+  useEffect(() => {
+    if (!battle.battleStarted || (!music?.externalPlayback && music?.isPlaying === false)) finishPhaseAudioHandoff();
+  }, [battle.battleStarted, music?.externalPlayback, music?.isPlaying]);
+
   const ensureAudioGraph = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return null;
@@ -924,20 +951,40 @@ const MusicPlayer = ({
       const source = context.createMediaElementSource(audio);
       const gain = context.createGain();
       const muteGain = context.createGain();
+      const phaseGain = context.createGain();
+      const entrance = phaseEntranceRef.current;
+      phaseGain.gain.value = entrance?.audioSeconds ? Math.max(0, Math.min(1, (window.bossAPI.getPresentationTime() - entrance.startedAt) / (entrance.audioSeconds * 1000))) : 1;
       source.connect(gain);
-      gain.connect(muteGain);
+      gain.connect(phaseGain);
+      releaseSfxDucking.current = connectSfxMusicDucking(context, phaseGain, muteGain);
       muteGain.connect(context.destination);
       audio.volume = 1;
       audioContextRef.current = context;
       sourceNodeRef.current = source;
       gainNodeRef.current = gain;
       muteGainNodeRef.current = muteGain;
+      phaseGainRef.current = phaseGain;
     }
 
     if (audioContextRef.current.state === 'suspended') {
       void audioContextRef.current.resume();
     }
     return gainNodeRef.current;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const tick = () => {
+      const entrance = phaseEntranceRef.current;
+      const gain = phaseGainRef.current;
+      if (!gain) return;
+      gain.gain.value = entrance?.audioSeconds ? Math.max(0, Math.min(1, (window.bossAPI.getPresentationTime() - entrance.startedAt) / (entrance.audioSeconds * 1000))) : 1;
+    };
+    const update = (plan: ScenePlan) => { if (active) { phaseEntranceRef.current = plan.phaseEntrance; tick(); } };
+    void window.bossAPI.getScenePlan().then(update);
+    const unsubscribe = window.bossAPI.subscribeScenePlan(update);
+    const timer = setInterval(tick, 25);
+    return () => { active = false; clearInterval(timer); unsubscribe(); };
   }, []);
 
   const setOutputGain = useCallback((volume: number) => {
@@ -958,15 +1005,15 @@ const MusicPlayer = ({
 
   const reportProgress = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || music?.externalPlayback) return;
     window.bossAPI.reportMusicProgress({
       trackId: currentTrack?.id ?? null,
-      currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+      currentTime: Number.isFinite(mediaPlaybackTime(audio)) ? mediaPlaybackTime(audio) : 0,
       duration:
         currentTrack?.duration ||
         (Number.isFinite(audio.duration) ? audio.duration : 0),
     });
-  }, [currentTrack?.duration, currentTrack?.id]);
+  }, [currentTrack?.duration, currentTrack?.id, music?.externalPlayback]);
 
   const stopFade = useCallback(() => {
     if (fadeTimer.current) clearInterval(fadeTimer.current);
@@ -1063,10 +1110,27 @@ const MusicPlayer = ({
   }, [ensureAudioGraph, stopDuck, stopFade]);
 
   useEffect(() => {
-    const audio = audioRef.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let scheduledId = '';
+    const update = (plan: ScenePlan) => {
+      const cut = plan.cutscenePlayback;
+      if (!cut || cut.startedAt === null || scheduledId === cut.id) return;
+      scheduledId = cut.id;
+      const duration = cutsceneFade(cut, 'audio', 'in') * 1000;
+      const elapsed = window.bossAPI.getPresentationTime() - cut.startedAt;
+      timer = setTimeout(() => fadeOut(Math.max(1, duration - Math.max(0, elapsed))), Math.max(0, -elapsed));
+    };
+    void window.bossAPI.getScenePlan().then(update);
+    const unsubscribe = window.bossAPI.subscribeScenePlan(update);
+    return () => { unsubscribe(); if (timer) clearTimeout(timer); };
+  }, [fadeOut]);
+
+  useEffect(() => {
+    let audio = audioRef.current;
     if (!audio) return;
 
-    if (!currentTrack) {
+    if (!currentTrack || music?.externalPlayback) {
+      audio.pause();
       audio.removeAttribute('src');
       audio.load();
       return;
@@ -1074,18 +1138,72 @@ const MusicPlayer = ({
 
     stopFade();
     stopDuck();
-    audio.src = currentTrack.url;
+    const incoming = takePhaseAudioHandoff(currentTrack.id);
+    if (incoming) {
+      audio.pause(); audio.remove();
+      releaseSfxDucking.current?.();
+      if (adoptedRelease.current) adoptedRelease.current();
+      else void audioContextRef.current?.close();
+      audioRef.current = incoming.audio;
+      audioRef.current.className = 'music-player';
+      audioMountRef.current?.append(incoming.audio);
+      audioContextRef.current = incoming.context;
+      sourceNodeRef.current = incoming.source;
+      gainNodeRef.current = incoming.gain;
+      const phaseGain = incoming.context.createGain();
+      const muteGain = incoming.context.createGain();
+      const entrance = phaseEntranceRef.current;
+      phaseGain.gain.value = entrance?.audioSeconds ? Math.max(0, Math.min(1, (window.bossAPI.getPresentationTime() - entrance.startedAt) / (entrance.audioSeconds * 1000))) : 1;
+      incoming.gain.disconnect();
+      incoming.gain.connect(phaseGain);
+      releaseSfxDucking.current = connectSfxMusicDucking(incoming.context, phaseGain, muteGain);
+      muteGain.connect(incoming.context.destination);
+      phaseGainRef.current = phaseGain;
+      muteGainNodeRef.current = muteGain;
+      adoptedRelease.current = incoming.release;
+      incoming.audio.loop = music?.loop ?? false;
+      setOutputMuted(outputMuted);
+      setOutputGain((music?.volume ?? 0.8) * clientPreferences.musicVolume);
+      reportProgress();
+      return;
+    }
+    // A transferred graph is exclusively owned by its decoder. Dispose it
+    // before changing tracks, then create a normal graph for the new source.
+    if (adoptedRelease.current) {
+      releaseSfxDucking.current?.(); releaseSfxDucking.current = null;
+      adoptedRelease.current(); adoptedRelease.current = null;
+      audioContextRef.current = null; sourceNodeRef.current = null;
+      gainNodeRef.current = null; phaseGainRef.current = null; muteGainNodeRef.current = null;
+      audio.remove();
+      audio = new Audio(); audio.crossOrigin = 'anonymous'; audio.className = 'music-player';
+      audioRef.current = audio; audioMountRef.current?.append(audio);
+    }
+    audio.src = presentationMediaUrl(currentTrack.url);
+    audio.loop = music?.loop ?? false;
+    const restorePosition = () => {
+      const time = music?.resumeTime ?? 0;
+      if (time > 0 && Number.isFinite(time)) {
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : currentTrack.duration;
+        // Loading can cross a loop boundary. Seeking to exactly duration fails
+        // in some MP3 demuxers; wrap loops and stay inside non-looping streams.
+        audio.currentTime = duration > 0 ? music?.loop ? time % duration : Math.min(time, Math.max(0, duration - 0.01)) : time;
+      }
+    };
+    audio.addEventListener('loadedmetadata', restorePosition, { once: true });
     setOutputMuted(outputMuted);
     if (music?.isPlaying || gainNodeRef.current) {
-      setOutputGain(music?.volume ?? 0.8);
+      setOutputGain((music?.volume ?? 0.8) * clientPreferences.musicVolume);
     }
     audio.load();
+    const disposeLoop = audioContextRef.current && sourceNodeRef.current && gainNodeRef.current
+      ? installGaplessLoop(audio, audioContextRef.current, sourceNodeRef.current, gainNodeRef.current) : () => undefined;
     if (music?.isPlaying) void audio.play().catch((): void => {});
-  }, [currentTrack?.id, music?.playbackVersion, setOutputGain, setOutputMuted, stopDuck, stopFade]);
+    return () => { disposeLoop(); audio.removeEventListener('loadedmetadata', restorePosition); };
+  }, [currentTrack?.id, music?.externalPlayback, music?.playbackVersion, setOutputGain, setOutputMuted, stopDuck, stopFade]);
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack) return;
+    if (!audio || !currentTrack || music?.externalPlayback) return;
     if (music?.isPlaying) {
       stopFade();
       if (!ducking.current) {
@@ -1094,7 +1212,7 @@ const MusicPlayer = ({
       void audio.play().catch((): void => {});
     }
     else audio.pause();
-  }, [music?.isPlaying, currentTrack?.id, setOutputGain, stopFade]);
+  }, [music?.isPlaying, music?.externalPlayback, currentTrack?.id, setOutputGain, stopFade]);
 
   useEffect(() => {
     setOutputMuted(outputMuted);
@@ -1119,21 +1237,22 @@ const MusicPlayer = ({
     [duckMusic],
   );
 
-  useEffect(
-    () => window.bossAPI.subscribeMusicSeek((time) => {
+  const musicSeekHandler = useRef<(time: number) => void>(() => undefined);
+  musicSeekHandler.current = (time) => {
       const audio = audioRef.current;
-      if (!audio || !Number.isFinite(time)) return;
+      if (!audio || music?.externalPlayback || !Number.isFinite(time)) return;
       const maximum = currentTrack?.duration || audio.duration;
-      audio.currentTime = Math.max(
+      seekMediaPlayback(audio, Math.max(
         0,
         Number.isFinite(maximum) && maximum > 0
           ? Math.min(time, maximum)
           : time,
-      );
+      ));
       reportProgress();
-    }),
-    [reportProgress],
-  );
+  };
+  // Channels replay their latest event on subscribe. Resubscribing on every
+  // track change re-applied an old seek after the seamless decoder handoff.
+  useEffect(() => window.bossAPI.subscribeMusicSeek((time) => musicSeekHandler.current(time)), []);
 
   const preparedBosses = battle.bosses.filter(
     (boss) => boss.setupStatus === 'ready',
@@ -1166,31 +1285,37 @@ const MusicPlayer = ({
   }, [allDefeated, battle.battleStarted, clientPreferences.musicVolume, music?.isPlaying, music?.volume, setOutputGain, stopFade]);
 
   useEffect(() => () => {
+    finishPhaseAudioHandoff();
     stopFade();
     stopDuck(false);
-    void audioContextRef.current?.close();
+    releaseSfxDucking.current?.(); releaseSfxDucking.current = null;
+    if (adoptedRelease.current) adoptedRelease.current();
+    else void audioContextRef.current?.close();
+    adoptedRelease.current = null;
     audioContextRef.current = null;
     gainNodeRef.current = null;
     muteGainNodeRef.current = null;
     sourceNodeRef.current = null;
   }, [stopDuck, stopFade]);
 
-  return (
-    <audio
-      className="music-player"
-      crossOrigin="anonymous"
-      ref={audioRef}
-      loop={music?.loop ?? false}
-      onEnded={() => window.bossAPI.musicTrackEnded()}
-      onLoadedMetadata={reportProgress}
-      onDurationChange={reportProgress}
-      onTimeUpdate={reportProgress}
-      onSeeked={reportProgress}
-      onError={() => {
-        if (music?.isPlaying) window.bossAPI.musicFadeoutComplete();
-      }}
-    />
-  );
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.loop = music?.loop ?? false;
+    const ended = () => window.bossAPI.musicTrackEnded();
+    const error = () => { if (music?.isPlaying) window.bossAPI.musicFadeoutComplete(); };
+    const events = ['loadedmetadata', 'durationchange', 'timeupdate', 'seeked'] as const;
+    for (const event of events) audio.addEventListener(event, reportProgress);
+    audio.addEventListener('ended', ended);
+    audio.addEventListener('error', error);
+    return () => {
+      for (const event of events) audio.removeEventListener(event, reportProgress);
+      audio.removeEventListener('ended', ended);
+      audio.removeEventListener('error', error);
+    };
+  }, [currentTrack?.id, music?.externalPlayback, music?.playbackVersion, music?.loop, music?.isPlaying, reportProgress]);
+
+  return <span ref={audioMountRef} hidden aria-hidden="true" />;
 };
 
 const SoundboardPlayer = ({
@@ -1293,12 +1418,14 @@ const SoundboardPlayer = ({
       audio.loop = audioSettings.loop;
       const source = graph.context.createMediaElementSource(audio);
       source.connect(graph.gain);
+      const disposeLoop = installGaplessLoop(audio, graph.context, source, graph.gain);
 
       const release = (playbackError = false) => {
         if (!activeSounds.current.has(effect.id)) return;
         activeSounds.current.delete(effect.id);
         audio.removeEventListener('ended', handleEnded);
         audio.removeEventListener('error', handleError);
+        disposeLoop();
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
@@ -1420,7 +1547,7 @@ const EncounterEffectsPlayer = ({
   }, [clientPreferences.effectsVolume, settings?.universalMuted, settings?.volume]);
 
   useEffect(() => {
-    const playEffect = (effect: EncounterSoundEffect) => {
+    const playEffect = (effect: EncounterSoundEffect, bossCriticalCue = false) => {
       if (
         !isEncounterSoundEnabled(settingsRef.current, effect.kind) ||
         !clientSoundCategoryEnabled(clientPreferences, effect.kind)
@@ -1450,9 +1577,13 @@ const EncounterEffectsPlayer = ({
       const source = graph.context.createMediaElementSource(audio);
       source.connect(graph.gain);
       let playbackStarted = false;
+      const shouldDuck = !bossCriticalCue && clientPreferences.effectsVolume > 0 &&
+        currentSettings.volume > 0 && !currentSettings.universalMuted &&
+        ['natural-failure', 'natural-success-player', 'natural-success-enemy', 'critical-damage'].includes(effect.kind);
       const markPlaybackStarted = () => {
         if (playbackStarted) return;
         playbackStarted = true;
+        if (shouldDuck) sfxMusicDucking.start(effect.id);
         window.bossAPI.encounterEffectStarted(effect.id);
       };
 
@@ -1460,6 +1591,7 @@ const EncounterEffectsPlayer = ({
         markPlaybackStarted();
         if (!activeSounds.current.has(effect.id)) return;
         activeSounds.current.delete(effect.id);
+        if (shouldDuck) sfxMusicDucking.end(effect.id);
         audio.removeEventListener('playing', markPlaybackStarted);
         audio.removeEventListener('ended', release);
         audio.removeEventListener('error', release);
@@ -1484,7 +1616,7 @@ const EncounterEffectsPlayer = ({
     const unsubscribe = window.bossAPI.subscribeEncounterEffect(playEffect);
     const unsubscribeCriticalCue = window.bossAPI.subscribeMusicDuck((event) => {
       if (event.phase !== 'restore' && event.soundEffect) {
-        playEffect(event.soundEffect);
+        playEffect(event.soundEffect, true);
       }
     });
 
@@ -1525,9 +1657,11 @@ const highlightRelatedRolls = (relationId: string, highlighted: boolean) => {
 const RollResultStack = ({
   results,
   placement,
+  undoneResultIds = emptyStringSet,
 }: {
   results: EncounterRollResult[];
   placement: 'player' | 'boss' | 'self';
+  undoneResultIds?: ReadonlySet<string>;
 }) => {
   type ExtendedRollResult = EncounterRollResult & {
     sequence?: number;
@@ -1628,7 +1762,7 @@ const RollResultStack = ({
               leaving ? 'is-leaving' : ''
             } ${result.natural === 1 ? 'is-natural-failure' : ''} ${
               result.natural === 20 ? 'is-natural-success' : ''
-            }`}
+            } ${undoneResultIds.has(result.id) ? 'is-undone' : ''}`}
             data-relation-id={relationId}
             data-roll-id={result.id}
             onMouseEnter={() => relationId && highlightRelatedRolls(relationId, true)}
@@ -1662,6 +1796,9 @@ const RollResultStack = ({
               {result.targetName ? ` → ${result.targetName}` : ''}
               :
             </strong>
+            {undoneResultIds.has(result.id) && (
+              <em className="encounter-roll-undone-label">(desfeito)</em>
+            )}
             {result.visibility === 'hidden' || result.visibility === 'dice-only' ? (
               <span className="encounter-roll-dice-only">
                 <b>{formatRollResultDice(result)}</b>
@@ -1696,6 +1833,7 @@ const BossHud = memo(function BossHud({
   visuals,
   turnActive,
   rollResults,
+  undoneResultIds,
 }: {
   boss: BossState;
   bossCount: number;
@@ -1704,6 +1842,7 @@ const BossHud = memo(function BossHud({
   visuals: EncounterVisualEffectSettings;
   turnActive: boolean;
   rollResults: EncounterRollResult[];
+  undoneResultIds: ReadonlySet<string>;
 }) {
   const hudScale = 1 - (bossCount - 1) * 0.15;
   return (
@@ -1712,7 +1851,11 @@ const BossHud = memo(function BossHud({
       style={{ '--hud-scale': hudScale } as CSSProperties}
     >
       <div className="boss-name-anchor">
-        <RollResultStack results={rollResults} placement="boss" />
+        <RollResultStack
+          results={rollResults}
+          placement="boss"
+          undoneResultIds={undoneResultIds}
+        />
         <h1 className="boss-name">{boss.bossName}</h1>
       </div>
       <AnimatedHealthBar
@@ -1725,7 +1868,13 @@ const BossHud = memo(function BossHud({
         visuals={visuals}
       />
       <div className="action-slot">
-        <AnimatedAction text={boss.nextAction} severity={boss.actionSeverity} />
+        <AnimatedAction
+          text={boss.nextAction}
+          severity={boss.actionSeverity}
+          version={boss.actionVersion ?? 0}
+          shakeEnabled={visuals.screenShake}
+          flashEnabled={visuals.damageEffect}
+        />
       </div>
     </article>
   );
@@ -1751,26 +1900,19 @@ const temporaryHealthExcessPercent = (player: PlayerHudState) => {
   return Math.max(0, Math.min(100, (excess / player.maxHealth) * 100));
 };
 
-const actionPointTooltip = (uses: number, unavailableThisTurn = false) =>
-  `Ponto de Ação — melhora ou repete uma jogada com aprovação · ${uses}/5 usos restantes${
-    unavailableThisTurn ? ' · disponível no seu turno' : ''
-  }`;
-
-const heroPointTooltip = (uses: number, unavailableThisTurn = false) =>
-  `Ponto Heróico — concede vantagem extrema ou ativa um poder · ${uses}/1 uso restante${
-    unavailableThisTurn ? ' · disponível no seu turno' : ''
-  }`;
-
 const PlayerHudCard = ({
   player,
   active,
   rollResults,
+  undoneResultIds,
 }: {
   player: PlayerHudState;
   active: boolean;
   rollResults: EncounterRollResult[];
+  undoneResultIds: ReadonlySet<string>;
 }) => {
   const [expanded, setExpanded] = useState(false);
+  const [portraitOpen, setPortraitOpen] = useState(false);
   const summary = player.summary;
   const combatValues = playerHudCombatValues(player);
   const naturalMeleeDefense = combatValues.naturalDefenseMelee;
@@ -1786,8 +1928,26 @@ const PlayerHudCard = ({
         player.redacted ? 'is-private' : ''
       } ${player.dead ? 'is-dead' : player.stabilized ? 'is-stable' : ''}`}
       data-player-hud-id={player.id}
+      data-disconnected={player.disconnected || undefined}
     >
-      <RollResultStack results={rollResults} placement="player" />
+      {player.disconnected && <small className="player-reconnection-label">Aguardando reconexão</small>}
+      <button
+        className={`party-player-portrait ${player.portraitUrl ? 'has-image' : ''}`}
+        type="button"
+        aria-label={player.portraitUrl
+          ? `Ampliar retrato de ${player.characterName}`
+          : `Retrato não definido para ${player.characterName}`}
+        onClick={() => {
+          if (player.portraitUrl) setPortraitOpen(true);
+        }}
+      >
+        {player.portraitUrl ? <img src={player.portraitUrl} alt="" /> : <span aria-hidden="true">?</span>}
+      </button>
+      <RollResultStack
+        results={rollResults}
+        placement="player"
+        undoneResultIds={undoneResultIds}
+      />
       <div className="party-player-statuses">
         {player.statuses.map((status, index) => {
           const definition = getStatusDefinition(status.statusId);
@@ -1951,6 +2111,15 @@ const PlayerHudCard = ({
           </div>
         </section>
       )}
+      {portraitOpen && player.portraitUrl && createPortal(
+        <div className="player-portrait-lightbox" role="presentation">
+          <section role="dialog" aria-modal="true" aria-label={`Retrato de ${player.characterName}`}>
+            <button type="button" aria-label="Fechar" onClick={() => setPortraitOpen(false)}>×</button>
+            <img src={player.portraitUrl} alt={`Retrato de ${player.characterName}`} />
+          </section>
+        </div>,
+        document.body,
+      )}
     </article>
   );
 };
@@ -1958,9 +2127,11 @@ const PlayerHudCard = ({
 const PartyHud = ({
   players,
   turn,
+  undoneResultIds,
 }: {
   players: PlayerHudState[];
   turn: EncounterTurnState;
+  undoneResultIds: ReadonlySet<string>;
 }) => {
   const webClient = Boolean(window.__BOSS_WEB_PLAYER__);
   const visiblePlayers = webClient
@@ -1976,6 +2147,7 @@ const PartyHud = ({
           rollResults={(turn.rollResults ?? []).filter(
             ({ participantId }) => participantId === `player:${player.id}`,
           )}
+          undoneResultIds={undoneResultIds}
           key={player.id}
         />
       ))}
@@ -1998,7 +2170,7 @@ const EncounterTurnHud = ({
   );
   const self = players.find(({ isSelf }) => isSelf);
   const sheetLocked = Boolean(
-    self?.sheetInteractionState && self.sheetInteractionState !== 'idle',
+    turn.connectionPause || (self?.sheetInteractionState && self.sheetInteractionState !== 'idle'),
   );
   const allActionsUsed = Boolean(
     self && !self.actions.free && !self.actions.movement && !self.actions.standard,
@@ -2129,9 +2301,11 @@ const EncounterTurnHud = ({
 const SelfRollResults = ({
   players,
   turn,
+  undoneResultIds,
 }: {
   players: PlayerHudState[];
   turn: EncounterTurnState;
+  undoneResultIds: ReadonlySet<string>;
 }) => {
   if (!window.__BOSS_WEB_PLAYER__) return null;
   const self = players.find(({ isSelf }) => isSelf);
@@ -2142,6 +2316,7 @@ const SelfRollResults = ({
         ({ participantId }) => participantId === `player:${self.id}`,
       )}
       placement="self"
+      undoneResultIds={undoneResultIds}
     />
   );
   const selfHud = document.getElementById('web-player-character-hud');
@@ -2203,6 +2378,7 @@ const SelfCombatControls = ({
   const initiativePending = Boolean(
     selfParticipant?.initiativeRolled === false,
   );
+  const initiativePhase = !turn.started;
   const initiativeSkillId = summary?.skills.find((skill) =>
     `${skill.id} ${skill.name}`.toLocaleLowerCase('pt-BR').includes('iniciativa')
   )?.id ?? '';
@@ -2283,6 +2459,20 @@ const SelfCombatControls = ({
     }
   }, [turn.rollResults]);
 
+  useEffect(() => {
+    const openResource = (event: Event) => {
+      if (!self || !active || incapacitated || sheetLocked) return;
+      const kind = (event as CustomEvent<string>).detail;
+      if (kind === 'action-point' && (self.actionPoints ?? 0) > 0) {
+        actionAttemptRef.current = null; setResource('action-intervention'); setModal('action-point');
+      } else if (kind === 'hero-point' && (self.heroPoints ?? 0) > 0) {
+        actionAttemptRef.current = null; setModal('hero-point');
+      }
+    };
+    window.addEventListener('bossbar:resource-action', openResource);
+    return () => window.removeEventListener('bossbar:resource-action', openResource);
+  }, [self, active, incapacitated, sheetLocked]);
+
   if (!window.__BOSS_WEB_PLAYER__ || !self || !summary) return null;
 
   const resourceCounts = self as PlayerHudState & {
@@ -2295,6 +2485,7 @@ const SelfCombatControls = ({
   const heroPoints = typeof resourceCounts.heroPoints === 'number'
     ? Math.max(0, Math.min(1, Math.trunc(resourceCounts.heroPoints)))
     : self.heroPointAvailable ? 1 : 0;
+  const recovery = actionPointRecoveryFormulas(summary.level);
 
   const combatResource = (): PlayerResourceUse => {
     if (resource === 'action-intervention') {
@@ -2316,7 +2507,7 @@ const SelfCombatControls = ({
       initiativePending &&
       Boolean(initiativeSkillId) &&
       skillId === initiativeSkillId;
-    if (!active && !rollingInitiative) return;
+    if (!active && !rollingInitiative && !initiativePhase) return;
     if (rollingInitiative) {
       setBusy(true);
       setModal(null);
@@ -2419,7 +2610,7 @@ const SelfCombatControls = ({
       );
       return;
     }
-    if (!active && !(next === 'skill' && initiativePending)) {
+    if (!active && !initiativePhase) {
       announcePlayerNotice('Aguarde o seu turno para realizar testes.');
       return;
     }
@@ -2463,6 +2654,42 @@ const SelfCombatControls = ({
 
   const hudControls = (
     <div className="self-combat-shortcuts" aria-label="Ações e recursos">
+      <button
+        className={initiativePending
+          ? 'is-initiative-pending'
+          : initiativePhase ? 'is-pre-initiative-locked' : undefined}
+        type="button"
+        disabled={sheetLocked}
+        aria-disabled={sheetLocked || (initiativePhase && !initiativePending)}
+        data-app-tooltip={
+          initiativePending
+            ? 'Rodar iniciativa'
+            : initiativePhase
+              ? 'Selecione para solicitar ao mestre'
+              : active ? 'Teste de perícia' : 'Disponível no seu turno'
+        }
+        aria-label="Teste de perícia"
+        onClick={() => openTestModal('skill')}
+      >
+        🎲
+      </button>
+      <button
+        className={initiativePhase ? 'is-pre-initiative-locked' : undefined}
+        type="button"
+        disabled={sheetLocked}
+        aria-disabled={sheetLocked || initiativePhase}
+        data-app-tooltip={
+          initiativePhase
+            ? 'Selecione para solicitar ao mestre'
+            : !active
+            ? 'Disponível no seu turno'
+            : self.actions.standard ? 'Combate' : 'Consultar ataques disponíveis'
+        }
+        aria-label="Combate"
+        onClick={() => openTestModal('attack')}
+      >
+        ⚔
+      </button>
       {self.pendingDamage && (
         <button
           className={`is-pending-damage ${self.pendingDamage.critical ? 'is-critical' : ''}`}
@@ -2475,74 +2702,6 @@ const SelfCombatControls = ({
           🎯
         </button>
       )}
-      <button
-        className={initiativePending ? 'is-initiative-pending' : undefined}
-        type="button"
-        disabled={sheetLocked}
-        data-app-tooltip={
-          initiativePending
-            ? 'Rodar iniciativa'
-            : active ? 'Teste de perícia' : 'Disponível no seu turno'
-        }
-        aria-label="Teste de perícia"
-        onClick={() => openTestModal('skill')}
-      >
-        🎲
-      </button>
-      <button
-        type="button"
-        disabled={sheetLocked}
-        data-app-tooltip={
-          !active
-            ? 'Disponível no seu turno'
-            : self.actions.standard ? 'Combate' : 'Consultar ataques disponíveis'
-        }
-        aria-label="Combate"
-        onClick={() => openTestModal('attack')}
-      >
-        ⚔
-      </button>
-      <button
-        className={`is-resource is-action-point ${
-          active && actionPoints > 0 ? 'is-turn-available' : ''
-        }`}
-        type="button"
-        style={{
-          '--player-resource-image':
-            `url("${bundledAssetUrl('player-resource-points.png')}")`,
-        } as CSSProperties}
-        disabled={actionPoints <= 0 || !active || incapacitated || sheetLocked}
-        data-app-tooltip={actionPointTooltip(
-          actionPoints,
-          !active && actionPoints > 0,
-        )}
-        aria-label={`Ponto de Ação, ${actionPoints} de 5 usos restantes`}
-        onClick={() => {
-          actionAttemptRef.current = null;
-          setResource('action-intervention');
-          setModal('action-point');
-        }}
-      />
-      <button
-        className={`is-resource is-hero-point ${
-          active && heroPoints > 0 ? 'is-turn-available' : ''
-        }`}
-        type="button"
-        style={{
-          '--player-resource-image':
-            `url("${bundledAssetUrl('player-resource-points.png')}")`,
-        } as CSSProperties}
-        disabled={heroPoints <= 0 || !active || incapacitated || sheetLocked}
-        data-app-tooltip={heroPointTooltip(
-          heroPoints,
-          !active && heroPoints > 0,
-        )}
-        aria-label={`Ponto Heróico, ${heroPoints} de 1 uso restante`}
-        onClick={() => {
-          actionAttemptRef.current = null;
-          setModal('hero-point');
-        }}
-      />
     </div>
   );
 
@@ -2577,7 +2736,7 @@ const SelfCombatControls = ({
           >
             {summary.skills.map((skill) => {
               const unavailable =
-                initiativePending && skill.id !== initiativeSkillId;
+                Boolean(skill.trainedOnly) && !skill.trained;
               const canStabilize =
                 skill.id === cureSkillId &&
                 bleedingAllies.length > 0 &&
@@ -2586,13 +2745,28 @@ const SelfCombatControls = ({
               return (
                 <button
                   className={`${skillId === skill.id ? 'is-selected' : ''} ${
-                    skill.id === initiativeSkillId ? 'is-initiative' : ''
+                    initiativePending && skill.id === initiativeSkillId ? 'is-initiative' : ''
+                  } ${initiativePhase && skill.id !== initiativeSkillId
+                    ? 'is-pre-initiative-locked'
+                    : ''} ${skill.trained ? 'is-trained' : ''} ${
+                    skill.trainedOnly && !skill.trained ? 'is-training-required' : ''
                   } ${canStabilize ? 'is-stabilize-available' : ''}`}
                   type="button"
                   disabled={unavailable}
-                  data-disabled-reason="Role Iniciativa antes de começar o encontro"
+                  aria-disabled={unavailable}
+                  data-app-tooltip={initiativePhase && skill.id !== initiativeSkillId
+                    ? 'É necessário o mestre aprovar teste de perícia antes da iniciativa'
+                    : undefined}
+                  data-disabled-reason={skill.trainedOnly && !skill.trained
+                    ? 'Esta perícia exige treinamento'
+                    : undefined}
                   aria-pressed={skillId === skill.id}
                   onClick={() => {
+                    if (initiativePhase && skill.id !== initiativeSkillId) {
+                      announcePlayerNotice(
+                        'Antes do primeiro turno, somente Iniciativa está liberada. Este teste precisará da aprovação do mestre.',
+                      );
+                    }
                     setSkillId(skill.id);
                     setStabilizeTargetId(
                       canStabilize ? bleedingAllies[0]?.id ?? '' : '',
@@ -2600,7 +2774,10 @@ const SelfCombatControls = ({
                   }}
                   key={skill.id}
                 >
-                  <span>{skill.name}</span>
+                  <span className="player-skill-label">
+                    <span>{skill.name}</span>
+                    <small>{skill.trained ? 'Treinada' : skill.trainedOnly ? 'Requer treino' : '\u00a0'}</small>
+                  </span>
                   <strong>
                     {(skill.total ?? 0) >= 0 ? '+' : ''}{skill.total ?? 0}
                   </strong>
@@ -2701,34 +2878,27 @@ const SelfCombatControls = ({
           </>
         )}
         {(modal === 'attack' || modal === 'skill') && (
-          <label>
-            <span>Recurso opcional</span>
-            <select
-              value={resource}
-              onChange={(event) =>
-                setResource(event.currentTarget.value as TestResourceChoice)}
-            >
-              <option value="none">Nenhum</option>
-              <option
-                value="action-intervention"
-                disabled={initiativePending || actionPoints <= 0}
+          <div className="player-test-resource">
+            <label>
+              <span>Recurso opcional</span>
+              <select
+                value={resource}
+                onChange={(event) =>
+                  setResource(event.currentTarget.value as TestResourceChoice)}
               >
-                Ponto de Ação · Intervenção (+1d6)
-              </option>
-              <option
-                value="action-reroll"
-                disabled={initiativePending || actionPoints <= 0}
-              >
-                Ponto de Ação · Rolar novamente
-              </option>
-              <option
-                value="hero-advantage"
-                disabled={heroPoints <= 0}
-              >
-                Ponto Heróico · Extrema vantagem
-              </option>
-            </select>
-          </label>
+                <option value="none">Nenhum</option>
+                <option value="action-intervention" disabled={initiativePending || actionPoints <= 0}>
+                  Ponto de Ação · Intervenção ({recovery.tier}: +1d6 ao teste)
+                </option>
+                <option value="action-reroll" disabled={initiativePending || actionPoints <= 0}>
+                  Ponto de Ação · Rolar novamente (repete este teste uma vez)
+                </option>
+                <option value="hero-advantage" disabled={heroPoints <= 0}>
+                  Ponto Heróico · Extrema vantagem (2d20; resultado limitado a 20)
+                </option>
+              </select>
+            </label>
+          </div>
         )}
         {(modal === 'skill' || modal === 'attack') &&
           turn.started &&
@@ -2761,7 +2931,7 @@ const SelfCombatControls = ({
                 checked={resource === 'action-intervention'}
                 onChange={() => setResource('action-intervention')}
               />
-              Proteção · +1d6 na Defesa até seu próximo turno
+              Proteção · Defesa +1d6 até o início do próximo turno
             </label>
             <label>
               <input
@@ -2770,7 +2940,7 @@ const SelfCombatControls = ({
                 checked={resource === 'action-reroll'}
                 onChange={() => setResource('action-reroll')}
               />
-              Recuperação · recupera PV e PM conforme o patamar
+              Recuperação ({recovery.tier}) · {recovery.health} PV e {recovery.mana} PM
             </label>
           </fieldset>
         )}
@@ -2801,7 +2971,11 @@ const SelfCombatControls = ({
               ? 'Solicitar ao mestre'
               : modal === 'hero-point'
                 ? 'Consumir ponto'
-                : 'Rolar'}
+                : initiativePhase && !(
+                  modal === 'skill' && initiativePending && skillId === initiativeSkillId
+                )
+                  ? 'Solicitar ao mestre'
+                  : 'Rolar'}
           </button>
         </footer>
       </section>
@@ -2820,9 +2994,23 @@ const SelfCombatControls = ({
 type AnimatedActionProps = {
   text: string;
   severity: 'normal' | 'grave';
+  version: number;
+  shakeEnabled: boolean;
+  flashEnabled: boolean;
 };
 
-const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
+const AnimatedAction = ({
+  text,
+  severity,
+  version,
+  shakeEnabled,
+  flashEnabled,
+}: AnimatedActionProps) => {
+  const lastAnnouncedVersion = useRef(0);
+  const [graveAnnouncement, setGraveAnnouncement] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
   const [renderedText, setRenderedText] = useState(text);
   const [renderedSeverity, setRenderedSeverity] = useState(severity);
   const [phase, setPhase] = useState<
@@ -2834,7 +3022,43 @@ const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
     text ? 'visible' : 'hidden',
   );
 
+  useLayoutEffect(() => {
+    if (
+      severity !== 'grave' ||
+      !text.trim() ||
+      version <= 0 ||
+      version === lastAnnouncedVersion.current
+    ) {
+      setGraveAnnouncement(null);
+      return;
+    }
+
+    lastAnnouncedVersion.current = version;
+    setGraveAnnouncement({ id: version, text });
+    setRenderedText(text);
+    setRenderedSeverity(severity);
+    setPhase('visible');
+    setContainerPhase('visible');
+
+    const stage = document.querySelector<HTMLElement>('.player-stage');
+    const shake = shakeEnabled ? stage?.animate([
+      { transform: 'translate3d(0, 0, 0)' },
+      { transform: 'translate3d(-2px, 1px, 0)' },
+      { transform: 'translate3d(2px, -1px, 0)' },
+      { transform: 'translate3d(-1px, -1px, 0)' },
+      { transform: 'translate3d(1px, 1px, 0)' },
+      { transform: 'translate3d(0, 0, 0)' },
+    ], { duration: 620, easing: 'ease-in-out' }) : undefined;
+    const timer = setTimeout(() => setGraveAnnouncement(null), 1_650);
+    return () => {
+      clearTimeout(timer);
+      shake?.cancel();
+    };
+  }, [severity, shakeEnabled, text, version]);
+
   useEffect(() => {
+    // The grave announcement and HUD share one crossfade timeline.
+    if (severity === 'grave' && text.trim() && version > 0) return;
     if (text === renderedText && severity === renderedSeverity) return;
 
     let changeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2881,14 +3105,35 @@ const AnimatedAction = ({ text, severity }: AnimatedActionProps) => {
       if (changeTimer) clearTimeout(changeTimer);
       if (visibleTimer) clearTimeout(visibleTimer);
     };
-  }, [text, severity]);
+  }, [text, severity, version]);
 
   return (
-    <div className={`action-warning action-${containerPhase} ${renderedSeverity === 'grave' ? 'is-grave' : ''}`}>
-      <span className="telegraph-label">Preparem-se</span>
-      <span className="action-divider" aria-hidden="true" />
-      <p className={`action-description is-${phase}`}>{renderedText}</p>
-    </div>
+    <>
+      <div
+        key={graveAnnouncement?.id ?? 'settled'}
+        className={`action-warning action-${containerPhase} ${renderedSeverity === 'grave' ? 'is-grave' : ''} ${graveAnnouncement ? 'is-announcing' : ''}`}
+      >
+        <span className="telegraph-label">Preparem-se</span>
+        <span className="action-divider" aria-hidden="true" />
+        <p className={`action-description is-${phase}`}>{renderedText}</p>
+      </div>
+      {graveAnnouncement && createPortal(
+        <div className="grave-action-stage" aria-live="assertive">
+          {flashEnabled && <div className="grave-action-red-flash" aria-hidden="true" />}
+          <div
+            key={graveAnnouncement.id}
+            className="grave-action-anchor"
+          >
+            <div className="grave-action-announcement">
+              <span>Preparem-se</span>
+              <i aria-hidden="true" />
+              <strong>{graveAnnouncement.text}</strong>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 };
 
@@ -3134,13 +3379,38 @@ const PlayerClientSettings = ({
 };
 
 const PlayerApp = () => {
+  useEffect(() => {
+    if (!window.bossAPI.getPresentationMedia) return;
+    let active = true;
+    let lastRevision = -1;
+    const warm = (plan: ScenePlan) => {
+      const revision = plan.mediaRevision ?? 0;
+      if (revision === lastRevision) return;
+      lastRevision = revision;
+      clearPresentationMedia();
+      void window.bossAPI.getPresentationMedia().then((urls) => {
+        if (active && revision === lastRevision) void warmPresentationMedia(urls);
+      });
+    };
+    void window.bossAPI.getScenePlan().then(warm);
+    const unsubscribe = window.bossAPI.subscribeScenePlan(warm);
+    return () => { active = false; unsubscribe(); clearPresentationMedia(); };
+  }, []);
   const [state, setState] = useState<BattleState | null>(null);
   const [playerHuds, setPlayerHuds] = useState<PlayerHudState[]>([]);
   const [turnState, setTurnState] = useState<EncounterTurnState>(
     emptyEncounterTurnState,
   );
+  useEffect(() => {
+    document.documentElement.classList.toggle('encounter-restoring', turnState.connectionPause?.reason === 'restoring');
+    return () => document.documentElement.classList.remove('encounter-restoring');
+  }, [turnState.connectionPause?.reason]);
   const [resourceNotices, setResourceNotices] = useState<PlayerResourceNotice[]>(
     [],
+  );
+  const latestSystemNoticeId = useRef<string | null>(null);
+  const systemNoticeTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
   );
   const [encounterEffects, setEncounterEffects] = useState(
     initialEncounterEffectsState,
@@ -3164,6 +3434,33 @@ const PlayerApp = () => {
   const updateClientPreferences = useCallback((next: ClientPresentationPreferences) => {
     setClientPreferences(next);
     saveClientPresentationPreferences(next);
+  }, []);
+
+  useEffect(() => {
+    const latest = [...(turnState.history ?? [])]
+      .reverse()
+      .find(({ kind }) => kind === 'system');
+    if (!latest || latestSystemNoticeId.current === latest.id) return;
+    latestSystemNoticeId.current = latest.id;
+    setResourceNotices((current) => [
+      ...current,
+      {
+        id: latest.id,
+        tone: 'info' as const,
+        message: `↶ ${latest.label}: ${latest.detail}`,
+      },
+    ].slice(-8));
+    const previousTimer = systemNoticeTimers.current.get(latest.id);
+    if (previousTimer) clearTimeout(previousTimer);
+    const timer = setTimeout(() => {
+      setResourceNotices((current) => current.filter(({ id }) => id !== latest.id));
+      systemNoticeTimers.current.delete(latest.id);
+    }, 7_000);
+    systemNoticeTimers.current.set(latest.id, timer);
+  }, [turnState.history]);
+  useEffect(() => () => {
+    systemNoticeTimers.current.forEach(clearTimeout);
+    systemNoticeTimers.current.clear();
   }, []);
   const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
   const encounterEffectsRef = useRef(initialEncounterEffectsState);
@@ -3221,7 +3518,9 @@ const PlayerApp = () => {
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const enqueue = (notice: PlayerResourceNotice) => {
       setResourceNotices((current) => [
-        ...current.filter(({ id }) => id !== notice.id),
+        ...current.filter(({ id, message }) => (
+          id !== notice.id && message !== notice.message
+        )),
         notice,
       ].slice(-8));
       const previousTimer = timers.get(notice.id);
@@ -3514,31 +3813,51 @@ const PlayerApp = () => {
     '--shield-icon': `url("${bundledAssetUrl('shield-icon.png')}")`,
     '--waiting-background': `url("${bundledAssetUrl('waiting-background.png')}")`,
     ...(state.battleStarted && background.url && background.mediaType === 'image'
-      ? { '--battle-background': `url("${background.url}")` }
+      ? { '--battle-background': `url("${presentationMediaUrl(background.url)}")` }
       : {}),
   } as CSSProperties;
   const activeVideoUrl = state.battleStarted &&
     background.mediaType === 'video'
-    ? background.url
+    ? presentationMediaUrl(background.url!)
     : null;
   const visibleBosses = state.bosses.filter(
     (boss) =>
       boss.setupStatus === 'ready' && !hiddenDefeatedBosses.has(boss.id),
   );
+  const undoneResultIds = new Set(
+    (turnState.history ?? [])
+      .flatMap(({ revertsEntryIds }) => revertsEntryIds ?? [])
+      .filter((entryId) => entryId.startsWith('history:'))
+      .map((entryId) => entryId.slice('history:'.length)),
+  );
 
   return (
     <>
       <MusicPlayer battle={state} clientPreferences={clientPreferences} />
+      <PhaseHudEntrance entrance={state.battleStarted ? scenePlan?.phaseEntrance : null} />
       <SoundboardPlayer clientPreferences={clientPreferences} />
       <EncounterEffectsPlayer clientPreferences={clientPreferences} />
       <PlayerClientSettings preferences={clientPreferences} onChange={updateClientPreferences} />
       <SceneTransitionPlayer />
+      {scenePlan?.cutscenePlayback && <CutscenePlayer key={scenePlan.cutscenePlayback.id}
+        playback={scenePlan.cutscenePlayback} musicScale={clientPreferences.musicVolume}
+        soundScale={clientPreferences.effectsVolume} />}
       <main className="player-stage" style={backgroundStyle}>
+        {turnState.connectionPause && <div className={['encounter-connection-pause', turnState.connectionPause.reason === 'restoring' ? 'is-restoring' : ''].join(' ')} role="status">
+          <strong>{turnState.connectionPause.reason === 'restoring' ? 'Aguardando jogadores para retomar o encontro' : 'Encontro pausado: aguardando reconexão'}</strong>
+          <span>{turnState.connectionPause.names.join(', ')}</span>
+        </div>}
+        {state.battleStarted && <PhaseEntrance entrance={scenePlan?.phaseEntrance} />}
         {activeVideoUrl && (
           <video
             key={activeVideoUrl}
             className="battle-background-video"
             src={activeVideoUrl}
+            onLoadedMetadata={(event) => {
+              const video = event.currentTarget;
+              if (background.resumeTime && Number.isFinite(video.duration)) video.currentTime = background.resumeTime % video.duration;
+            }}
+            onTimeUpdate={(event) => window.bossAPI.reportBackgroundProgress(activeVideoUrl, event.currentTarget.currentTime)}
             autoPlay
             disablePictureInPicture
             loop
@@ -3549,8 +3868,16 @@ const PlayerApp = () => {
           />
         )}
         <div className="critical-screen-flash" aria-hidden="true" />
-        <PartyHud players={playerHuds} turn={turnState} />
-        <SelfRollResults players={playerHuds} turn={turnState} />
+        <PartyHud
+          players={playerHuds}
+          turn={turnState}
+          undoneResultIds={undoneResultIds}
+        />
+        <SelfRollResults
+          players={playerHuds}
+          turn={turnState}
+          undoneResultIds={undoneResultIds}
+        />
         <SelfCombatControls
           players={playerHuds}
           turn={turnState}
@@ -3567,9 +3894,7 @@ const PlayerApp = () => {
                 className={`is-${notice.tone} ${notice.persistent ? 'is-persistent' : ''}`}
                 type="button"
                 key={notice.id}
-                aria-disabled={notice.persistent}
                 onClick={() => {
-                  if (notice.persistent) return;
                   setResourceNotices((current) =>
                     current.filter(({ id }) => id !== notice.id));
                 }}
@@ -3625,6 +3950,7 @@ const PlayerApp = () => {
               rollResults={(turnState.rollResults ?? []).filter(
                 ({ participantId }) => participantId === `boss:${boss.id}`,
               )}
+              undoneResultIds={undoneResultIds}
               key={boss.id}
             />
           ))}
