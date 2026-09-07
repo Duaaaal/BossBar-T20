@@ -58,6 +58,8 @@ import { resolveByteRange } from '../shared/media.ts';
 import type { SceneTransitionEvent } from '../shared/scene.ts';
 import type { MultiplayerEncounterCheckpoint, SavedPlayerEncounter, SavedSessionMember, PendingPlayerDamageInternal, PendingDirectPlayerDamageInternal } from '../shared/encounter-checkpoint.ts';
 import { effectivePlayerDefenses } from '../shared/player-defenses.ts';
+import type { PendingResistance } from '../shared/resistance';
+import { BOSS_SKILL_DEFINITIONS } from '../shared/boss-skills.ts';
 import { resolveD20Check } from '../shared/d20-rules.ts';
 import {
   historyEntriesForRolls,
@@ -168,6 +170,7 @@ type MultiplayerPlayerSocket = ServerSocket<
 >;
 
 export type MultiplayerNetworkMode = 'loopback' | 'lan';
+type EncounterPlayerActor = Pick<MultiplayerPlayerSocket, 'data'>;
 
 export type MultiplayerSessionServerOptions = {
   initialSnapshot:
@@ -539,6 +542,10 @@ export class MultiplayerSessionServer {
   private readonly roster: SessionRoster;
 
   private readonly pendingProbes = new Map<string, PendingProbe>();
+  private readonly pendingResistances = new Map<string, PendingResistance>();
+  private readonly automaticResistances = new Set<string>();
+  private readonly approvedAttackModifiers = new Map<string, string>();
+  private readonly resolvingDirectDamage = new Set<string>();
 
   private readonly pendingJoinRequests = new Map<string, PendingJoinRequest>();
 
@@ -582,6 +589,50 @@ export class MultiplayerSessionServer {
   private readonly seenEncounterPlayers = new Set<string>();
   private readonly kickedProfiles = new Set<string>();
   private deferredDisconnectedTurn: string | null = null;
+  private readonly masterControlledProfiles = new Set<string>();
+  private readonly pendingSheetImports = new Map<string, { bytes: Uint8Array; fileName: string; validation: Awaited<ReturnType<typeof inspectCharacterSheetPdf>>['validation'] }>();
+
+  private async stageOrImportSheet(profileId: string, clientId: string, fileName: string, bytes: Uint8Array, validation: Awaited<ReturnType<typeof inspectCharacterSheetPdf>>['validation']) {
+    if (this.masterControlledProfiles.has(profileId)) throw new Error('Aguarde o mestre devolver o controle antes de alterar a ficha.');
+    if (validation.issues.some(({ severity }) => severity === 'error')) {
+      if (!this.pendingSheetImports.has(profileId) && this.pendingSheetImports.size >= MAX_MULTIPLAYER_PLAYERS) throw new Error('Há muitas importações pendentes. Conclua ou descarte uma delas.');
+      this.pendingSheetImports.set(profileId, { bytes, fileName: fileName.slice(0, 255), validation });
+      return { ok: true, sheet: { hasSheet: true, importPending: true, fileName, uploadedAt: Date.now(), validation }, corrected: false };
+    }
+    const profile = await this.options.playerProfileStore.saveSheet(profileId, fileName, bytes, validation);
+    this.pendingSheetImports.delete(profileId);
+    this.refreshCharacterSheet(clientId, true);
+    return { ok: true, sheet: profile.sheet, corrected: false };
+  }
+
+  private controlledActor(playerId: string): EncounterPlayerActor | null {
+    const member = this.encounterMembers().find(({ player, profileId }) => player.id === playerId && profileId && this.masterControlledProfiles.has(profileId));
+    return member?.profileId ? { data: { clientId: member.clientId, profileId: member.profileId, playerId, playerName: member.player.name, isHost: true, connectedAt: 0 } } : null;
+  }
+
+  setMasterControl(playerId: string, controlled: boolean) {
+    const member = this.encounterMembers().find(({ player }) => player.id === playerId);
+    if (!member?.profileId) return false;
+    if (controlled && this.roster.members().some(({ profileId }) => profileId === member.profileId)) return false;
+    if (controlled) {
+      this.masterControlledProfiles.add(member.profileId);
+      this.awaitingSavedPlayers.delete(member.profileId);
+      this.seenEncounterPlayers.add(member.profileId);
+    } else this.masterControlledProfiles.delete(member.profileId);
+    this.publishTurnState(); this.publishPlayerHuds(); this.notifyPresenceChanged();
+    return true;
+  }
+
+  async requestMasterControlledAction(playerId: string, request: unknown): Promise<PlayerCombatActionResult> {
+    const actor = this.controlledActor(playerId);
+    if (!actor || !isPlayerCombatActionRequest(request)) return { ok: false, error: 'Assuma o controle deste personagem antes de agir.' };
+    const lock = this.characterSheetLockError(actor.data.profileId);
+    if (lock) return { ok: false, error: lock };
+    const state = this.playerCombatStates.get(actor.data.clientId);
+    if (!this.encounterTurnState.started || this.encounterTurnState.activeParticipantId !== `player:${playerId}` || this.lateInitiativeQueue.includes(`player:${playerId}`)) return { ok: false, error: 'Aguarde o turno deste personagem.' };
+    if (!state || state.dead || (isPlayerIncapacitated(state) && request.kind !== 'skill')) return { ok: false, error: 'Este personagem não pode realizar esta ação.' };
+    return this.executePlayerCombatAction(actor, request, true);
+  }
   private encounterGeneration = 0;
   private readonly sheetPreviewFiles = new Set<string>();
 
@@ -609,12 +660,14 @@ export class MultiplayerSessionServer {
     return structuredClone({ members: [...members.values()], players: [...players.values()], turns: this.encounterTurnState,
       pendingPlayerDamages: [...this.pendingPlayerDamages.values()],
       pendingDirectPlayerDamages: [...this.pendingDirectPlayerDamages.values()],
+      pendingResistances: structuredClone([...this.pendingResistances.values()]),
       deferredInitiativeActors: [...this.deferredInitiativeActors.entries()],
       lateInitiativeQueue: this.lateInitiativeQueue, interruptedTurnParticipantId: this.interruptedTurnParticipantId,
     });
   }
 
   forgetSavedParticipants() {
+    this.masterControlledProfiles.clear();
     this.savedSessionMembers.clear();
     this.savedEncounterPlayers.clear(); this.awaitingSavedPlayers.clear();
     this.seenEncounterPlayers.clear(); this.kickedProfiles.clear();
@@ -624,6 +677,8 @@ export class MultiplayerSessionServer {
 
   restoreEncounter(checkpoint: MultiplayerEncounterCheckpoint) {
     this.encounterGeneration += 1;
+    this.masterControlledProfiles.clear();
+    this.pendingSheetImports.clear();
     this.savedEncounterPlayers.clear();
     this.savedSessionMembers.clear();
     this.awaitingSavedPlayers.clear();
@@ -636,6 +691,8 @@ export class MultiplayerSessionServer {
     this.actionPointActionIds.clear();
     this.pendingPlayerDamages.clear();
     this.pendingDirectPlayerDamages.clear();
+    this.pendingResistances.clear();
+    for (const pending of structuredClone(checkpoint.pendingResistances ?? [])) this.pendingResistances.set(pending.id, pending);
     this.pendingActionPointRequests.clear();
     this.pendingSheetChangeRequests.clear();
     this.activeSheetEditors.clear();
@@ -1028,6 +1085,10 @@ export class MultiplayerSessionServer {
         if (!portrait) return reply.code(404).type('text/plain').send('Retrato não encontrado.');
         reply
           .header('Cache-Control', 'private, max-age=3600, immutable')
+          // Portraits are deliberately shared presentation assets. Keep the
+          // room capability check above, but allow the Electron file origin to
+          // embed this one route (Helmet's default is same-origin).
+          .header('Cross-Origin-Resource-Policy', 'cross-origin')
           .header('Content-Type', portrait.contentType)
           .header('Content-Length', portrait.bytes.byteLength)
           .header('X-Content-Type-Options', 'nosniff');
@@ -1203,6 +1264,18 @@ export class MultiplayerSessionServer {
         parsed.data.fields,
       );
     });
+    app.delete('/api/player/sheet/import', {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const account = authenticatedAccount(request.headers);
+      if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
+      const profileId = account.session.profileId;
+      serverReference?.pendingSheetImports.delete(profileId);
+      serverReference?.activeSheetEditors.delete(profileId);
+      serverReference?.publishCharacterSheetInteractionState(profileId);
+      return { ok: true, sheet: options.playerProfileStore.profileById(profileId)?.sheet };
+    });
     app.delete('/api/player/sheet', {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     }, async (request, reply) => {
@@ -1250,14 +1323,8 @@ export class MultiplayerSessionServer {
         const fileName = typeof encodedFileName === 'string'
           ? decodeURIComponent(encodedFileName)
           : 'ficha-t20.pdf';
-        const profile = await options.playerProfileStore.saveSheet(
-          account.session.profileId,
-          fileName,
-          bytes,
-          inspected.validation,
-        );
-        serverReference?.refreshCharacterSheet(account.session.clientId, true);
-        return { ok: true, sheet: profile.sheet, corrected: false };
+        if (!serverReference) throw new Error('A sala não está disponível.');
+        return await serverReference.stageOrImportSheet(account.session.profileId, account.session.clientId, fileName, bytes, inspected.validation);
       } catch (error) {
         return reply.code(422).send({
           ok: false,
@@ -1271,18 +1338,13 @@ export class MultiplayerSessionServer {
       reply.header('Cache-Control', 'no-store');
       const account = authenticatedAccount(request.headers);
       if (!account) return reply.code(401).send({ ok: false, error: 'Entre novamente para continuar.' });
-      const sheet = await (serverReference?.readEncounterSheet(account.session.profileId) ?? options.playerProfileStore.readSheet(account.session.profileId));
+      const sheet = serverReference?.pendingSheetImports.get(account.session.profileId) ?? await (serverReference?.readEncounterSheet(account.session.profileId) ?? options.playerProfileStore.readSheet(account.session.profileId));
       if (!sheet) return reply.code(404).send({ ok: false, error: 'Nenhuma ficha foi enviada.' });
       try {
         const inspected = await inspectCharacterSheetPdf(sheet.bytes, true);
         const correctedBytes = inspected.bytes ?? sheet.bytes;
-        const profile = await options.playerProfileStore.saveSheet(
-          account.session.profileId,
-          sheet.fileName,
-          correctedBytes,
-          inspected.validation,
-        );
-        return { ok: true, sheet: profile.sheet, corrected: true };
+        if (!serverReference) throw new Error('A sala não está disponível.');
+        return { ...await serverReference.stageOrImportSheet(account.session.profileId, account.session.clientId, sheet.fileName, correctedBytes, inspected.validation), corrected: true };
       } catch (error) {
         return reply.code(422).send({
           ok: false,
@@ -1604,8 +1666,12 @@ export class MultiplayerSessionServer {
     const active = this.encounterTurnState.participants.find(({ id }) => id === this.encounterTurnState.activeParticipantId);
     const connectedIds = new Set(this.roster.members().map(({ player }) => player.id));
     const required = new Set([...this.pendingPlayerDamages.values()].map(({ playerId }) => playerId));
+    for (const pending of this.pendingResistances.values()) {
+      const member = this.encounterMembers().find(({ profileId }) => profileId === pending.profileId);
+      if (member) required.add(member.player.id);
+    }
     if (active?.kind === 'player') required.add(active.sourceId);
-    const names = this.encounterMembers().filter(({ player }) => required.has(player.id) && !connectedIds.has(player.id))
+    const names = this.encounterMembers().filter(({ player, profileId }) => required.has(player.id) && !connectedIds.has(player.id) && !this.masterControlledProfiles.has(profileId ?? ''))
       .map(({ player, clientId }) => this.playerCombatStates.get(clientId)?.characterName || player.name);
     return names.length ? { reason: 'reconnecting', names } : null;
   }
@@ -1620,6 +1686,7 @@ export class MultiplayerSessionServer {
     if (!member?.profileId) return false;
     const profileId = member.profileId;
     this.kickedProfiles.add(profileId);
+    this.masterControlledProfiles.delete(profileId);
     this.savedEncounterPlayers.delete(profileId);
     this.savedSessionMembers.delete(profileId);
     this.awaitingSavedPlayers.delete(profileId);
@@ -1629,6 +1696,7 @@ export class MultiplayerSessionServer {
     this.deferredInitiativeActors.delete(`player:${playerId}`);
     this.lateInitiativeQueue = this.lateInitiativeQueue.filter((id) => id !== `player:${playerId}`);
     for (const [id, pending] of this.pendingPlayerDamages) if (pending.playerId === playerId) this.pendingPlayerDamages.delete(id);
+    for (const [id, pending] of this.pendingResistances) if (pending.profileId === profileId) this.pendingResistances.delete(id);
     for (const socket of this.io.sockets.sockets.values()) if (socket.data.profileId === profileId) {
       this.roster.unregisterSocket(socket.id);
       socket.emit('session:join-rejected', 'O mestre removeu você deste encontro.', () => undefined);
@@ -1689,6 +1757,7 @@ export class MultiplayerSessionServer {
         error: 'O participante recém-chegado deve rolar Iniciativa primeiro.',
       };
     }
+    if (this.pendingResistances.size > 0) return { ok: false, error: 'Aguarde os testes de resistência pendentes.' };
     if (this.pendingPlayerDamages.size > 0 || this.pendingDirectPlayerDamages.size > 0) {
       return {
         ok: false,
@@ -1751,6 +1820,7 @@ export class MultiplayerSessionServer {
     const participant = this.encounterTurnState.participants.find(
       ({ id }) => id === participantId,
     );
+    if (participant?.kind === 'player' && this.controlledActor(participant.sourceId)) return this.rollInitiativeAsPlayer(participant.sourceId, extremeAdvantage);
     if (!participant || !['boss', 'npc'].includes(participant.kind)) {
       return { ok: false, error: 'Selecione um chefão ou NPC pendente.' };
     }
@@ -1767,7 +1837,7 @@ export class MultiplayerSessionServer {
     if (!participant) {
       return { ok: false, error: 'Seu personagem não participa desta iniciativa.' };
     }
-    const socket = [...this.io.sockets.sockets.values()].find(
+    const socket = this.controlledActor(playerId) ?? [...this.io.sockets.sockets.values()].find(
       (candidate) => candidate.data.playerId === playerId,
     );
     const sheetLockError = socket
@@ -1911,6 +1981,40 @@ export class MultiplayerSessionServer {
     this.publishPlayerHuds();
   }
 
+  private queueResistance(request: Omit<PendingResistance, 'id'>) {
+    if (this.pendingResistances.size >= 200) throw new Error('Resolva as resistências pendentes antes de atacar novamente.');
+    const pending = { ...request, id: `resistance:${randomUUID()}` };
+    this.pendingResistances.set(pending.id, pending);
+    if (this.automaticResistances.has(request.profileId)) this.rollResistance(pending.id, request.profileId);
+    return pending.id;
+  }
+
+  rollResistance(id: string, ownerProfileId?: string): { ok: boolean; error?: string } {
+    const pending = this.pendingResistances.get(id);
+    if (!pending || (ownerProfileId !== undefined && pending.profileId !== ownerProfileId)) return { ok: false, error: 'Teste indisponível para este jogador.' };
+    const target = this.encounterTargets().find((socket) => socket.data.profileId === pending.profileId);
+    if (!target) return { ok: false, error: 'O personagem não está no encontro.' };
+    const state = this.playerCombatStates.get(target.data.clientId);
+    if (!state) return { ok: false, error: 'Ficha indisponível.' };
+    const sheetLock = this.characterSheetLockError(pending.profileId);
+    if (sheetLock && ownerProfileId !== undefined) return { ok: false, error: sheetLock };
+    // Remove before rolling: a repeated/retried request cannot roll twice.
+    this.pendingResistances.delete(id);
+    const die = this.randomInteger(1, 21);
+    if (pending.area) {
+      this.applyAreaDamage({ ...pending.area, playerIds: [target.data.playerId] }, die);
+    } else if (pending.effect) {
+      const summary = this.profileForEncounter(pending.profileId)?.sheet.validation?.summary;
+      const name = BOSS_SKILL_DEFINITIONS.find(([skill]) => skill === pending.effect!.resistanceSkill)?.[1] ?? pending.skill;
+      const modifier = summary?.skills.find((skill) => skill.name.toLocaleLowerCase('pt-BR') === name.toLocaleLowerCase('pt-BR'))?.total ?? 0;
+      const check = resolveD20Check(die, modifier, pending.dc);
+      this.appendRollResults([{ id, participantId: `player:${target.data.playerId}`, label: `${name} CD ${pending.dc} · ${pending.label}`, expression: `1d20 ${modifier < 0 ? '-' : '+'} ${Math.abs(modifier)}`, rolls: [die], modifier, total: check.total, outcome: check.success ? 'success' : 'failure', category: 'test', createdAt: Date.now(), retainedByParticipantId: this.encounterTurnState.activeParticipantId, correlationId: pending.correlationId, targetParticipantId: pending.attackerParticipantId, natural: check.natural }]);
+      if (!check.success) this.applyPlayerStatus({ playerIds: [target.data.playerId], status: { statusId: pending.effect.statusId, turnsRemaining: pending.effect.turns, damageFormula: pending.effect.damageFormula === '0' ? null : pending.effect.damageFormula } });
+    }
+    this.publishPlayerHuds();
+    return { ok: true };
+  }
+
   getEncounterDebugCreatures(): EncounterDebugCreature[] {
     const creatures: EncounterDebugCreature[] = [];
     const seenClients = new Set<string>();
@@ -2013,9 +2117,10 @@ export class MultiplayerSessionServer {
     this.publishPlayerHuds();
   }
 
-  applyAreaDamage(request: AreaDamageRequest): AreaDamageResult {
+  applyAreaDamage(request: AreaDamageRequest, resistanceDie?: number): AreaDamageResult {
     const lock = this.connectionLockError();
-    if (lock) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: lock };
+    if (lock && resistanceDie === undefined) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: lock };
+    if (resistanceDie === undefined && this.pendingResistances.size > 190) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'Resolva as resistências pendentes primeiro.' };
     if (!isAreaDamageRequest(request)) throw new Error('Informe dano, CD e resultado de sucesso válidos.');
     const skippedPlayers: string[] = [];
     let appliedPlayers = 0;
@@ -2083,6 +2188,10 @@ export class MultiplayerSessionServer {
       });
     }
     for (const { socket, state } of targets) {
+      if (resistanceDie === undefined && state.currentHealth > 0 && !state.dead) {
+        this.queueResistance({ profileId: socket.data.profileId, playerId: socket.data.playerId, label: 'Resistir ao dano em área', skill: 'Reflexos', dc: request.reflexDc, area: { ...resolvedRequest, damageFormula: undefined, playerIds: [socket.data.playerId] }, attackerParticipantId: request.attackerParticipantId, correlationId: request.correlationId });
+        continue;
+      }
       let currentState = state;
       let impacted = false;
       for (const parcel of damageParcels) {
@@ -2094,7 +2203,7 @@ export class MultiplayerSessionServer {
             damageFormula: undefined,
             hits: undefined,
           },
-          this.randomInteger(1, 21),
+          resistanceDie ?? this.randomInteger(1, 21),
           ++this.playerImpactSequence,
         );
         currentState = impact.playerState;
@@ -2149,7 +2258,7 @@ export class MultiplayerSessionServer {
       }));
       appliedPlayers += 1;
     }
-    if (appliedPlayers > 0) {
+    if (appliedPlayers > 0 || rollResults.length > 0 || this.pendingResistances.size > 0) {
       const orderedResults = this.orderRollResults(rollResults);
       this.syncTurnParticipants();
       this.encounterTurnState = {
@@ -2201,6 +2310,7 @@ export class MultiplayerSessionServer {
         error: 'Informe os jogadores e um dano válido.',
       };
     }
+    if (this.pendingResistances.size + (request.statusEffects?.length ?? 0) * 10 > 200) return { ok: false, appliedPlayers: 0, skippedPlayers: [], error: 'Resolva as resistências pendentes primeiro.' };
     const selected = new Set(request.playerIds);
     const handledClients = new Set<string>();
     const skippedPlayers: string[] = [];
@@ -2371,13 +2481,13 @@ export class MultiplayerSessionServer {
     const parsedDamage = request.damageFormula
       ? parseDamageFormula(request.damageFormula)
       : null;
-    const normalDamageRoll = hasNormalHit && parsedDamage
+    const normalDamageRoll = !request.independentHits && hasNormalHit && parsedDamage
       ? rollDamageFormulaDetailed(
         parsedDamage,
         (minimum, maximum) => this.randomInteger(minimum, maximum),
       )
       : null;
-    const criticalDamageRoll = hasCriticalHit && parsedDamage
+    const criticalDamageRoll = !request.independentHits && hasCriticalHit && parsedDamage
       ? rollCriticalDamageFormulaDetailed(
         parsedDamage,
         request.criticalMultiplier ?? 2,
@@ -2453,9 +2563,22 @@ export class MultiplayerSessionServer {
       let currentState = state;
       hits.forEach(({ hit, critical }, index) => {
         if (!hit) return;
-        const parcel = critical
+        const independentRoll = request.independentHits && parsedDamage
+          ? critical
+            ? rollCriticalDamageFormulaDetailed(parsedDamage, request.criticalMultiplier ?? 2, (minimum, maximum) => this.randomInteger(minimum, maximum))
+            : rollDamageFormulaDetailed(parsedDamage, (minimum, maximum) => this.randomInteger(minimum, maximum))
+          : null;
+        const parcel = request.independentHits ? independentRoll?.total ?? request.damage : critical
           ? criticalDamageParcels[index] ?? 0
           : normalDamageParcels[index] ?? 0;
+        if (request.independentHits && request.attackerParticipantId) damageRollResults.push({
+          id: `damage:${request.attackerParticipantId}:${randomUUID()}`, participantId: request.attackerParticipantId,
+          label: `${critical ? 'Dano crítico' : 'Dano'} ${index + 1}/${hits.length}`,
+          expression: critical && parsedDamage ? criticalDamageExpression(parsedDamage, request.criticalMultiplier ?? 2) : request.damageFormula ?? String(request.damage),
+          rolls: independentRoll?.rolls ?? [], modifier: independentRoll?.modifier ?? request.damage, total: parcel,
+          outcome: 'success', category: 'damage', createdAt: Date.now(), retainedByParticipantId: this.encounterTurnState.activeParticipantId,
+          actionId: request.actionId, correlationId: request.correlationId, critical, targetParticipantId: `player:${socket.data.playerId}`, targetName: state.characterName,
+        });
         currentState = {
           ...applyPlayerDamage(currentState, parcel).state,
           criticalImpactId: critical
@@ -2467,6 +2590,9 @@ export class MultiplayerSessionServer {
       const targetWasCritical = hits.some(({ critical }) => critical);
       if (targetWasHit) {
         this.playerCombatStates.set(socket.data.clientId, currentState);
+        for (const effect of request.statusEffects ?? []) {
+          this.queueResistance({ profileId: socket.data.profileId, playerId: socket.data.playerId, label: `Resistir a ${effect.statusId}`, skill: BOSS_SKILL_DEFINITIONS.find(([id]) => id === effect.resistanceSkill)?.[1] ?? effect.resistanceSkill, dc: effect.dc, effect, attackerParticipantId: request.attackerParticipantId, correlationId: request.correlationId });
+        }
         this.publishPlayerState(socket.data.clientId);
         vitalHistory.push(historyEntryForVitalChange({
           id: `history:direct-damage:${socket.data.playerId}:${randomUUID()}`,
@@ -2520,7 +2646,9 @@ export class MultiplayerSessionServer {
       skippedPlayers,
       ...(missedPlayers.length > 0 ? { missedPlayers } : {}),
       impacts,
-      rolledDamage: hasCriticalHit
+      rolledDamage: request.independentHits
+        ? Math.max(0, ...impacts.map(({ appliedDamage }) => appliedDamage))
+        : hasCriticalHit
         ? resolvedCriticalDamage
         : resolvedNormalDamage,
     };
@@ -2530,7 +2658,7 @@ export class MultiplayerSessionServer {
     pendingDamageId: string,
   ): Promise<PlayerTargetActionResult> {
     const pending = this.pendingDirectPlayerDamages.get(pendingDamageId);
-    if (!pending) {
+    if (!pending || this.resolvingDirectDamage.has(pendingDamageId)) {
       return {
         ok: false,
         appliedPlayers: 0,
@@ -2541,12 +2669,15 @@ export class MultiplayerSessionServer {
     const hitMap = new Map(
       pending.targets.map(({ playerId, hits }) => [playerId, hits] as const),
     );
-    const result = await this.applyDirectPlayerDamage(
-      { ...pending.request, deferDamage: false },
-      hitMap,
-    );
-    if (result.ok) this.pendingDirectPlayerDamages.delete(pendingDamageId);
-    return result;
+    this.resolvingDirectDamage.add(pendingDamageId);
+    try {
+      const result = await this.applyDirectPlayerDamage(
+        { ...pending.request, deferDamage: false },
+        hitMap,
+      );
+      if (result.ok) this.pendingDirectPlayerDamages.delete(pendingDamageId);
+      return result;
+    } finally { this.resolvingDirectDamage.delete(pendingDamageId); }
   }
 
   getPendingBossDamage(bossId: string) {
@@ -2614,6 +2745,7 @@ export class MultiplayerSessionServer {
     socket: MultiplayerPlayerSocket,
     request: PlayerCombatActionRequest,
   ): Promise<PlayerCombatActionResult> {
+    if (this.masterControlledProfiles.has(socket.data.profileId)) return { ok: false, error: 'O mestre está controlando este personagem.' };
     if (!isPlayerCombatActionRequest(request)) {
       return { ok: false, error: 'A ação de combate é inválida.' };
     }
@@ -2649,7 +2781,7 @@ export class MultiplayerSessionServer {
           id,
           playerId: socket.data.playerId,
           playerName: state.characterName || socket.data.playerName,
-          label: `Ação antes da iniciativa: ${this.combatActionLabel(socket, request)}`,
+          label: `Ação antes da iniciativa: ${this.combatActionLabel(socket, request)}${request.kind === 'attack' ? ` · bônus de ataque ${request.extraAttackModifier ?? 0}; dano ${request.extraDamageModifier ?? 0}` : ''}`,
           requestedAt: Date.now(),
           actionId,
           kind: 'pre-initiative-action',
@@ -2725,6 +2857,21 @@ export class MultiplayerSessionServer {
       (request.kind === 'resource' && request.resource === 'action-point') ||
       ((request.kind === 'skill' || request.kind === 'attack') &&
         request.resource?.kind === 'action-point');
+    if (request.kind === 'attack') {
+      const signature = `${request.extraAttackModifier ?? 0}:${request.extraDamageModifier ?? 0}`;
+      if (signature !== (this.approvedAttackModifiers.get(socket.data.profileId) ?? '0:0')) {
+        const existing = [...this.pendingActionPointRequests.values()].find((entry) => entry.clientId === socket.data.clientId);
+        if (existing) return { ok: true, pendingApproval: true, requestId: existing.request.id };
+        const id = randomUUID();
+        this.pendingActionPointRequests.set(id, {
+          request: { id, playerId: socket.data.playerId, playerName: state.characterName, requestedAt: Date.now(), actionId, kind: 'attack-adjustment', label: `Bônus de ${this.combatActionLabel(socket, request)}: ataque ${request.extraAttackModifier ?? 0}; dano ${request.extraDamageModifier ?? 0}${usesActionPoint ? ' · com Ponto de Ação' : ''}` },
+          socketId: socket.id, clientId: socket.data.clientId, profileId: socket.data.profileId, combatAction, approvesActionPoint: usesActionPoint, approvesMissingStandardAction: false,
+        });
+        this.notifyActionPointRequestsChanged();
+        this.emitResourceNotice(socket.data.clientId, { id, tone: 'info', message: 'Os bônus personalizados aguardam aprovação do mestre.', persistent: true });
+        return { ok: true, pendingApproval: true, requestId: id };
+      }
+    }
     if (usesActionPoint) {
       if (
         normalizeActionPointCount(
@@ -2878,6 +3025,7 @@ export class MultiplayerSessionServer {
     }
     this.pendingActionPointRequests.delete(requestId);
     this.notifyActionPointRequestsChanged();
+    if (pending.combatAction.kind === 'attack') this.approvedAttackModifiers.set(socket.data.profileId, `${pending.combatAction.extraAttackModifier ?? 0}:${pending.combatAction.extraDamageModifier ?? 0}`);
     const result = await this.executePlayerCombatAction(
       socket,
       pending.combatAction,
@@ -2888,7 +3036,9 @@ export class MultiplayerSessionServer {
       id: requestId,
       tone: result.ok ? 'approved' : 'rejected',
       message: result.ok
-        ? pending.request.kind === 'pre-initiative-action'
+        ? pending.request.kind === 'attack-adjustment'
+          ? 'O mestre autorizou os bônus personalizados do ataque.'
+          : pending.request.kind === 'pre-initiative-action'
           ? 'O mestre autorizou sua ação antes da iniciativa.'
           : pending.approvesMissingStandardAction && !pending.approvesActionPoint
           ? 'O mestre autorizou seu teste de perícia.'
@@ -3095,7 +3245,7 @@ export class MultiplayerSessionServer {
   }
 
   private async executePlayerCombatAction(
-    socket: MultiplayerPlayerSocket,
+    socket: EncounterPlayerActor,
     request: PlayerCombatActionRequest,
     actionPointApproved = false,
     missingStandardActionApproved = false,
@@ -3465,7 +3615,11 @@ export class MultiplayerSessionServer {
     const attackTestFormula = parseAttackTestFormula(
       unarmed ? '1d20' : sheetAttack?.attackBonus,
     );
-    const selectedDamageFormula = unarmed?.damageFormula ?? request.damageFormula;
+    // The sheet/weapon remains authoritative. The browser can only propose
+    // separately approved numeric bonuses, never replace the base formula.
+    const baseDamageFormula = unarmed?.damageFormula ?? sheetAttack?.damage ?? '0';
+    const extraDamage = request.extraDamageModifier ?? 0;
+    const selectedDamageFormula = `${baseDamageFormula}${extraDamage ? ` ${extraDamage < 0 ? '-' : '+'} ${Math.abs(extraDamage)}` : ''}`;
     const damageFormula = parseDamageFormula(selectedDamageFormula);
     const defense = this.options.getBossDefense?.(
       request.targetBossId,
@@ -3492,7 +3646,7 @@ export class MultiplayerSessionServer {
       attackTestFormula,
       (minimum, maximum) => this.randomInteger(minimum, maximum),
     );
-    const attackModifier = attackFormulaExtras.total + attackSkill;
+    const attackModifier = attackFormulaExtras.total + attackSkill + (request.extraAttackModifier ?? 0);
     const total = chosenDie + attackModifier + interventionDie;
     const success =
       chosenDie === 20 ||
@@ -3519,7 +3673,7 @@ export class MultiplayerSessionServer {
       label: attack.name || (request.attackType === 'melee' ? 'Luta' : 'Pontaria'),
       expression: attackTestFormulaExpression(
         attackTestFormula,
-        attackSkill,
+        attackSkill + (request.extraAttackModifier ?? 0),
         baseDice.length,
         Boolean(interventionDie),
       ),
@@ -3589,7 +3743,7 @@ export class MultiplayerSessionServer {
   }
 
   private resolvePendingPlayerDamage(
-    socket: MultiplayerPlayerSocket,
+    socket: EncounterPlayerActor,
     pendingDamageId: string,
   ): PlayerCombatActionResult {
     const pending = this.pendingPlayerDamages.get(pendingDamageId);
@@ -3686,7 +3840,7 @@ export class MultiplayerSessionServer {
   }
 
   private commitPlayerAttackCosts(
-    socket: MultiplayerPlayerSocket,
+    socket: EncounterPlayerActor,
     state: PlayerEncounterState,
     actions: PlayerHudActionState,
     resourceEffect: EncounterRollResult['resourceEffect'],
@@ -3709,7 +3863,7 @@ export class MultiplayerSessionServer {
   }
 
   private consumePlayerResource(
-    socket: MultiplayerPlayerSocket,
+    socket: EncounterPlayerActor,
     state: PlayerEncounterState,
     resourceEffect: EncounterRollResult['resourceEffect'],
     actionId: string,
@@ -3882,13 +4036,14 @@ export class MultiplayerSessionServer {
     open: boolean,
   ) {
     if (open) {
+      if (this.masterControlledProfiles.has(profileId)) return { ok: false, error: 'Aguarde o mestre devolver o controle antes de alterar a ficha.' };
       if (this.pendingSheetChangeRequests.has(profileId)) {
         return {
           ok: false,
           error: 'Aguarde o mestre avaliar as alterações já enviadas.',
         };
       }
-      if (!this.profileForEncounter(profileId)?.sheet.hasSheet) {
+      if (!this.profileForEncounter(profileId)?.sheet.hasSheet && !this.pendingSheetImports.has(profileId)) {
         return { ok: false, error: 'Nenhuma ficha foi enviada.' };
       }
       this.activeSheetEditors.set(profileId, socketId);
@@ -3906,6 +4061,7 @@ export class MultiplayerSessionServer {
   }
 
   discardCharacterSheetChanges(profileId: string) {
+    this.pendingSheetImports.delete(profileId);
     this.activeSheetEditors.delete(profileId);
     if (this.pendingSheetChangeRequests.delete(profileId)) {
       this.notifySheetChangeRequestsChanged();
@@ -3916,13 +4072,16 @@ export class MultiplayerSessionServer {
   async getCharacterSheetEditor(
     profileId: string,
   ): Promise<CharacterSheetEditorResult> {
-    const sheet = await this.readEncounterSheet(profileId);
+    const importing = this.pendingSheetImports.get(profileId);
+    const sheet = importing ?? await this.readEncounterSheet(profileId);
     if (!sheet) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
     const pending = this.pendingSheetChangeRequests.get(profileId);
     return {
       ok: true,
       document: {
         fileName: sheet.fileName,
+        importPending: Boolean(importing),
+        issues: sheet.validation.issues,
         fields: pending?.fields ?? await readCharacterSheetEditorFields(sheet.bytes),
         pendingApproval: Boolean(pending),
         requestId: pending?.request.id ?? null,
@@ -3935,11 +4094,16 @@ export class MultiplayerSessionServer {
     clientId: string,
     fields: CharacterSheetEditorField[],
   ): Promise<CharacterSheetEditorResult> {
-    const sheet = await this.readEncounterSheet(profileId);
+    if (this.masterControlledProfiles.has(profileId)) return { ok: false, error: 'Aguarde o mestre devolver o controle antes de alterar a ficha.' };
+    const importing = this.pendingSheetImports.get(profileId);
+    const sheet = importing ?? await this.readEncounterSheet(profileId);
     const profile = this.options.playerProfileStore.profileById(profileId);
     if (!sheet || !profile) return { ok: false, error: 'Nenhuma ficha foi enviada.' };
     const invalidUpdate = validateCharacterSheetEditorUpdates(fields);
-    if (invalidUpdate) return { ok: false, error: invalidUpdate };
+    if (invalidUpdate) return { ok: false, error: invalidUpdate, issues: fields.flatMap((field) => {
+      const error = validateCharacterSheetEditorUpdates([field]);
+      return error ? [{ id: `invalid:${field.name}`, severity: 'error' as const, field: field.name, message: error, autoFixable: false }] : [];
+    }) };
     const originalFields = await readCharacterSheetEditorFields(sheet.bytes);
     const originalByName = new Map(originalFields.map((field) => [field.name, field.value]));
     let applied: Awaited<ReturnType<typeof applyCharacterSheetEditorFields>>;
@@ -3950,6 +4114,13 @@ export class MultiplayerSessionServer {
         ok: false,
         error: error instanceof Error ? error.message : 'Os valores da ficha são inválidos.',
       };
+    }
+    if (applied.validation.issues.some(({ severity }) => severity === 'error')) return { ok: false, error: 'Corrija os campos destacados antes de salvar a ficha.', issues: applied.validation.issues };
+    if (importing) {
+      const result = await this.stageOrImportSheet(profileId, clientId, sheet.fileName, applied.bytes, applied.validation);
+      this.activeSheetEditors.delete(profileId);
+      this.publishCharacterSheetInteractionState(profileId);
+      return { ok: true, sheet: result.sheet, document: { fileName: sheet.fileName, fields: applied.fields, pendingApproval: false, requestId: null, issues: applied.validation.issues } };
     }
     const appliedByName = new Map(applied.fields.map((field) => [field.name, field.value]));
     const changes = fields.flatMap((field) => {
@@ -4020,11 +4191,13 @@ export class MultiplayerSessionServer {
       .find(({ request }) => request.id === requestId);
     if (!pending) return { ok: false, error: 'A proposta de ficha não está mais pendente.' };
     if (approved) {
+      const finalInspection = await inspectCharacterSheetPdf(pending.bytes);
+      if (finalInspection.validation.issues.some(({ severity }) => severity === 'error')) return { ok: false, error: 'A ficha ainda contém erros. Solicite ao jogador que corrija os campos antes de aprovar.' };
       const profile = await this.options.playerProfileStore.saveSheet(
         pending.profileId,
         pending.request.fileName,
         pending.bytes,
-        pending.validation,
+        finalInspection.validation,
       );
       // Clear the review lock before rebuilding the approved combat state.
       this.pendingSheetChangeRequests.delete(pending.profileId);
@@ -4317,6 +4490,8 @@ export class MultiplayerSessionServer {
     this.pendingJoinRequests.clear();
     this.pendingActionPointRequests.clear();
     this.pendingSheetChangeRequests.clear();
+    this.pendingSheetImports.clear();
+    this.masterControlledProfiles.clear();
     this.activeSheetEditors.clear();
     this.accountSessions.clear();
     this.savedEncounterPlayers.clear();
@@ -4327,6 +4502,9 @@ export class MultiplayerSessionServer {
     this.deferredDisconnectedTurn = null;
     this.playerCombatStates.clear();
     this.playerPrivacy.clear();
+    this.pendingResistances.clear();
+    this.automaticResistances.clear();
+    this.approvedAttackModifiers.clear();
     this.playerActions.clear();
     this.unarmedStrikeEnabled.clear();
     this.actionPointActionIds.clear();
@@ -4572,7 +4750,19 @@ export class MultiplayerSessionServer {
       this.publishPlayerHuds();
       acknowledge({ ok: true });
     });
+    socket.on('player:roll-resistance', (id, acknowledge) => {
+      if (this.masterControlledProfiles.has(socket.data.profileId)) { acknowledge({ ok: false, error: 'O mestre está controlando este personagem.' }); return; }
+      if (typeof id !== 'string' || id.length > 160) { acknowledge({ ok: false, error: 'Teste inválido.' }); return; }
+      acknowledge(this.rollResistance(id, socket.data.profileId));
+    });
+    socket.on('player:auto-resistance', (enabled, acknowledge) => {
+      if (typeof enabled !== 'boolean') { acknowledge(false); return; }
+      if (enabled) this.automaticResistances.add(socket.data.profileId);
+      else this.automaticResistances.delete(socket.data.profileId);
+      acknowledge(true);
+    });
     socket.on('player:use-action', (action, acknowledge) => {
+      if (this.masterControlledProfiles.has(socket.data.profileId)) { acknowledge({ ok: false, error: 'O mestre está controlando este personagem.' }); return; }
       if (!['free', 'movement', 'standard'].includes(action)) {
         acknowledge({ ok: false, error: 'Tipo de ação inválido.' });
         return;
@@ -4629,6 +4819,7 @@ export class MultiplayerSessionServer {
       acknowledge({ ok: true });
     });
     socket.on('encounter:end-own-turn', (acknowledge) => {
+      if (this.masterControlledProfiles.has(socket.data.profileId)) { acknowledge({ ok: false, error: 'O mestre está controlando este personagem.' }); return; }
       const sheetLockError = this.characterSheetLockError(socket.data.profileId);
       if (sheetLockError) {
         acknowledge({ ok: false, error: sheetLockError });
@@ -4662,6 +4853,7 @@ export class MultiplayerSessionServer {
       });
     });
     socket.on('encounter:roll-initiative', (extremeAdvantage, acknowledge) => {
+      if (this.masterControlledProfiles.has(socket.data.profileId)) { acknowledge({ ok: false, error: 'O mestre está controlando este personagem.' }); return; }
       const result = this.rollInitiativeAsPlayer(
         socket.data.playerId,
         extremeAdvantage === true,
@@ -4810,13 +5002,14 @@ export class MultiplayerSessionServer {
       const effectiveDefenses = encounter
         ? effectivePlayerDefenses(encounter)
         : null;
-      const pendingDamage = profile && (isSelf || revealAll)
+      const pendingDamage = resolvedProfileId && (isSelf || revealAll)
         ? [...this.pendingPlayerDamages.values()].find(
-          ({ profileId }) => profileId === profile.data.profileId,
+          ({ profileId }) => profileId === resolvedProfileId,
         ) ?? null
         : null;
       return {
         id: player.id,
+        pendingResistances: isSelf || revealAll ? [...this.pendingResistances.values()].filter((pending) => pending.profileId === resolvedProfileId).map(({ id, label, skill, dc }) => ({ id, label, skill, dc })) : [],
         faction: 'players',
         characterName:
           encounter?.characterName || summary?.characterName || player.name,
@@ -4876,6 +5069,7 @@ export class MultiplayerSessionServer {
           : null,
         sheetInteractionState,
         disconnected: !connectedProfiles.has(profileId),
+        controlledByMaster: this.masterControlledProfiles.has(profileId ?? ''),
         revision: encounter?.revision ?? 0,
       };
     });
@@ -5073,7 +5267,7 @@ export class MultiplayerSessionServer {
 
   private processBleedingAtTurnStart(
     participant: EncounterTurnParticipant,
-    socket: MultiplayerPlayerSocket,
+    socket: EncounterPlayerActor,
   ) {
     const state = this.playerCombatStates.get(socket.data.clientId);
     if (
@@ -5186,7 +5380,7 @@ export class MultiplayerSessionServer {
       );
       if (activePlayer && !this.getConnectionPause()) {
         const initiativeOnly = this.lateInitiativeQueue.includes(activePlayer.id);
-        const socket = [...this.io.sockets.sockets.values()].find(
+        const socket = this.controlledActor(activePlayer.sourceId) ?? [...this.io.sockets.sockets.values()].find(
           (candidate) => candidate.data.playerId === activePlayer.sourceId,
         );
         if (socket) {

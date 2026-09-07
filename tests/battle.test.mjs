@@ -159,7 +159,7 @@ test('persiste o arsenal e a arma pre-selecionada de cada chefão', () => {
     attacks,
     selectedAttackId: attacks[1].id,
   });
-  assert.deepEqual(next.bosses[0].attacks, attacks);
+  assert.deepEqual(next.bosses[0].attacks, attacks.map((attack) => ({ ...attack, attackCount: 1, tags: [], statusEffects: [] })));
   assert.equal(next.bosses[0].selectedAttackId, attacks[1].id);
 });
 

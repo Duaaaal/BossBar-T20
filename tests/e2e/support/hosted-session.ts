@@ -184,6 +184,8 @@ export const createEditableCharacterSheet = async ({
 
 export const startHostedTestSession = async ({
   battleStarted = false,
+  bossDefense,
+  randomInteger,
   onCutsceneReady,
   preloadMediaIds = [
     TEST_MEDIA_IDS.background,
@@ -193,6 +195,8 @@ export const startHostedTestSession = async ({
   ],
 }: {
   battleStarted?: boolean;
+  bossDefense?: number;
+  randomInteger?: (minimum: number, maximumExclusive: number) => number;
   onCutsceneReady?: (playerId: string, id: string, duration: number | null) => void;
   preloadMediaIds?: string[];
 } = {}): Promise<HostedTestSession> => {
@@ -203,6 +207,8 @@ export const startHostedTestSession = async ({
   );
   const playerProfileStore = await PlayerProfileStore.open(profileDirectory);
   const server = await MultiplayerSessionServer.start({
+    getBossDefense: bossDefense === undefined ? undefined : () => bossDefense,
+    randomInteger,
     onCutsceneReady,
     playerProfileStore,
     networkMode: 'loopback',

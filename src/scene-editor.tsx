@@ -38,6 +38,9 @@ import {
 } from './shared/scene';
 import './scene-editor.css';
 import './scrollbars.css';
+import { AttackLibrary } from './AttackLibrary';
+import { SceneMediaFitControl } from './SceneMediaFitControl';
+import { normalizeBossAttacks } from './shared/boss-attacks';
 
 const BOSS_ADDITIONAL_SKILL_DEFINITIONS = BOSS_SKILL_DEFINITIONS.filter(
   ([id]) => id !== 'luta' && id !== 'pontaria',
@@ -70,6 +73,8 @@ const identityPatchFromBoss = (boss: BossState): SceneBossPatch => ({
   shield: boss.shield,
   skillValues: boss.skillValues,
   skillOverrides: boss.skillOverrides,
+  attacks: boss.attacks,
+  selectedAttackId: boss.selectedAttackId,
 });
 
 type SceneAttributesDraft = {
@@ -323,8 +328,8 @@ const PhasePlaylistCard = ({
 
   useEffect(() => {
     if (!audioRef.current || !playlist) return;
-    audioRef.current.loop = playlist.loop;
-  }, [playlist?.loop, playlist?.muted, playlist?.volume]);
+    audioRef.current.loop = playlist.loop || currentTrack?.loop === true;
+  }, [playlist?.loop, currentTrack?.loop, currentTrack?.id]);
 
   useEffect(() => {
     audioRef.current?.pause();
@@ -425,8 +430,8 @@ const ScenePlaylistModal = ({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.loop = state.loop;
-  }, [state.loop]);
+    audio.loop = state.loop || currentTrack?.loop === true;
+  }, [state.loop, currentTrack?.loop]);
 
   useEffect(() => {
     setTime(0);
@@ -510,6 +515,7 @@ const ScenePlaylistModal = ({
                 <strong>{track.name}</strong>
                 <small>{formatTime(track.duration)}</small>
               </button>
+              <button type="button" aria-label={`Repetir ${track.name}`} title="Repetir esta faixa até avançar manualmente" aria-pressed={Boolean(track.loop)} className={track.loop ? 'is-active' : ''} onClick={() => dispatch({ type: 'set-track-loop', trackId: track.id, loop: !track.loop })}>&#8635;</button>
               <button className="scene-track-remove" type="button" title="Remover faixa" aria-label={`Remover ${track.name}`} onClick={() => dispatch({ type: 'remove-track', trackId: track.id })}>&times;</button>
             </div>
           ))}
@@ -539,7 +545,7 @@ const ScenePlaylistModal = ({
           {message && <p className="scene-playlist-message" role="alert">{message}</p>}
         </section>
 
-        <audio ref={audioRef} src={currentTrack?.url} crossOrigin="anonymous" preload="metadata" muted={state.muted} loop={state.loop} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onEnded={() => setPlaying(false)} onPause={() => setPlaying(false)} onPlay={() => setPlaying(true)} />
+        <audio ref={audioRef} src={currentTrack?.url} crossOrigin="anonymous" preload="metadata" muted={state.muted} loop={state.loop || currentTrack?.loop === true} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onEnded={() => { setPlaying(false); if (state.tracks.length > 1) { playAfterSelection.current = true; dispatch({ type: 'next' }); } }} onPause={() => setPlaying(false)} onPlay={() => setPlaying(true)} />
 
         {clearOpen && (
           <div className="scene-playlist-confirm-backdrop">
@@ -589,6 +595,7 @@ const CutsceneEditor = ({ cutscene, busy, onChange, onChoose, onClear, onPlaylis
     <div className="phase-media-grid">
       <article className="phase-media"><span>Imagem, GIF ou vídeo</span><strong>{cutscene.background?.name ?? 'Sem mídia visual'}</strong>
         <div><button disabled={busy} type="button" onClick={onChoose}>Upload</button>{cutscene.background && <button className="media-clear" disabled={busy} type="button" onClick={onClear}>Remover</button>}</div>
+        <SceneMediaFitControl ownerId={cutscene.id} media={cutscene.background} value={cutscene.mediaFit ?? 'contain'} onChange={(mediaFit) => onChange({ ...cutscene, mediaFit })} />
         {cutscene.background?.mediaType === 'video' && <div className="cutscene-video-volume">
           <label><span>Volume do vídeo</span><input aria-label="Volume do vídeo" type="range" min="0" max="1" step="0.01" value={cutscene.videoVolume ?? 0.8} onChange={(event) => onChange({ ...cutscene, videoVolume: Number(event.target.value) })} /></label>
           <button type="button" aria-pressed={cutscene.videoMuted === true} onClick={() => onChange({ ...cutscene, videoMuted: cutscene.videoMuted !== true })}>{cutscene.videoMuted === true ? 'Ativar áudio' : 'Mutar vídeo'}</button>
@@ -602,6 +609,7 @@ const CutsceneEditor = ({ cutscene, busy, onChange, onChoose, onClear, onPlaylis
 );
 
 const SceneEditorApp = () => {
+  const [attackLibraryOpen, setAttackLibraryOpen] = useState(false);
   const [plan, setPlan] = useState<ScenePlan | null>(null);
   const [draft, setDraft] = useState<ScenePlanDraft | null>(null);
   const [savedDraft, setSavedDraft] = useState<ScenePlanDraft | null>(null);
@@ -1431,6 +1439,7 @@ const SceneEditorApp = () => {
                 <span>{mediaLabels.background}</span>
                 <strong title={currentPhase.background?.name ?? resolvedMedia.background ?? ''}>{currentPhase.background?.name ?? resolvedMedia.background ?? 'Não definido'}</strong>
                 <small>{currentPhase.background ? 'Definido nesta fase' : resolvedMedia.background ? 'Herdado de fase anterior' : 'Sem fundo definido'}</small>
+                <SceneMediaFitControl ownerId={currentPhase.id} media={currentPhase.background} value={currentPhase.mediaFit ?? 'fill'} onChange={(mediaFit) => updatePhase((phase) => ({ ...phase, mediaFit }), `phase:${currentPhase.id}:fit`)} />
                 <div>
                   <button type="button" disabled={busy} data-disabled-reason="Aguarde a operação atual" onClick={() => void chooseMedia('background')}>Upload</button>
                   {currentPhase.background && <button className="media-clear" type="button" disabled={busy} data-disabled-reason="Aguarde a operação atual" onClick={() => void clearMedia('background')}>Remover</button>}
@@ -1532,6 +1541,17 @@ const SceneEditorApp = () => {
                   </small>
                 </button>
               </div>
+              <section className="phase-arsenal" aria-label="Arsenal desta fase">
+                <header><span>Arsenal</span>
+                  <button type="button" onClick={() => setAttackLibraryOpen(true)}>Escolher armas / ataques</button>
+                </header>
+                <div className="phase-arsenal-list">
+                  {(resolvedCurrentBoss.attacks ?? []).map((attack) => <div className={`phase-arsenal-entry${resolvedCurrentBoss.selectedAttackId === attack.id ? ' is-selected' : ''}`} key={attack.id}>
+                    <label><input type="radio" name="phase-selected-attack" checked={resolvedCurrentBoss.selectedAttackId === attack.id} onChange={() => updateDirective(selectedBossId, (directive) => ({ ...directive, patch: { ...directive.patch, attacks: structuredClone(resolvedCurrentBoss.attacks), selectedAttackId: attack.id } }))} />{attack.name} · {attack.damageFormula} · {attack.attackCount ?? 1} ataque(s)</label>
+                    <button type="button" title="Remover da fase" aria-label={`Remover ${attack.name} da fase`} disabled={(resolvedCurrentBoss.attacks?.length ?? 0) <= 1} data-disabled-reason="Mantenha pelo menos um ataque na fase" onClick={() => updateDirective(selectedBossId, (directive) => { const attacks = resolvedCurrentBoss.attacks!.filter((item) => item.id !== attack.id); return { ...directive, patch: { ...directive.patch, attacks, selectedAttackId: attacks[0].id } }; })}>×</button>
+                  </div>)}
+                </div>
+              </section>
               <div className="boss-action-values">
                 <label>
                   <span>Descrição da ação <small>(opcional)</small></span>
@@ -1565,6 +1585,10 @@ const SceneEditorApp = () => {
       <footer className="scene-footer">
         <button type="button" disabled={busy || Boolean(rangeError) || !dirty} data-disabled-reason={busy ? 'Aguarde o salvamento atual' : rangeError ? 'Corrija as margens das fases' : 'Nenhuma alteração para salvar'} onClick={() => void persistDraft()}>{busy ? 'Salvando...' : 'Salvar cena'}</button>
       </footer>
+      {attackLibraryOpen && <AttackLibrary context={`${currentPhase.name} · ${resolvedCurrentBoss.bossName}`} onClose={() => setAttackLibraryOpen(false)} onSelect={(attack) => {
+        updateDirective(selectedBossId, (directive) => ({ ...directive, patch: { ...directive.patch, attacks: normalizeBossAttacks([...(resolvedCurrentBoss.attacks ?? []).filter((item) => item.id !== attack.id), attack], selectedBossId), selectedAttackId: attack.id } }));
+        setAttackLibraryOpen(false);
+      }} />}
 
       {attributesDraft && (
         <div className="scene-modal-backdrop">

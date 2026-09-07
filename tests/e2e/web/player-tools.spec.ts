@@ -179,16 +179,20 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       buffer: await createEditableCharacterSheet({ autoFixIssue: true }),
     });
     await expect(firstPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
+    const importEditor = firstPage.getByRole('dialog', { name: 'Ajustar ficha' });
+    await expect(importEditor).toBeVisible();
+    const invalidDefense = importEditor.locator('[data-field-name="CA"] input');
+    await expect(invalidDefense).toHaveAttribute('aria-invalid', 'true');
+    expect(session.server.getPresence().players[0]?.hasCharacterSheet).toBe(false);
+    await invalidDefense.fill('10');
+    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await expect(importEditor).toBeHidden();
+    await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
-    await expect(firstPage.locator('#web-player-sheet-fix')).toBeVisible();
-    await firstPage.locator('#web-player-sheet-fix').click();
-    await expect(firstPage.locator('#web-player-sheet-status')).toContainText(
-      'Os campos objetivamente corrigíveis foram atualizados.',
-    );
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
-    await expect.poll(() => sheetTicketRequests).toBe(2);
+    expect(sheetTicketRequests).toBe(1); // One cached preview ticket, no blank upload popup.
     const observerPage = await observerContext.newPage();
     await joinHostedSession(observerPage, session.inviteUrl, 'Jogador Observador');
     await firstPage.locator('#web-player-sheet-open').click();
@@ -300,8 +304,9 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     const temporaryHealthRequest = session.server.getPendingSheetChangeRequests()[0];
     expect(temporaryHealthRequest?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'BossBar.PVs Temporarios', after: '7' }),
-      expect.objectContaining({ field: 'CargaTotal', after: '0' }),
     ]));
+    // The repaired import already normalized its empty inventory to zero.
+    expect(temporaryHealthRequest?.changes.some(({ field }) => field === 'CargaTotal')).toBe(false);
     expect(await firstPage.evaluate(() => window.bossAPI.usePlayerAction('free')))
       .toMatchObject({ ok: false, error: expect.stringContaining('Aguarde o mestre') });
     expect(await session.server.decideCharacterSheetChanges(temporaryHealthRequest!.id, true))
@@ -454,7 +459,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await firstPage.locator('#web-player-sheet-open').click();
     await expect(sheetEditor).toBeVisible();
     await expect(originField).toHaveValue('Marinheira');
-    expect(sheetTicketRequests).toBe(2);
+    expect(sheetTicketRequests).toBe(1); // Reopening the internal editor reuses the cached preview permission.
     await firstPage.locator('#web-player-sheet-editor-close').click();
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
     await firstPage.locator('#web-player-sheet-selection-remove').click();

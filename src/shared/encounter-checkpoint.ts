@@ -4,6 +4,8 @@ import { isDirectPlayerDamageRequest, type DirectPlayerDamageRequest, type Encou
 import { playerDeathThreshold } from './player-survival.ts';
 import { effectivePlayerDefenses } from './player-defenses.ts';
 import type { BossState } from './battle';
+import { isAreaDamageRequest } from './player-combat.ts';
+import { isAttackStatusEffect } from './boss-attacks.ts';
 
 export type PendingPlayerDamageInternal = {
   id: string;
@@ -60,6 +62,7 @@ export type SavedPlayerEncounter = {
 export type SavedSessionMember = Pick<SavedPlayerEncounter, 'profileId' | 'clientId' | 'playerId' | 'name'>;
 
 export type MultiplayerEncounterCheckpoint = {
+  pendingResistances?: import('./resistance').PendingResistance[];
   /** Includes authenticated spectators who have not uploaded a character yet. */
   members?: SavedSessionMember[];
   pendingPlayerDamages?: PendingPlayerDamageInternal[];
@@ -122,6 +125,12 @@ const checkpointSchema = z.object({
   queuedPhaseIndexes: z.array(finite.int().min(0).max(7)).max(8),
   resumeMusicAfterBlackout: z.boolean(),
   multiplayer: z.object({
+    pendingResistances: z.array(z.object({
+      id, profileId: id, playerId: id, label: z.string().max(200), skill: z.string().max(80), dc: finite.int().min(0).max(999),
+      area: z.custom<import('./player-combat').AreaDamageRequest>((value) => isAreaDamageRequest(value)).optional(),
+      effect: z.custom<import('./boss-attacks').AttackStatusEffect>(isAttackStatusEffect).optional(),
+      attackerParticipantId: id.optional(), correlationId: id.optional(),
+    })).max(200).optional(),
     members: z.array(z.object({ profileId: id, clientId: id, playerId: id, name: z.string().max(200) })).max(10).optional(),
     pendingPlayerDamages: z.array(z.object({
       id, profileId: id, playerId: id, targetBossId: id, targetBossName: z.string().max(200),

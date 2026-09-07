@@ -25,7 +25,7 @@ import {
 import path from 'node:path';
 import { normalizeEncounterCheckpoint, resumeEncounterTurns, type EncounterCheckpoint } from './shared/encounter-checkpoint';
 import { CutsceneCoordinator } from './cutscene-coordinator';
-import { cutsceneFade, cutsceneBlackoutSeconds, cutsceneMusicPosition, cutsceneNextMusicPosition, playlistPosition } from './shared/scene';
+import { cutsceneFade, cutsceneBlackoutSeconds, cutsceneMusicPosition, cutsceneNextMusicPosition, playlistPosition, normalizeSceneMediaFit } from './shared/scene';
 import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
@@ -216,6 +216,7 @@ import {
 } from './multiplayer/session-server';
 import { PlayerProfileStore } from './multiplayer/player-profile-store';
 import { CustomStatusLibraryStore } from './custom-status-library-store';
+import { AttackLibraryStore } from './attack-library-store';
 import {
   CLOUDFLARED_VERSION,
   ensureCloudflaredBinary,
@@ -284,6 +285,7 @@ let soundboardWindow: BrowserWindow | null = null;
 let libraryWindow: BrowserWindow | null = null;
 let sceneEditorWindow: BrowserWindow | null = null;
 let encounterDebuggerWindow: BrowserWindow | null = null;
+let attackLibraryWindow: BrowserWindow | null = null;
 let hostedSessionServer: MultiplayerSessionServer | null = null;
 let hostedSessionPresence: MultiplayerPresence | null = null;
 let playerHudState: PlayerHudState[] = [];
@@ -303,6 +305,14 @@ const getPlayerProfileStore = () => {
   return playerProfileStorePromise;
 };
 let customStatusLibraryStorePromise: Promise<CustomStatusLibraryStore> | null = null;
+let attackLibraryStorePromise: Promise<AttackLibraryStore> | null = null;
+const getAttackLibraryStore = () => {
+  attackLibraryStorePromise ??= AttackLibraryStore.open(app.getPath('userData')).catch((error) => {
+    attackLibraryStorePromise = null;
+    throw error;
+  });
+  return attackLibraryStorePromise;
+};
 const getCustomStatusLibraryStore = () => {
   customStatusLibraryStorePromise ??= CustomStatusLibraryStore.open(
     app.getPath('userData'),
@@ -345,6 +355,7 @@ type InternalMusicTrack = {
   name: string;
   filePath: string;
   duration: number;
+  loop?: boolean;
 };
 const musicTracks: InternalMusicTrack[] = [];
 type InternalSoundboardSlot = {
@@ -619,6 +630,7 @@ type StoredSceneMedia = StoredMediaFile & {
 type StoredScenePlaylistTrack = StoredMediaFile & {
   id: string;
   duration: number;
+  loop?: boolean;
 };
 
 type StoredScenePlaylist = Omit<
@@ -704,6 +716,7 @@ const supportedBackgroundExtensions: ReadonlySet<string> = new Set([
 
 let backgroundPlayback = { revision: -1, time: 0 };
 const getBackgroundState = (): BackgroundState => ({
+  mediaFit: normalizeSceneMediaFit(scenePlan.phases[scenePlan.activePhaseIndex]?.mediaFit),
   resumeTime: backgroundPlayback.revision === backgroundRevision ? backgroundPlayback.time : 0,
   url: activeBackgroundFilePath
     ? `boss-media://background/current?v=${backgroundRevision}`
@@ -1052,8 +1065,9 @@ const getMusicState = (): MusicState => {
       revision: scenePlan.revision + musicState.revision };
   }
   return { ...musicState, sceneOwnerId: battleState.battleStarted ? activeMusicOwnerId : null, externalPlayback: false,
+    loop: musicState.loop || musicTracks.find((track) => track.id === musicState.currentTrackId)?.loop === true,
     resumeTime: musicPlaybackState.currentTime,
-    tracks: musicTracks.map(({ id, name, duration }) => ({ id, name, duration,
+    tracks: musicTracks.map(({ id, name, duration, loop }) => ({ id, name, duration, loop,
       url: activeMusicOwnerId && scenePlaylistPaths.has(scenePlaylistTrackKey(activeMusicOwnerId, 'music', id))
         ? scenePlaylistTrackUrl(activeMusicOwnerId, 'music', id) : `boss-media://audio/${id}` })),
   };
@@ -1868,6 +1882,7 @@ const normalizeStoredScenePlaylist = (
           name: track.name.slice(0, 255),
           filePath: track.filePath,
           duration: Math.max(0, track.duration),
+          loop: track.loop === true,
         }]
       : [],
   );
@@ -2021,6 +2036,7 @@ const normalizeStoredScene = (
     return [{
       id: rawPhase.id,
       name: rawPhase.name,
+      mediaFit: normalizeSceneMediaFit(rawPhase.mediaFit),
       visualFadeInSeconds: clampFadeSeconds(rawPhase.visualFadeInSeconds),
       audioFadeInSeconds: clampFadeSeconds(rawPhase.audioFadeInSeconds),
       hudFadeInSeconds: clampFadeSeconds(rawPhase.hudFadeInSeconds),
@@ -2362,6 +2378,7 @@ const captureLibraryEntry = (
             name: track.name,
             filePath,
             duration: track.duration,
+            loop: track.loop,
           }] : [];
         });
         if (tracks.length === 0) return null;
@@ -3023,6 +3040,29 @@ const createEncounterDebuggerWindow = () => {
     if (encounterDebuggerWindow === window) encounterDebuggerWindow = null;
   });
   return window;
+};
+
+const createAttackLibraryWindow = () => {
+  if (attackLibraryWindow && !attackLibraryWindow.isDestroyed()) {
+    if (attackLibraryWindow.isMinimized()) attackLibraryWindow.restore();
+    attackLibraryWindow.show();
+    attackLibraryWindow.focus();
+    return;
+  }
+  const { workArea } = screen.getDisplayMatching(masterWindow?.getBounds() ?? screen.getPrimaryDisplay().bounds);
+  const width = Math.min(1120, workArea.width);
+  const height = Math.min(780, workArea.height);
+  const window = new BrowserWindow({
+    width, height, minWidth: Math.min(780, width), minHeight: Math.min(520, height),
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    title: 'Biblioteca de ataques - BossBar T20', icon: applicationIcon(),
+    backgroundColor: '#181119', autoHideMenuBar: true,
+    webPreferences: { preload: preloadFile('attack-library'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  attackLibraryWindow = window;
+  loadRenderer(window, 'attack-library');
+  window.on('closed', () => { if (attackLibraryWindow === window) attackLibraryWindow = null; });
 };
 
 const createLibraryWindow = () => {
@@ -3860,6 +3900,7 @@ const createEncounterWindows = () => {
     masterFocusTimer = null;
     masterWindow = null;
     encounterDebuggerWindow?.close();
+    attackLibraryWindow?.close();
     libraryWindow?.close();
     soundboardWindow?.close();
     allowSceneEditorClose = true;
@@ -4348,6 +4389,7 @@ const normalizeScenePlaylistSummary = (
       id,
       name: track.name.trim().slice(0, 255) || 'Faixa sem nome',
       duration: Math.min(track.duration, 24 * 60 * 60),
+      loop: track.loop === true,
       url: scenePlaylistTrackUrl(phaseId, slot, id),
     }];
   });
@@ -4379,6 +4421,7 @@ const cutsceneOptions = (value: unknown) => {
   if (!isRecord(value) || !isSafeSceneIdentifier(value.id)) return null;
   return {
     ...createSceneCutscene(value.id),
+    mediaFit: normalizeSceneMediaFit(value.mediaFit, 'contain'),
     blackoutSeconds: clampFadeSeconds(value.blackoutSeconds ?? value.visualFadeOutSeconds ?? value.transitionDurationSeconds ?? 1),
     videoVolume: typeof value.videoVolume === 'number' && Number.isFinite(value.videoVolume) ? Math.max(0, Math.min(1, value.videoVolume)) : 0.8,
     videoMuted: value.videoMuted === true,
@@ -4505,6 +4548,7 @@ const normalizeScenePlanDraft = (value: unknown): ScenePlanDraft | null => {
     return [{
       id: phaseId,
       name: rawPhase.name.trim().slice(0, 60) || 'Fase',
+      mediaFit: normalizeSceneMediaFit(rawPhase.mediaFit),
       visualFadeInSeconds: clampFadeSeconds(rawPhase.visualFadeInSeconds),
       audioFadeInSeconds: clampFadeSeconds(rawPhase.audioFadeInSeconds),
       hudFadeInSeconds: clampFadeSeconds(rawPhase.hudFadeInSeconds),
@@ -4687,6 +4731,7 @@ const activatePhaseMusic = (phase: ScenePhase, playImmediately = true, elapsed =
       name: track.name,
       filePath,
       duration: track.duration,
+      loop: track.loop,
     }];
   });
   if (nextTracks.length === 0) return;
@@ -4870,6 +4915,7 @@ const beginCutscene = (phaseIndex: number, offsetSeconds = 0) => {
     stage: 'loading', startedAt: null, offsetSeconds,
     durationSeconds: cutscene.durationSeconds, advanceMode: cutscene.advanceMode,
     videoVolume: cutscene.videoVolume, videoMuted: cutscene.videoMuted,
+    mediaFit: normalizeSceneMediaFit(cutscene.mediaFit, 'contain'),
     backgroundUrl: cutscene.background && sceneMediaPaths.has(sceneMediaKey(cutscene.id, 'background'))
       ? `boss-media://scene-background/${encodeURIComponent(cutscene.id)}` : null,
     mediaType: cutscene.background?.mediaType === 'video' ? 'video' : 'image',
@@ -4997,7 +5043,7 @@ const processScenePhaseQueue = () => {
       : null,
     soundVolume: transitionPlaylist?.volume ?? 0.8,
     soundMuted: transitionPlaylist?.muted ?? false,
-    soundLoop: transitionPlaylist?.loop ?? false,
+    soundLoop: transitionPlaylist?.loop === true || selectedTrack?.loop === true,
     visual: true,
   };
   sendSceneTransition(event);
@@ -5329,7 +5375,7 @@ ipcMain.handle(
     }
     if (isPlayerSender(event.sender.id)) {
       return hostedSessionServer
-        ? hostedSessionServer.rollInitiativeAsHost(participantId)
+        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage)
         : rollLocalEncounterInitiative(participantId, new Set(['npc']));
     }
     return { ok: false, error: 'Ação não autorizada.' };
@@ -5976,6 +6022,14 @@ ipcMain.on('scene-playlist:dispatch', (
   const next = cloneScenePlaylistSummary(pending.summary);
   let changed = false;
   switch (command.type) {
+    case 'set-track-loop': {
+      if (typeof command.loop !== 'boolean') return;
+      const track = next.tracks.find((item) => item.id === command.trackId);
+      if (!track) return;
+      changed = Boolean(track.loop) !== command.loop;
+      track.loop = command.loop;
+      break;
+    }
     case 'previous':
       if (tracks.length > 1) {
         next.currentTrackId = adjacentScenePlaylistTrackId(next, -1);
@@ -6151,6 +6205,40 @@ ipcMain.handle('launcher:new-encounter', (event) => {
 ipcMain.handle('custom-status-library:get', async (event) => {
   assertAuthorizedIpcSender(isControlSender(event.sender.id));
   return (await getCustomStatusLibraryStore()).list();
+});
+
+ipcMain.handle('attack-library:open', (event) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  createAttackLibraryWindow();
+  return true;
+});
+ipcMain.handle('multiplayer:set-player-control', (event, playerId: unknown, controlled: unknown) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  if (typeof playerId !== 'string' || playerId.length > 128 || typeof controlled !== 'boolean') return false;
+  return hostedSessionServer?.setMasterControl(playerId, controlled) ?? false;
+});
+ipcMain.handle('multiplayer:controlled-player-action', (event, playerId: unknown, request: unknown) => {
+  assertAuthorizedIpcSender(isPlayerSender(event.sender.id));
+  if (typeof playerId !== 'string' || playerId.length > 128) return { ok: false, error: 'Personagem inválido.' };
+  return hostedSessionServer?.requestMasterControlledAction(playerId, request) ?? { ok: false, error: 'Sala indisponível.' };
+});
+ipcMain.on('attack-library:close', (event) => {
+  if (event.sender.id === attackLibraryWindow?.webContents.id) attackLibraryWindow.close();
+});
+ipcMain.handle('attack-library:get', async (event) => {
+  assertAuthorizedIpcSender(event.sender.id === attackLibraryWindow?.webContents.id || isControlSender(event.sender.id) || isSceneEditorSender(event.sender.id));
+  return (await getAttackLibraryStore()).list();
+});
+ipcMain.handle('player:roll-resistance', (event, id: unknown) => {
+  assertAuthorizedIpcSender(Boolean(playerWindow && event.sender.id === playerWindow.webContents.id));
+  if (typeof id !== 'string' || id.length > 160) return { ok: false, error: 'Teste inválido.' };
+  return hostedSessionServer?.rollResistance(id) ?? { ok: false, error: 'Sala indisponível.' };
+});
+ipcMain.handle('attack-library:save', async (event, attack: unknown, remove: unknown) => {
+  assertAuthorizedIpcSender(event.sender.id === attackLibraryWindow?.webContents.id || isControlSender(event.sender.id) || isSceneEditorSender(event.sender.id));
+  if (typeof remove !== 'boolean') return { ok: false, error: 'Comando inválido.' };
+  try { return { ok: true, attacks: await (await getAttackLibraryStore()).mutate(attack, remove) }; }
+  catch { return { ok: false, error: 'Não foi possível salvar a biblioteca. Verifique os campos e tente novamente.' }; }
 });
 
 ipcMain.handle(
@@ -6837,6 +6925,7 @@ const restoreLibraryEntry = (
           name: track.name,
           duration: track.duration,
           url: scenePlaylistTrackUrl(phase.id, slot, track.id),
+          loop: track.loop,
         }];
       });
       if (tracks.length === 0) return null;
@@ -7968,7 +8057,7 @@ const moveMusicTrack = (direction: -1 | 1) => {
 
 ipcMain.on('music:track-ended', (event) => {
   if (!playerWindow || event.sender.id !== playerWindow.webContents.id) return;
-  if (musicState.loop) return;
+  if (getMusicState().loop) return;
   moveMusicTrack(1);
   broadcastMusicState();
 });
@@ -8989,6 +9078,10 @@ app.whenReady().then(async () => {
       if (requestUrl.hostname === 'background') {
         mediaPath = activeBackgroundFilePath;
         errorLabel = 'fundo';
+      } else if (requestUrl.hostname === 'scene-preview') {
+        const key = sceneMediaKey(decodeURIComponent(requestUrl.pathname.slice(1)), 'background');
+        mediaPath = pendingSceneMediaPaths.get(key) ?? sceneMediaPaths.get(key) ?? null;
+        errorLabel = 'prévia do fundo';
       } else if (requestUrl.hostname === 'scene-background') {
         const ownerId = decodeURIComponent(requestUrl.pathname.slice(1));
         mediaPath = sceneMediaPaths.get(sceneMediaKey(ownerId, 'background')) ?? null;

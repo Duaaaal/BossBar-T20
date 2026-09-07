@@ -74,6 +74,7 @@ export type BattleState = {
 };
 
 export type BackgroundState = {
+  mediaFit?: 'contain' | 'cover' | 'fill';
   resumeTime?: number;
   url: string | null;
   name: string | null;
@@ -270,6 +271,7 @@ export const calculateHealthSequence = ({
 };
 
 export type MusicTrack = {
+  loop?: boolean;
   id: string;
   name: string;
   url: string;

@@ -2,6 +2,7 @@ export const PLAYER_PRESENTATION_SETTINGS_KEY =
   'bossbar.player.presentation-settings.v1';
 
 export type ClientPresentationPreferences = {
+  automaticResistance: boolean;
   musicVolume: number;
   effectsVolume: number;
   soundboardVolume: number;
@@ -22,6 +23,7 @@ export type ClientPresentationPreferences = {
 
 export const defaultClientPresentationPreferences =
   (): ClientPresentationPreferences => ({
+    automaticResistance: false,
     musicVolume: 1,
     effectsVolume: 1,
     soundboardVolume: 1,
@@ -53,6 +55,7 @@ export const parseClientPresentationPreferences = (
   const sounds = source.sounds ?? {} as ClientPresentationPreferences['sounds'];
   const visuals = source.visuals ?? {} as ClientPresentationPreferences['visuals'];
   return {
+    automaticResistance: booleanOr(source.automaticResistance, false),
     musicVolume: boundedVolume(source.musicVolume),
     effectsVolume: boundedVolume(source.effectsVolume),
     soundboardVolume: boundedVolume(source.soundboardVolume),

@@ -140,6 +140,7 @@ const SoundboardApp = () => {
       {assigningSlot !== null && (
         <div className="soundboard-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssigningSlot(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="assign-sound-title">
+            <button className="soundboard-modal-close" type="button" aria-label="Fechar" onClick={() => setAssigningSlot(null)}>×</button>
             <p>Botão {assigningSlot}</p>
             <h2 id="assign-sound-title">{editingSound?.assigned ? 'Editar efeito sonoro' : 'Atribuir efeito sonoro'}</h2>
             <label>Nome exibido no tooltip (opcional)<input autoFocus type="text" maxLength={40} value={soundName} placeholder="Ex.: Rugido do dragão" onChange={(event) => setSoundName(event.target.value)} /></label>
@@ -156,6 +157,7 @@ const SoundboardApp = () => {
       {removingSound && (
         <div className="soundboard-modal-backdrop">
           <section role="alertdialog" aria-modal="true" aria-labelledby="remove-sound-title">
+            <button className="soundboard-modal-close" type="button" aria-label="Fechar" onClick={() => setRemovingSound(null)}>×</button>
             <h2 id="remove-sound-title">Remover este efeito?</h2>
             <p>O som “{removingSound.name}” deixará de tocar e será removido do atalho {removingSound.index}.</p>
             <div>
@@ -169,6 +171,7 @@ const SoundboardApp = () => {
       {clearOpen && (
         <div className="soundboard-modal-backdrop">
           <section role="alertdialog" aria-modal="true" aria-labelledby="clear-soundboard-title">
+            <button className="soundboard-modal-close" type="button" aria-label="Fechar" onClick={() => setClearOpen(false)}>×</button>
             <h2 id="clear-soundboard-title">Limpar todo o soundboard?</h2>
             <p>Todos os sons atribuídos aos 20 atalhos serão interrompidos e removidos.</p>
             <div>

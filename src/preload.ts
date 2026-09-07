@@ -312,6 +312,14 @@ const bossAPI = {
     ipcRenderer.invoke('control:set-minimized', minimized),
   getCustomStatusLibrary: (): Promise<CustomStatusPreset[]> =>
     ipcRenderer.invoke('custom-status-library:get'),
+  openAttackLibrary: () => ipcRenderer.invoke('attack-library:open'),
+  setHostedPlayerControl: (playerId, controlled) => ipcRenderer.invoke('multiplayer:set-player-control', playerId, controlled),
+  requestControlledPlayerAction: (playerId, request) => ipcRenderer.invoke('multiplayer:controlled-player-action', playerId, request),
+  closeAttackLibrary: () => ipcRenderer.send('attack-library:close'),
+  getAttackLibrary: () => ipcRenderer.invoke('attack-library:get'),
+  rollResistance: (id) => ipcRenderer.invoke('player:roll-resistance', id),
+  setAutomaticResistance: async () => false,
+  saveLibraryAttack: (attack, remove = false) => ipcRenderer.invoke('attack-library:save', attack, remove),
   createCustomStatusPreset: (
     draft: CustomStatusPresetDraft,
   ): Promise<CustomStatusLibraryMutationResult> =>

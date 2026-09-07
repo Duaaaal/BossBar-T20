@@ -7,7 +7,7 @@
 
 * { box-sizing: border-box; }
 
-body { margin: 0; min-width: 820px; min-height: 100vh; }
+body { margin: 0; min-width: min(820px, 100vw); min-height: 100vh; }
 
 button { font: inherit; }
 
@@ -249,4 +249,9 @@ button { font: inherit; }
 
 @media (max-width: 900px) {
   .library-shell { padding: 16px 12px; }
+}
+
+@media (max-width: 1000px) {
+  .library-row { grid-template-columns: minmax(115px, 1.75fr) minmax(90px, 1.05fr) repeat(6, minmax(38px, .58fr)) minmax(96px, 1fr) 100px; gap: 6px; }
+  .library-row button { padding-inline: 8px; }
 }

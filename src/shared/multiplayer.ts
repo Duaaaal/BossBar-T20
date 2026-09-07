@@ -257,6 +257,8 @@ export interface MultiplayerServerToClientEvents {
 }
 
 export interface MultiplayerClientToServerEvents {
+  'player:roll-resistance': (id: string, acknowledge: (result: { ok: boolean; error?: string }) => void) => void;
+  'player:auto-resistance': (enabled: boolean, acknowledge: (ok: boolean) => void) => void;
   'presentation:cutscene-ready': (id: string, duration: number | null) => void;
   'session:clock': (acknowledge: (serverTime: number) => void) => void;
   'player:set-sheet-editor-open': (

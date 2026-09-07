@@ -48,9 +48,11 @@
           <span class="is-hero-point" data-hero-point-slot="1" tabindex="0"></span>
         </div>
         <i class="web-player-character-action-divider" aria-hidden="true"></i>
+        <div class="web-player-character-attributes">
         <span tabindex="0" data-app-tooltip="Luta"><img src="/session-assets/ui/corpo-a-corpo.png" alt="Luta" /><b id="web-player-character-melee">0</b></span>
         <span tabindex="0" data-app-tooltip="Pontaria"><img src="/session-assets/ui/a-distancia.png" alt="Pontaria" /><b id="web-player-character-ranged">0</b></span>
         <span tabindex="0" id="web-player-character-defense-group" data-app-tooltip="Defesa corpo a corpo / à distância"><img src="/session-assets/shield-icon.png" alt="Defesa" /><b id="web-player-character-defense-melee">0</b><i aria-hidden="true">/</i><b id="web-player-character-defense-ranged">0</b></span>
+        </div>
       </div>
       <section class="web-player-character-details" id="web-player-character-details" hidden>
         <div class="web-player-character-detail-heading">
@@ -180,6 +182,8 @@
       <div class="web-player-dialog-card web-player-sheet-editor-card">
         <button class="web-player-dialog-close" id="web-player-sheet-editor-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-editor-title">Ajustar ficha</h1>
+        <button class="sheet-import-discard" id="web-player-sheet-import-discard" type="button" hidden>Descartar importação e manter a ficha anterior</button>
+        <button class="sheet-import-autofix" id="web-player-sheet-import-autofix" type="button" hidden>Corrigir cálculos automaticamente</button>
         <div class="web-player-sheet-editor-toolbar">
           <div>
             <input id="web-player-sheet-editor-search" type="search" placeholder="Buscar campo da ficha" autocomplete="off" />

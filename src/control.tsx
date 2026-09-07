@@ -330,7 +330,11 @@ type OffTurnWarning = {
   bossName: string;
 };
 
+import { AttackLibrary } from './AttackLibrary';
+import { AttackRangeField, DamageTypeField } from './AttackFields';
+
 const ControlApp = () => {
+  const [attackLibraryOpen, setAttackLibraryOpen] = useState(false);
   const [state, setState] = useState<BattleState | null>(null);
   const [encounterEffects, setEncounterEffects] = useState<EncounterEffectsState>(
     initialEncounterEffectsState,
@@ -1363,7 +1367,9 @@ const ControlApp = () => {
           playerIds,
           bossTargetIds: bosses.map(({ sourceId }) => sourceId),
           damage: fixedValue,
-          hits: requestedHits,
+          hits: selectedAttack.attackCount ?? requestedHits,
+          independentHits: (selectedAttack.attackCount ?? 1) > 1,
+          statusEffects: selectedAttack.statusEffects,
           ...(damageFormula ? { damageFormula } : {}),
           attackType: selectedAttack.attackType,
           attackBonus: (selectedAttack.attackType === 'melee'
@@ -2250,6 +2256,10 @@ const ControlApp = () => {
           </section>
         </div>
       )}
+      {attackLibraryOpen && <AttackLibrary context={activeBoss.bossName} onClose={() => setAttackLibraryOpen(false)} onSelect={(attack) => {
+        setBossAttacks((current) => normalizeBossAttacks([...current.filter((entry) => entry.id !== attack.id), attack], activeBoss.id));
+        setBossArsenalSelectedId(attack.id); setSelectedBossAttackId(attack.id); setAttackLibraryOpen(false);
+      }} />}
       {bossArsenalOpen && arsenalDraftAttack && (
         <div className="control-modal-backdrop" role="presentation">
           <section
@@ -2263,6 +2273,7 @@ const ControlApp = () => {
                 <h2 id="control-boss-arsenal-title">Armas e ataques</h2>
                 <span>{activeBoss.bossName}</span>
               </div>
+              <button className="control-open-attack-library" type="button" onClick={() => setAttackLibraryOpen(true)}>Biblioteca de ataques</button>
               <button
                 type="button"
                 aria-label="Fechar arsenal"
@@ -2374,23 +2385,10 @@ const ControlApp = () => {
                     }}
                   />
                 </label>
-                <label>
-                  <span>Tipo de dano</span>
-                  <input
-                    type="text"
-                    maxLength={40}
-                    value={arsenalDraftAttack.damageType}
-                    onChange={(event) => updateArsenalAttack('damageType', event.target.value)}
-                  />
-                </label>
+                <label><span>Tipo de dano</span><DamageTypeField value={arsenalDraftAttack.damageType} onChange={(value) => updateArsenalAttack('damageType', value)} /></label>
                 <label>
                   <span>Alcance</span>
-                  <input
-                    type="text"
-                    maxLength={40}
-                    value={arsenalDraftAttack.range}
-                    onChange={(event) => updateArsenalAttack('range', event.target.value)}
-                  />
+                  <AttackRangeField value={arsenalDraftAttack.range} onChange={(value) => updateArsenalAttack('range', value)} />
                 </label>
               </div>
             </div>
@@ -2408,6 +2406,8 @@ const ControlApp = () => {
                 Remover
               </button>
               <button
+                className={selectedBossAttackId === arsenalDraftAttack.id ? 'is-selected' : ''}
+                aria-pressed={selectedBossAttackId === arsenalDraftAttack.id}
                 type="button"
                 onClick={() => setSelectedBossAttackId(arsenalDraftAttack.id)}
               >

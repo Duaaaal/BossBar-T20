@@ -42,6 +42,12 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
     entries.flatMap(({ revertsEntryIds }) => revertsEntryIds ?? []),
   );
   let actionNumber = 0;
+  const numberedEntries = entries.map((entry) => ({
+    entry,
+    number: entry.kind === 'round' || entry.kind === 'turn' ? null : ++actionNumber,
+  }));
+  // Reverse the view, not the authoritative log or its original action numbers.
+  const visibleEntries = numberedEntries.reverse();
 
   return (
     <>
@@ -78,7 +84,7 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
               {entries.length === 0 && (
                 <p className="fight-history-empty">Nenhum evento registrado.</p>
               )}
-              {entries.map((entry) => {
+              {visibleEntries.map(({ entry, number }) => {
                 if (entry.kind === 'round') {
                   return (
                     <h3 className="fight-history-round" key={entry.id}>
@@ -93,7 +99,6 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
                     </h4>
                   );
                 }
-                actionNumber += 1;
                 return (
                   <article
                     className={`fight-history-entry is-${entry.outcome ?? entry.kind} ${
@@ -102,7 +107,7 @@ export const FightHistory = ({ turn }: { turn: EncounterTurnState }) => {
                     key={entry.id}
                   >
                     <small className="fight-history-entry-meta">
-                      #{actionNumber} · {formatElapsed(entry.createdAt, turn.startedAt)} · {brasiliaTime.format(entry.createdAt)}
+                      #{number} · {formatElapsed(entry.createdAt, turn.startedAt)} · {brasiliaTime.format(entry.createdAt)}
                     </small>
                     <b>({entry.actorName})</b>
                     <span>

@@ -73,7 +73,7 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
         const gain = context.createGain();
         gain.gain.value = 0;
         source.connect(gain).connect(context.destination);
-        audio.loop = playlist?.loop === true && playlist.tracks.length === 1;
+        audio.loop = track.loop === true || (playlist?.loop === true && playlist.tracks.length === 1);
         const disposeLoop = installGaplessLoop(audio, context, source, gain);
         audioEntries.set(`${role}:${track.id}`, { audio, gain, source, disposeLoop });
       }
@@ -93,15 +93,16 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
       const firstIndex = Math.max(0, playlist.tracks.findIndex(({ id }) => id === playlist.currentTrackId));
       const tracks = [...playlist.tracks.slice(firstIndex), ...playlist.tracks.slice(0, firstIndex)];
       const duration = tracks.reduce((sum, track) => sum + (audioEntries.get(`${role}:${track.id}`)?.audio.duration || track.duration || 0), 0);
-      let position = playlist.loop && duration > 0 ? elapsed % duration : elapsed;
+      let position = playlist.loop && !tracks.some((track) => track.loop) && duration > 0 ? elapsed % duration : elapsed;
       let currentId: string | null = null;
       for (const track of tracks) {
         const entry = audioEntries.get(`${role}:${track.id}`);
         if (!entry) continue;
         const length = Number.isFinite(entry.audio.duration) ? entry.audio.duration : track.duration;
+        if (track.loop && length > 0) position %= length;
         if (position < length) {
           currentId = track.id;
-          entry.audio.loop = playlist.loop && tracks.length === 1;
+          entry.audio.loop = track.loop === true || (playlist.loop && tracks.length === 1);
           seek(entry.audio, position, transportVersion !== transportVersions.get(role));
           transportVersions.set(role, transportVersion);
           const targetGain = muted.current || playlist.muted ? 0 : volumeToGain(playlist.volume * scale) * envelope;
@@ -209,8 +210,8 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
     style={{ '--cutscene-fade-in': `${cutsceneFade(playback, 'visual', 'in')}s`, '--cutscene-fade-out': `${cutsceneFade(playback, 'visual', 'out')}s` } as CSSProperties}
     data-cutscene-id={playback.id} data-cutscene-stage={playback.stage}>
     {playback.mediaType === 'video' && playback.backgroundUrl
-      ? <video ref={videoRef} src={presentationMediaUrl(playback.backgroundUrl)} crossOrigin="anonymous" muted playsInline preload="auto" />
-      : playback.backgroundUrl ? <img src={presentationMediaUrl(playback.backgroundUrl)} alt="" /> : null}
+      ? <video ref={videoRef} style={{ objectFit: playback.mediaFit ?? 'contain' }} src={presentationMediaUrl(playback.backgroundUrl)} crossOrigin="anonymous" muted playsInline preload="auto" />
+      : playback.backgroundUrl ? <img style={{ objectFit: playback.mediaFit ?? 'contain' }} src={presentationMediaUrl(playback.backgroundUrl)} alt="" /> : null}
     {(!prepared || error) && <span className="cutscene-preparing">{error || 'Preparando cutscene…'}</span>}
   </div>;
 };

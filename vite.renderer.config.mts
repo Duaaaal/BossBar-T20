@@ -34,6 +34,7 @@ export default defineConfig({
         player: path.resolve(projectRoot, 'player.html'),
         control: path.resolve(projectRoot, 'control.html'),
         library: path.resolve(projectRoot, 'library.html'),
+        attackLibrary: path.resolve(projectRoot, 'attack-library.html'),
         sceneEditor: path.resolve(projectRoot, 'scene-editor.html'),
         soundboard: path.resolve(projectRoot, 'soundboard.html'),
         encounterDebugger: path.resolve(projectRoot, 'encounter-debugger.html'),

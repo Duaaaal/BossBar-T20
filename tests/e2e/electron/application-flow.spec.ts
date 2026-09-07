@@ -349,7 +349,7 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await expect(fightHistory).toBeVisible();
     await expect(fightHistory.locator('.fight-history-entry-meta').last())
       .toHaveText(/^#\d+ · \d{2}:\d{2}:\d{2} · \d{2}:\d{2}$/);
-    await expect(fightHistory.locator('.fight-history-entry').last())
+    await expect(fightHistory.locator('.fight-history-entry').first())
       .toContainText('O mestre reverteu');
     await expect(fightHistory.locator('.fight-history-entry.is-undone'))
       .toContainText('Dano (desfeito)');

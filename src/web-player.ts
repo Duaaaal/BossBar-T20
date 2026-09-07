@@ -1,3 +1,4 @@
+import { ATTACK_RANGES, DAMAGE_TYPES, METRIC_RANGES, parseAttackRange } from './shared/attack-options';
 import {
   createWebPlayerApi,
   type WebPlayerConnectionState,
@@ -6,6 +7,7 @@ import {
   MAX_CHARACTER_SHEET_BYTES,
   MAX_CHARACTER_PORTRAIT_BYTES,
   type CharacterSheetEditorField,
+  type CharacterSheetIssue,
   type PlayerCharacterSheetStatus,
   type CharacterSheetSummary,
 } from './shared/character-sheet';
@@ -180,6 +182,8 @@ let activeTurnParticipantId: string | null = null;
 let currentPortraitUrl: string | null = null;
 let pendingPortraitPreviewUrl: string | null = null;
 let sheetEditorDocument: CharacterSheetEditorField[] = [];
+let sheetEditorIssues: CharacterSheetIssue[] = [];
+let sheetEditorImportPending = false;
 let sheetEditorRemovedFields: CharacterSheetEditorField[] = [];
 let sheetEditorBaseDocument: CharacterSheetEditorField[] = [];
 let sheetEditorFileName = '';
@@ -311,6 +315,7 @@ const scheduleSheetEditorDraft = () => {
 };
 
 const syncPermanentEncounterValuesIntoSheetEditor = () => {
+  if (sheetEditorImportPending) return;
   if (!playerEncounterState || sheetEditorDialog?.hasAttribute('hidden')) return;
   const values = new Map<string, string>([
     ['PVs Totais', String(playerEncounterState.maxHealth)],
@@ -498,8 +503,8 @@ const {
   uploadCharacterPortrait,
   removeCharacterPortrait,
   automaticallyFixCharacterSheet,
-  fetchCharacterSheetBlob,
   removeCharacterSheet,
+  discardCharacterSheetImport,
   getCharacterSheetEditor,
   saveCharacterSheetEditor,
   setCharacterSheetEditorOpen,
@@ -1204,34 +1209,23 @@ sheetInput?.addEventListener('change', () => {
     if (sheetStatusElement) sheetStatusElement.textContent = 'A ficha deve ter no máximo 25 MB.';
     return;
   }
-  const adjustmentWindow = window.open('', '_blank');
-  if (adjustmentWindow) adjustmentWindow.opener = null;
   sheetInput.disabled = true;
   sheetSelectionRemoveButton?.setAttribute('disabled', '');
   if (sheetStatusElement) sheetStatusElement.textContent = 'Lendo e validando a ficha…';
   void uploadCharacterSheet(file).then((result) => {
     if (result.ok) clearSheetEditorDraft();
-    renderCharacterSheet(result.sheet ?? null);
+    renderCharacterSheet(result.ok ? result.sheet ?? null : getPlayerToolsState().sheet);
     const hasErrors = result.sheet?.validation?.issues.some(
       ({ severity }) => severity === 'error',
     ) ?? !result.ok;
-    if (hasErrors && adjustmentWindow) {
-      const source = result.sheet?.hasSheet
-        ? fetchCharacterSheetBlob()
-        : Promise.resolve(file as Blob);
-      void source.then((blob) => {
-        const url = URL.createObjectURL(blob);
-        adjustmentWindow.location.href = url;
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      }).catch(() => adjustmentWindow.close());
-    } else {
-      adjustmentWindow?.close();
+    if (hasErrors && result.sheet?.importPending) {
+      notifyPlayer('A ficha contém campos que precisam de correção. Ela só será aplicada após a validação final.', 'rejected');
+      sheetOpenButton?.click();
     }
     if (!result.ok && sheetStatusElement) {
       sheetStatusElement.textContent = result.error ?? 'A ficha precisa de ajustes.';
     }
   }).catch((error: unknown) => {
-    adjustmentWindow?.close();
     if (sheetStatusElement) {
       sheetStatusElement.textContent = error instanceof Error
         ? error.message
@@ -1423,6 +1417,7 @@ const recalculateSheetLoad = () => {
 
 const markSheetEditorDirty = () => {
   sheetEditorDirty = true;
+  document.getElementById('web-player-sheet-import-autofix')?.setAttribute('disabled', '');
   scheduleSheetEditorDraft();
   if (sheetEditorStatus) {
     sheetEditorStatus.textContent = 'Rascunho local.';
@@ -1509,6 +1504,10 @@ const renderSheetEditorFilters = () => {
 
 const renderSheetEditorFields = () => {
   if (!sheetEditorFields) return;
+  const automaticRepair = document.getElementById('web-player-sheet-import-autofix');
+  automaticRepair?.toggleAttribute('hidden', !sheetEditorImportPending || !sheetEditorIssues.some((issue) => issue.severity === 'error' && issue.autoFixable));
+  automaticRepair?.toggleAttribute('disabled', sheetEditorDirty);
+  automaticRepair?.setAttribute('data-disabled-reason', 'Conclua os ajustes manuais já iniciados');
   const query = sheetEditorSearch instanceof HTMLInputElement
     ? sheetEditorSearch.value.trim().toLocaleLowerCase('pt-BR')
     : '';
@@ -1532,6 +1531,12 @@ const renderSheetEditorFields = () => {
     field: CharacterSheetEditorField,
     input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
   ) => {
+    sheetEditorIssues = sheetEditorIssues.filter((issue) => issue.field !== field.name);
+    input.setCustomValidity('');
+    input.removeAttribute('aria-invalid');
+    const wrapper = input.closest<HTMLElement>('[data-field-name]');
+    wrapper?.classList.remove('has-import-error');
+    wrapper?.querySelector('.sheet-field-error')?.remove();
     field.value = field.kind === 'checkbox'
       ? (input as HTMLInputElement).checked ? 'Yes' : 'Off'
       : input.value;
@@ -1583,7 +1588,14 @@ const renderSheetEditorFields = () => {
 
   const createFieldInput = (field: CharacterSheetEditorField) => {
     let input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-    if (field.name === 'Ofício 1' || field.name === 'Ofício_2') {
+    if (/^Tipo \d+$/.test(field.name)) {
+      const select = document.createElement('select');
+      for (const value of [...new Set([field.value, ...DAMAGE_TYPES])]) {
+        const option = new Option(value || 'Selecione', value, false, value === field.value);
+        select.append(option);
+      }
+      input = select;
+    } else if (field.name === 'Ofício 1' || field.name === 'Ofício_2') {
       const select = document.createElement('select');
       const options: string[] = ['', ...officeOptions];
       if (field.value && !options.includes(field.value)) options.push(field.value);
@@ -1649,6 +1661,11 @@ const renderSheetEditorFields = () => {
       input.readOnly = true;
       input.setAttribute('aria-readonly', 'true');
     }
+    const errors = sheetEditorIssues.filter((issue) => issue.severity === 'error' && issue.field === field.name);
+    if (errors.length) {
+      input.setAttribute('aria-invalid', 'true');
+      input.setCustomValidity(errors.map(({ message }) => message).join(' '));
+    }
     input.addEventListener('input', () => scheduleFieldSave(field, input));
     return input;
   };
@@ -1660,6 +1677,33 @@ const renderSheetEditorFields = () => {
     name.textContent = field.label;
     const input = createFieldInput(field);
     label.append(name, input);
+    const errors = sheetEditorIssues.filter((issue) => issue.severity === 'error' && issue.field === field.name);
+    if (errors.length) {
+      label.classList.add('has-import-error');
+      const explanation = document.createElement('small');
+      explanation.className = 'sheet-field-error';
+      explanation.textContent = errors.map(({ message, expected }) => `${message}${expected === undefined ? '' : ` Esperado: ${expected}.`}`).join(' ');
+      label.append(explanation);
+    }
+    if (/^Alcance \d+$/.test(field.name)) {
+      input.hidden = true;
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', field.label);
+      const parsed = parseAttackRange(field.value);
+      for (const value of [...new Set([parsed.kind, ...ATTACK_RANGES])]) select.append(new Option(value || 'Selecione', value, false, value === parsed.kind));
+      const meters = document.createElement('input');
+      meters.type = 'text'; meters.inputMode = 'numeric'; meters.maxLength = 4;
+      meters.setAttribute('aria-label', 'Alcance em metros'); meters.value = String(parsed.meters);
+      const synchronize = () => {
+        meters.hidden = !METRIC_RANGES.includes(select.value);
+        if (!meters.hidden && !/^\d{1,4}$/.test(meters.value)) return;
+        input.value = meters.hidden ? select.value : `${select.value} ${Math.max(1, Number(meters.value))}m`;
+        scheduleFieldSave(field, input);
+      };
+      meters.hidden = !METRIC_RANGES.includes(parsed.kind);
+      select.addEventListener('change', synchronize); meters.addEventListener('input', synchronize);
+      const wrapper = document.createElement('span'); wrapper.className = 'attack-range-fields'; wrapper.append(select, meters); label.append(wrapper);
+    }
     container.append(label);
   };
 
@@ -1773,6 +1817,8 @@ const renderSheetEditorFields = () => {
         removeRow.setAttribute('aria-label', `Remover ${groupName}`);
         removeRow.textContent = '×';
         removeRow.addEventListener('click', () => {
+          const removedNames = new Set(groupFields.map(({ name }) => name));
+          sheetEditorIssues = sheetEditorIssues.filter(({ field }) => !field || !removedNames.has(field));
           sheetEditorRemovedFields.push(...groupFields.map((field) => ({
             ...field,
             value: '',
@@ -1838,6 +1884,14 @@ const closeSheetEditor = async () => {
     if (sheetEditorStatus) sheetEditorStatus.textContent = invalidInput.validationMessage;
     return;
   }
+  if (sheetEditorIssues.some(({ severity }) => severity === 'error')) {
+    activeSheetEditorCategories.clear();
+    if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
+    renderSheetEditorFields();
+    sheetEditorFields?.querySelector<HTMLElement>('.has-import-error')?.scrollIntoView({ block: 'center' });
+    notifyPlayer('Corrija os campos destacados em vermelho antes de salvar.', 'rejected');
+    return;
+  }
   sheetEditorClosing = true;
   sheetEditorClose?.setAttribute('disabled', '');
   if (sheetEditorStatus) {
@@ -1846,15 +1900,24 @@ const closeSheetEditor = async () => {
       : 'Fechando ficha…';
   }
   try {
-    if (sheetEditorDirty) {
+    if (sheetEditorDirty || sheetEditorImportPending) {
       const result = await saveCharacterSheetEditor([
         ...sheetEditorDocument,
         ...sheetEditorRemovedFields,
       ]);
       if (!result.ok) {
+        if (result.issues) {
+          sheetEditorIssues = result.issues;
+          activeSheetEditorCategories.clear();
+          if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
+          renderSheetEditorFields();
+          sheetEditorFields?.querySelector<HTMLElement>('.has-import-error')?.scrollIntoView({ block: 'center' });
+        }
         throw new Error(result.error ?? 'Não foi possível enviar as alterações da ficha.');
       }
       if (result.document) {
+        sheetEditorImportPending = false;
+        sheetEditorIssues = result.document.issues ?? [];
         sheetEditorFileName = result.document.fileName;
         sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
         sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
@@ -1875,12 +1938,49 @@ const closeSheetEditor = async () => {
         ? error.message
         : 'Não foi possível concluir a edição da ficha.';
     }
+    notifyPlayer(error instanceof Error ? error.message : 'Não foi possível concluir a edição da ficha.', 'rejected');
   } finally {
     sheetEditorClosing = false;
     sheetEditorClose?.removeAttribute('disabled');
   }
 };
 sheetEditorClose?.addEventListener('click', () => void closeSheetEditor());
+document.getElementById('web-player-sheet-import-autofix')?.addEventListener('click', async () => {
+  if (!sheetEditorImportPending || sheetEditorDirty || sheetEditorClosing) return;
+  sheetEditorClosing = true;
+  sheetEditorClose?.setAttribute('disabled', '');
+  try {
+    const result = await automaticallyFixCharacterSheet();
+    if (!result.ok) throw new Error(result.error ?? 'Não foi possível corrigir os cálculos.');
+    renderCharacterSheet(result.sheet ?? null);
+    sheetEditorImportPending = result.sheet?.importPending === true;
+    if (!sheetEditorImportPending) {
+      await setCharacterSheetEditorOpen(false);
+      clearSheetEditorDraft();
+      sheetEditorDialog?.setAttribute('hidden', '');
+      notifyPlayer('Cálculos corrigidos. Ficha validada e importada.', 'info');
+    } else {
+      const editor = await getCharacterSheetEditor();
+      if (!editor.ok || !editor.document) throw new Error(editor.error ?? 'Não foi possível revisar a ficha corrigida.');
+      sheetEditorIssues = editor.document.issues ?? [];
+      sheetEditorDocument = cloneSheetEditorFields(editor.document.fields);
+      sheetEditorBaseDocument = cloneSheetEditorFields(editor.document.fields);
+      renderSheetEditorFields();
+      notifyPlayer('Cálculos corrigidos. Revise os campos ainda destacados em vermelho.', 'rejected');
+    }
+  } catch (error) { notifyPlayer(error instanceof Error ? error.message : 'Falha ao corrigir a ficha.', 'rejected'); }
+  finally { sheetEditorClosing = false; sheetEditorClose?.removeAttribute('disabled'); }
+});
+document.getElementById('web-player-sheet-import-discard')?.addEventListener('click', () => {
+  if (!sheetEditorImportPending || sheetEditorClosing) return;
+  sheetEditorClosing = true;
+  void discardCharacterSheetImport().then((result) => {
+    if (!result.ok) { notifyPlayer(result.error ?? 'Não foi possível descartar a importação.', 'rejected'); return; }
+    sheetEditorImportPending = false; sheetEditorIssues = []; sheetEditorDirty = false;
+    clearSheetEditorDraft(); sheetEditorDialog?.setAttribute('hidden', '');
+    renderCharacterSheet(result.sheet ?? null);
+  }).catch(() => notifyPlayer('Não foi possível descartar a importação.', 'rejected')).finally(() => { sheetEditorClosing = false; });
+});
 
 sheetOpenButton?.addEventListener('click', () => {
   if (sheetOpenButton.hasAttribute('disabled')) return;
@@ -1898,6 +1998,10 @@ sheetOpenButton?.addEventListener('click', () => {
       throw new Error(editorLock.error ?? 'Não foi possível bloquear a ficha para edição.');
     }
     sheetEditorUsername = getPlayerToolsState().username ?? '';
+    sheetEditorImportPending = result.document.importPending === true;
+    sheetEditorIssues = result.document.issues ?? [];
+    document.getElementById('web-player-sheet-import-discard')?.toggleAttribute('hidden', !sheetEditorImportPending);
+    if (sheetEditorIssues.some(({ severity }) => severity === 'error')) activeSheetEditorCategories.clear();
     sheetEditorFileName = result.document.fileName;
     sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
     const draftKey = activeSheetEditorDraftKey();

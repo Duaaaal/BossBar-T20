@@ -86,6 +86,9 @@ export const installDisabledControlTooltips = () => {
     positionTooltip(bounds.left, bounds.bottom + 8);
   });
   document.addEventListener('focusout', hide);
+  // A tooltip must not remain over a modal opened by the same control.
+  document.addEventListener('pointerdown', hide, true);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' || event.key === 'Enter') hide(); });
   document.addEventListener('pointerleave', hide);
   window.addEventListener('blur', hide);
 };

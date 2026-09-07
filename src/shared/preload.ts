@@ -8,7 +8,8 @@ export type RendererRole =
   | 'soundboard'
   | 'library'
   | 'scene-editor'
-  | 'encounter-debugger';
+  | 'encounter-debugger'
+  | 'attack-library';
 
 export const bossApiMethodsByRole = {
   launcher: [
@@ -20,11 +21,13 @@ export const bossApiMethodsByRole = {
     'subscribeHostedSessionStartupProgress',
   ],
   master: [
+    'openAttackLibrary',
     'resetEncounter',
     'addEncounterSound',
     'approveActionPointRequest',
     'approveHostedPlayer',
     'kickHostedPlayer',
+    'setHostedPlayerControl',
     'confirmAppClose',
     'dispatch',
     'getAppVersion',
@@ -85,6 +88,8 @@ export const bossApiMethodsByRole = {
     'undoLastChange',
   ],
   player: [
+    'requestControlledPlayerAction',
+    'rollResistance', 'setAutomaticResistance',
     'getPresentationMedia',
     'reportCutsceneReady',
     'getPresentationTime',
@@ -129,6 +134,7 @@ export const bossApiMethodsByRole = {
     'undoLastChange',
   ],
   control: [
+    'getAttackLibrary', 'saveLibraryAttack',
     'getPendingBossDamage',
     'advanceEncounterTurn',
     'rollEncounterFormula',
@@ -181,6 +187,7 @@ export const bossApiMethodsByRole = {
     'undoLastChange',
   ],
   'scene-editor': [
+    'getAttackLibrary', 'saveLibraryAttack',
     'getMusicState',
     'subscribeMusic',
     'controlSceneMusic',
@@ -202,6 +209,7 @@ export const bossApiMethodsByRole = {
     'subscribeScenePlan',
     'undoLastChange',
   ],
+  'attack-library': ['getAttackLibrary', 'saveLibraryAttack', 'closeAttackLibrary'],
   'encounter-debugger': [
     'getEncounterDebugSnapshot',
     'overwriteEncounterDebugCreature',

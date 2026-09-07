@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -45,6 +45,49 @@ const createEditableSheet = async () => {
   form.createCheckBox('arm pesa').check();
   return document.save({ updateFieldAppearances: false });
 };
+
+test('valida campos humanos ambíguos, críticos legados e PV negativo sem alterar o PDF original', async () => {
+  const source = await createEditableSheet();
+  const document = await PDFDocument.load(source);
+  const form = document.getForm();
+  form.getTextField('PVs Atuais').setText('-3');
+  form.getTextField('Bônus Atq 1').setText('+5');
+  form.getTextField('Crítico 1').setText('x3');
+  form.getTextField('Tipo 1').setText('  perfurante  ');
+  form.getTextField('Alcance 1').setText('corpo a corpo');
+  const legacy = await inspectCharacterSheetPdf(await document.save({ updateFieldAppearances: false }));
+  assert.equal(legacy.validation.summary.currentHealth, -3);
+  assert.ok(!legacy.validation.issues.some(({ field, severity }) => severity === 'error' && ['PVs Atuais', 'Bônus Atq 1', 'Tipo 1', 'Alcance 1', 'BossBar.Ataque.1.MargemCritico'].includes(field)));
+  const editor = await readCharacterSheetEditorFields(await document.save({ updateFieldAppearances: false }));
+  assert.equal(editor.find(({ name }) => name === 'BossBar.Ataque.1.MargemCritico').value, '20');
+  assert.equal(editor.find(({ name }) => name === 'BossBar.Ataque.1.MultiplicadorCritico').value, '3');
+  for (const [name, value] of Object.entries({ 'Tipo 1': 'Cortee', 'Alcance 1': 'perto demais', 'Dano 1': '1d0', 'PVs Totais': 'vinte', 'B.Arm': 'armadura', 'Crítico 1': 'muito crítico' })) form.getTextField(name).setText(value);
+  const invalid = await inspectCharacterSheetPdf(await document.save({ updateFieldAppearances: false }));
+  const errors = invalid.validation.issues.filter(({ severity }) => severity === 'error');
+  for (const name of ['Tipo 1', 'Alcance 1', 'Dano 1', 'PVs Totais', 'B.Arm', 'BossBar.Ataque.1.MargemCritico']) assert.ok(errors.some(({ field }) => field === name), name);
+  assert.equal((await inspectCharacterSheetPdf(source)).validation.summary.currentHealth, 25);
+});
+
+test('o modelo PDF distribuído conserva campos canônicos e permite corrigir importações pelo editor', async () => {
+  const source = await readFile(new URL('../assets/ficha-t20-v2-editavel.pdf', import.meta.url));
+  const document = await PDFDocument.load(source);
+  assert.equal(document.getPageCount(), 2);
+  const names = document.getForm().getFields().map((field) => field.getName());
+  assert.equal(new Set(names).size, names.length);
+  const editor = await readCharacterSheetEditorFields(source);
+  for (const name of ['NOME DO PERSONAGEM', 'JOGADOR', 'PVs Totais', 'CA', 'Tipo 1', 'Alcance 1', 'ModFor']) assert.ok(editor.some((field) => field.name === name), name);
+  const fixture = await PDFDocument.load(await createEditableSheet());
+  for (const field of fixture.getForm().getFields()) {
+    try { document.getForm().getTextField(field.getName()).setText(field.getText()); } catch { /* The checked template fields retain their original type. */ }
+  }
+  const inspected = await inspectCharacterSheetPdf(await document.save({ updateFieldAppearances: false }), true);
+  assert.equal(inspected.validation.supported, true);
+  const ready = await readCharacterSheetEditorFields(inspected.bytes);
+  const applied = await applyCharacterSheetEditorFields(inspected.bytes, ready);
+  assert.equal(applied.validation.summary.characterName, 'Valora');
+  assert.equal(applied.validation.summary.attacks[0].damageType, 'Corte');
+  assert.ok(!applied.validation.issues.some(({ severity }) => severity === 'error'), JSON.stringify(applied.validation.issues));
+});
 
 test('lê a ficha editável usando somente modificadores como atributos oficiais', async () => {
   const bytes = await createEditableSheet();

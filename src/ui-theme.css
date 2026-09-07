@@ -1,0 +1,20 @@
+/* Shared control tokens. HUD artwork keeps its own typography. */
+:root {
+  --ui-font: Inter, "Segoe UI", system-ui, sans-serif;
+  --ui-heading-font: Georgia, "Times New Roman", serif;
+  --ui-text: #eee3eb;
+  --ui-muted: #b8a7b3;
+  --ui-border: #654555;
+  --ui-accent: #ca7391;
+  --ui-surface: #181219;
+  --ui-radius: 8px;
+}
+:where(button, input, select, textarea) { font-family: var(--ui-font); }
+:where(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+:where(input, textarea)::placeholder { color: #988693; opacity: 1; }
+:where(input[type="checkbox"], input[type="radio"]) { accent-color: #bf6685; }
+:where([role="dialog"], [role="alertdialog"]) { min-width: 0; }
+:where([role="dialog"], [role="alertdialog"]) :where(input, select, textarea, button) { font-family: var(--ui-font); }
+.attack-range-fields { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.attack-range-fields > select { flex: 1; min-width: 0; width: 100%; }
+.attack-range-fields > input { flex: 0 0 58px; min-width: 0; width: 58px; max-width: 58px; text-align: center; }

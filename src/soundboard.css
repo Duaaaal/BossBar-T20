@@ -1,6 +1,6 @@
 :root { color-scheme: dark; color: #f2edf4; background: #0d0b10; font-family: Inter, "Segoe UI", sans-serif; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 560px; min-height: 560px; overflow: hidden; }
+body { margin: 0; min-width: min(560px, 100vw); overflow: hidden; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .38; }
@@ -15,7 +15,7 @@ button:disabled { cursor: default; opacity: .38; }
 .soundboard-mute-warning strong { font-size: .72rem; }
 .soundboard-mute-warning span { font-size: .62rem; }
 .soundboard-mute-warning { grid-row: 2; }
-.soundboard-grid { grid-row: 3; display: grid; min-height: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(78px, 1fr)); gap: 9px; }
+.soundboard-grid { grid-row: 3; display: grid; min-height: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(52px, 1fr)); gap: 9px; }
 .sound-slot { position: relative; min-width: 0; }
 .sound-trigger { display: grid; width: 100%; height: 100%; place-content: center; gap: 4px; border: 1px solid #49384f; border-radius: 11px; background: linear-gradient(145deg, #211923, #171219); color: #817486; }
 .sound-slot.is-assigned .sound-trigger { border-color: #85529a; background: linear-gradient(145deg, #492957, #2d1d35); color: #f2dafa; box-shadow: inset 0 1px rgba(255,255,255,.05); }
@@ -33,7 +33,7 @@ button:disabled { cursor: default; opacity: .38; }
 .soundboard-error { grid-row: 6; margin: 0; color: #eb8b9b; font-size: .67rem; }
 .soundboard-size-warning { grid-row: 5; margin: 0; color: #8f746f; font-size: .61rem; }
 .soundboard-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(3, 2, 4, .78); backdrop-filter: blur(4px); }
-.soundboard-modal-backdrop > section { width: min(430px, 100%); border: 1px solid #654c6c; border-radius: 13px; padding: 19px; background: #1d171f; box-shadow: 0 22px 65px #000; }
+.soundboard-modal-backdrop > section { position: relative; width: min(430px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; border: 1px solid #654c6c; border-radius: 13px; padding: 19px; background: #1d171f; box-shadow: 0 22px 65px #000; }
 .soundboard-modal-backdrop section > p:first-child { margin: 0 0 5px; color: #b377c3; font-size: .65rem; font-weight: 900; text-transform: uppercase; }
 .soundboard-modal-backdrop h2 { margin: 0 0 12px; color: #efe4f1; font: 600 1.1rem Georgia, serif; }
 .soundboard-modal-backdrop p { color: #b7aab9; font-size: .72rem; line-height: 1.45; }
@@ -43,3 +43,9 @@ button:disabled { cursor: default; opacity: .38; }
 .soundboard-modal-backdrop section > div button { min-height: 34px; border: 1px solid #624d68; border-radius: 7px; padding: 6px 11px; background: transparent; color: #ded2e1; font-size: .67rem; font-weight: 800; }
 .soundboard-modal-backdrop button.is-primary { border-color: #965cac; background: #67397a; }
 .soundboard-modal-backdrop button.is-destructive { border-color: #c45167; background: #7a293c; }
+.soundboard-modal-close { position: absolute; top: 8px; right: 8px; display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #c9abcf; font-size: 22px; }
+.soundboard-modal-close:hover { background: rgb(170 115 185 / 14%); color: #fff; }
+.soundboard-modal-backdrop h2 { padding-right: 24px; }
+.soundboard-header-actions button, .soundboard-controls > span, .soundboard-controls > strong,
+.soundboard-modal-backdrop label, .soundboard-modal-backdrop section > div button { font-size: 12px; }
+.soundboard-size-warning { color: #a9919d; font-size: 11px; }

@@ -9,3 +9,5 @@ A investigação foi adiada explicitamente pelo usuário. Ao retomá-la, reprodu
 ## Firefox no ambiente local
 
 A combinação local Windows/Node 24/Playwright mantém uma limitação ambiental registrada. A matriz local validada usa Chromium, Chrome e Edge; isso não equivale a uma validação local do Firefox.
+
+Na auditoria visual de 06/09/2026, a tentativa isolada com o runtime Node 22.23.2 já disponível também falhou em `browserContext.newPage`, com `Cannot read properties of undefined (reading '_page')`, antes de acessar o BossBar. Portanto, apenas trocar o Node não resolveu neste computador. As referências de tela inteira do Firefox ainda precisam ser recapturadas e revisadas em um ambiente funcional depois das mudanças de layout; elas não foram geradas artificialmente nem seus testes foram desativados.

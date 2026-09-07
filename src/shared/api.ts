@@ -89,6 +89,14 @@ import type {
 } from './scene';
 
 export type BossAPI = {
+  openAttackLibrary: () => Promise<boolean>;
+  setHostedPlayerControl: (playerId: string, controlled: boolean) => Promise<boolean>;
+  requestControlledPlayerAction: (playerId: string, request: PlayerCombatActionRequest) => Promise<PlayerCombatActionResult>;
+  closeAttackLibrary: () => void;
+  rollResistance: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  setAutomaticResistance: (enabled: boolean) => Promise<boolean>;
+  getAttackLibrary: () => Promise<import('./boss-attacks').BossAttack[]>;
+  saveLibraryAttack: (attack: import('./boss-attacks').BossAttack, remove?: boolean) => Promise<{ ok: boolean; attacks?: import('./boss-attacks').BossAttack[]; error?: string }>;
   resetEncounter: () => Promise<boolean>;
   getPresentationMedia: () => Promise<string[]>;
   controlSceneMusic: (ownerId: string, command: { type: 'toggle' } | { type: 'seek'; time: number }) => Promise<boolean>;

@@ -14,6 +14,7 @@ test('cada renderer recebe somente os métodos de preload que utiliza', async ()
       'utf8',
     );
     if (role === 'player') rendererSource += await readFile(path.join(projectRoot, 'src', 'CutscenePlayer.tsx'), 'utf8');
+    if (['attack-library', 'control', 'scene-editor'].includes(role)) rendererSource += await readFile(path.join(projectRoot, 'src', 'AttackLibrary.tsx'), 'utf8');
     const usedMethods = Array.from(
       new Set(
         Array.from(rendererSource.matchAll(/window\.bossAPI\.([A-Za-z0-9_]+)/g))

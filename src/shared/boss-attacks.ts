@@ -1,4 +1,23 @@
-import { normalizeDamageFormula } from './status.ts';
+import { isStatusId, normalizeDamageFormula, type StatusId } from './status.ts';
+import { BOSS_SKILL_DEFINITIONS, type BossSkillId } from './boss-skills.ts';
+
+export type AttackStatusEffect = {
+  statusId: StatusId;
+  turns: number;
+  damageFormula: string;
+  resistanceSkill: BossSkillId;
+  dc: number;
+};
+
+export const isAttackStatusEffect = (value: unknown): value is AttackStatusEffect => {
+  if (!value || typeof value !== 'object') return false;
+  const effect = value as Partial<AttackStatusEffect>;
+  return isStatusId(effect.statusId) && effect.statusId !== 'coringa' &&
+    BOSS_SKILL_DEFINITIONS.some(([id]) => id === effect.resistanceSkill) &&
+    Number.isInteger(effect.dc) && Number(effect.dc) >= 0 && Number(effect.dc) <= 999 &&
+    Number.isInteger(effect.turns) && Number(effect.turns) >= 1 && Number(effect.turns) <= 999 &&
+    typeof effect.damageFormula === 'string' && normalizeDamageFormula(effect.damageFormula) !== null;
+};
 
 export const MAX_BOSS_ATTACKS = 20;
 
@@ -13,6 +32,9 @@ export type BossAttack = {
   criticalMultiplier: number;
   damageType: string;
   range: string;
+  tags?: string[];
+  attackCount?: number;
+  statusEffects?: AttackStatusEffect[];
 };
 
 const clampInteger = (value: number, minimum: number, maximum: number) =>
@@ -62,6 +84,12 @@ export const normalizeBossAttack = (
     damageFormula,
     criticalThreat: clampInteger(Number(candidate.criticalThreat), 2, 20),
     criticalMultiplier: clampInteger(Number(candidate.criticalMultiplier), 2, 10),
+    attackCount: clampInteger(Number.isFinite(candidate.attackCount) ? Number(candidate.attackCount) : 1, 1, 20),
+    tags: Array.isArray(candidate.tags) ? [...new Set(candidate.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim().slice(0, 60)).filter(Boolean))].slice(0, 12) : [],
+    statusEffects: Array.isArray(candidate.statusEffects) ? candidate.statusEffects.slice(0, 10).flatMap((effect) => {
+      if (!effect || !isStatusId(effect.statusId) || effect.statusId === 'coringa' || !BOSS_SKILL_DEFINITIONS.some(([id]) => id === effect.resistanceSkill) || !Number.isFinite(effect.dc) || !Number.isFinite(effect.turns)) return [];
+      return [{ statusId: effect.statusId, resistanceSkill: effect.resistanceSkill, dc: clampInteger(effect.dc, 0, 999), turns: clampInteger(effect.turns, 1, 999), damageFormula: normalizeDamageFormula(effect.damageFormula) ?? '0' }];
+    }) : [],
     damageType: typeof candidate.damageType === 'string'
       ? candidate.damageType.trim().slice(0, 40)
       : '',

@@ -722,14 +722,20 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   });
   assert.deepEqual(result, {
     ok: true,
-    appliedPlayers: 2,
+    appliedPlayers: 0,
     skippedPlayers: ['Carla'],
     rolledDamage: 20,
   });
-  assert.deepEqual(
-    playerDamageCallbacks.at(-1)?.targetPlayerIds,
-    [server.getPlayerHuds().find(({ characterName }) => characterName === 'Valora')?.id],
-  );
+  const waitingHuds = server.getPlayerHuds();
+  assert.equal(waitingHuds.find(({ characterName }) => characterName === 'Valora').currentHealth, 80);
+  const aliceResistance = waitingHuds.find(({ characterName }) => characterName === 'Valora').pendingResistances[0];
+  const brunoResistance = waitingHuds.find(({ characterName }) => characterName === 'Arton').pendingResistances[0];
+  const foreign = await new Promise((resolve) => bruno.emit('player:roll-resistance', aliceResistance.id, resolve));
+  assert.equal(foreign.ok, false);
+  assert.equal((await new Promise((resolve) => alice.emit('player:roll-resistance', aliceResistance.id, resolve))).ok, true);
+  assert.equal((await new Promise((resolve) => alice.emit('player:roll-resistance', aliceResistance.id, resolve))).ok, false);
+  assert.equal((await new Promise((resolve) => bruno.emit('player:roll-resistance', brunoResistance.id, resolve))).ok, true);
+  assert.ok(playerDamageCallbacks.length > 0);
   assert.equal(playerDamageCallbacks.at(-1)?.critical, false);
 
   await waitFor(() => aliceImpacts.length === 2 && brunoImpacts.length === 2);
@@ -950,6 +956,44 @@ test('aplica dano em área de forma privada e preserva PV na reconexão', async 
   const [restoredState] = await reconnectedState;
   assert.equal(restoredState.currentHealth, aliceHealthAfterImpact);
   assert.equal(restoredState.revision, aliceRevisionAfterImpact);
+});
+
+test('mestre assume personagem offline, age pela mesma lógica e devolve o controle sem perder PV', { timeout: 10_000 }, async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const snapshot = publicSnapshot();
+  const server = await MultiplayerSessionServer.start({ playerProfileStore: profileStore, initialSnapshot: snapshot, port: 0, networkMode: 'loopback', randomInteger: (min, max) => Math.min(max - 1, Math.max(min, 10)) });
+  t.after(() => server.close('server-shutdown'));
+  const clientId = 'controlled-alice';
+  const alice = await connectPlayer(server, { clientId, playerName: 'Alice' });
+  t.after(() => alice.close());
+  await once(alice, 'connect');
+  const profile = profileStore.profileByUsername('Alice');
+  await profileStore.saveSheet(profile.id, 'alice.pdf', new Uint8Array([0x25, 0x50, 0x44, 0x46]), createValidCharacterSheetValidation({ characterName: 'Valora', currentHealth: 45, maxHealth: 60, currentMana: 10, maxMana: 10, defense: 18, reflex: 7, initiative: 30 }));
+  server.refreshCharacterSheet(clientId, true);
+  const playerId = server.getPlayerHuds()[0].id;
+  assert.equal(server.setMasterControl(playerId, true), false, 'não toma o personagem de um jogador conectado');
+  server.publishBattleState({ ...snapshot.battle, battleStarted: true });
+  alice.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(server.getPlayerHuds()[0].disconnected, true);
+  assert.equal(server.setMasterControl(playerId, true), true);
+  assert.equal(server.getPlayerHuds()[0].controlledByMaster, true);
+  for (const participant of server.getTurnState().participants) assert.equal(server.rollInitiativeAsHost(participant.id).ok, true);
+  assert.equal(server.advanceTurnAsHost().ok, true);
+  assert.equal(server.getTurnState().activeParticipantId, `player:${playerId}`);
+  const result = await server.requestMasterControlledAction(playerId, { kind: 'skill', skillId: '270', resource: null });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(server.getPlayerHuds()[0].currentHealth, 45);
+  const reconnected = await connectPlayer(server, { clientId, playerName: 'Alice' });
+  t.after(() => reconnected.close());
+  await once(reconnected, 'connect');
+  const denied = await new Promise((resolve) => reconnected.emit('encounter:end-own-turn', resolve));
+  assert.equal(denied.ok, false);
+  assert.match(denied.error, /mestre.*controlando/i);
+  assert.equal(server.setMasterControl(playerId, false), true);
+  assert.equal(server.getPlayerHuds()[0].controlledByMaster, false);
+  assert.equal(server.getPlayerHuds()[0].currentHealth, 45);
+  assert.equal((await server.requestMasterControlledAction(playerId, { kind: 'skill', skillId: '270', resource: null })).ok, false);
 });
 
 test('exige aprovação para novos jogadores, mas preserva uma reconexão autenticada', { timeout: 10_000 }, async (t) => {

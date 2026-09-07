@@ -73,6 +73,7 @@ export type CharacterSheetValidation = {
 };
 
 export type PlayerCharacterSheetStatus = {
+  importPending?: boolean;
   hasSheet: boolean;
   fileName: string | null;
   uploadedAt: number | null;
@@ -138,6 +139,8 @@ export type CharacterSheetEditorField = {
 };
 
 export type CharacterSheetEditorDocument = {
+  importPending?: boolean;
+  issues?: CharacterSheetIssue[];
   fileName: string;
   fields: CharacterSheetEditorField[];
   pendingApproval: boolean;
@@ -166,6 +169,8 @@ export type PlayerSheetChangeRequest = {
 
 export type CharacterSheetEditorResult = {
   ok: boolean;
+  issues?: CharacterSheetIssue[];
+  sheet?: PlayerCharacterSheetStatus;
   document?: CharacterSheetEditorDocument;
   error?: string;
 };

@@ -46,6 +46,8 @@ import { CutscenePlayer } from './CutscenePlayer';
 import { warmPresentationMedia, presentationMediaUrl, clearPresentationMedia } from './presentation-media-cache';
 import {
   createUnarmedAttack,
+  attackTestFormulaExpression,
+  parseAttackTestFormula,
   actionPointRecoveryFormulas,
   emptyEncounterTurnState,
   formatEncounterDiceRolls,
@@ -109,6 +111,16 @@ const announcePlayerNotice = (
 
 const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
+
+function ResistanceButton({ id, label, skill, dc, compact = false }: import('./shared/resistance').ResistancePrompt & { compact?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return <button className="player-resistance-prompt" type="button" disabled={busy} title={`${label}: ${skill} CD ${dc}`} onClick={() => {
+    setBusy(true);
+    void window.bossAPI.rollResistance(id).then((result) => {
+      if (!result.ok) announcePlayerNotice(result.error ?? 'Não foi possível fazer o teste.', 'rejected');
+    }).catch(() => announcePlayerNotice('A conexão falhou. Tente novamente.', 'rejected')).finally(() => setBusy(false));
+  }}>{compact ? '' : `${label} · `}{skill} CD {dc} · {busy ? 'Aguarde' : 'Rolar'}</button>;
+}
 
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
 const shieldBreakParticles = Array.from({ length: 24 }, (_, index) => index);
@@ -1928,9 +1940,10 @@ const PlayerHudCard = ({
         player.redacted ? 'is-private' : ''
       } ${player.dead ? 'is-dead' : player.stabilized ? 'is-stable' : ''}`}
       data-player-hud-id={player.id}
-      data-disconnected={player.disconnected || undefined}
+      data-disconnected={(player.disconnected && !player.controlledByMaster) || undefined}
     >
-      {player.disconnected && <small className="player-reconnection-label">Aguardando reconexão</small>}
+      {(player.disconnected || player.controlledByMaster) && <small className="player-reconnection-label">{player.controlledByMaster ? 'Controlado pelo mestre' : 'Aguardando reconexão'}</small>}
+      {(player.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} />)}
       <button
         className={`party-player-portrait ${player.portraitUrl ? 'has-image' : ''}`}
         type="button"
@@ -2137,9 +2150,10 @@ const PartyHud = ({
   const visiblePlayers = webClient
     ? players.filter(({ isSelf, summary }) => !isSelf || !summary)
     : players;
+  const hasSelfHud = webClient && players.some(({ isSelf, summary }) => isSelf && summary);
   if (visiblePlayers.length === 0) return null;
   return (
-    <aside className={`party-hud ${webClient ? 'is-web-client' : ''}`}>
+    <aside className={`party-hud ${hasSelfHud ? 'is-web-client' : ''} ${visiblePlayers.length > 4 ? 'is-dense' : ''}`}>
       {visiblePlayers.map((player) => (
         <PlayerHudCard
           player={player}
@@ -2342,12 +2356,14 @@ const SelfCombatControls = ({
   players,
   turn,
   bosses,
+  controlledPlayerId,
 }: {
   players: PlayerHudState[];
   turn: EncounterTurnState;
   bosses: BossState[];
+  controlledPlayerId?: string;
 }) => {
-  const self = players.find(({ isSelf }) => isSelf);
+  const self = players.find((player) => controlledPlayerId ? player.id === controlledPlayerId : player.isSelf);
   const summary = self?.summary;
   const unarmedAttack = useMemo(
     () => summary ? createUnarmedAttack(summary) : null,
@@ -2356,10 +2372,10 @@ const SelfCombatControls = ({
   const unarmedStrikeEnabled = self?.unarmedStrikeEnabled !== false;
   const incapacitated = Boolean(self && (self.dead || (self.currentHealth ?? 1) <= 0));
   const sheetLocked = Boolean(
-    self?.sheetInteractionState && self.sheetInteractionState !== 'idle',
+    (self?.sheetInteractionState && self.sheetInteractionState !== 'idle') || (!controlledPlayerId && self?.controlledByMaster),
   );
   const bleedingAllies = players.filter((player) =>
-    !player.isSelf &&
+    player.id !== self?.id &&
     player.faction === 'players' &&
     !player.dead &&
     player.statuses.some(({ statusId }) => statusId === 'sangrando')
@@ -2387,6 +2403,8 @@ const SelfCombatControls = ({
   const [attackIndex, setAttackIndex] = useState(0);
   const [targetBossId, setTargetBossId] = useState('');
   const [damageFormula, setDamageFormula] = useState('');
+  const [extraAttackModifier, setExtraAttackModifier] = useState('0');
+  const [extraDamageModifier, setExtraDamageModifier] = useState('0');
   const [resource, setResource] = useState<TestResourceChoice>('none');
   const [attackType, setAttackType] = useState<AttackType>(() =>
     window.localStorage.getItem('bossbar.player.attack-type') === 'ranged'
@@ -2473,7 +2491,10 @@ const SelfCombatControls = ({
     return () => window.removeEventListener('bossbar:resource-action', openResource);
   }, [self, active, incapacitated, sheetLocked]);
 
-  if (!window.__BOSS_WEB_PLAYER__ || !self || !summary) return null;
+  if ((!window.__BOSS_WEB_PLAYER__ && !controlledPlayerId) || !self || !summary) return null;
+  const requestAction = (request: PlayerCombatActionRequest) => controlledPlayerId
+    ? window.bossAPI.requestControlledPlayerAction(controlledPlayerId, request)
+    : window.bossAPI.requestPlayerCombatAction(request);
 
   const resourceCounts = self as PlayerHudState & {
     actionPoints?: number | null;
@@ -2514,7 +2535,7 @@ const SelfCombatControls = ({
       actionAttemptRef.current = null;
       await nextBrowserPaint();
       const result = await window.bossAPI.rollEncounterInitiative(
-        undefined,
+        controlledPlayerId ? `player:${controlledPlayerId}` : undefined,
         resource === 'hero-advantage',
       );
       announcePlayerNotice(
@@ -2563,6 +2584,8 @@ const SelfCombatControls = ({
         attackType: attackIndex === -1 ? 'melee' : attackType,
         targetBossId,
         damageFormula,
+        extraAttackModifier: Number(extraAttackModifier || 0),
+        extraDamageModifier: Number(extraDamageModifier || 0),
         resource: combatResource(),
         actionId: attempt.id,
         ...(linkToPreviousRoll && previousRollCorrelationId
@@ -2585,7 +2608,7 @@ const SelfCombatControls = ({
     setBusy(true);
     setModal(null);
     await nextBrowserPaint();
-    const result = await window.bossAPI.requestPlayerCombatAction(request);
+    const result = await requestAction(request);
     if (result.ok && !result.pendingApproval) {
       actionAttemptRef.current = null;
     }
@@ -2640,7 +2663,7 @@ const SelfCombatControls = ({
   const resolvePendingDamage = async () => {
     if (!self.pendingDamage || busy) return;
     setBusy(true);
-    const result = await window.bossAPI.requestPlayerCombatAction({
+    const result = await requestAction({
       kind: 'damage',
       pendingDamageId: self.pendingDamage.id,
     });
@@ -2654,6 +2677,7 @@ const SelfCombatControls = ({
 
   const hudControls = (
     <div className="self-combat-shortcuts" aria-label="Ações e recursos">
+      {!controlledPlayerId && (self.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} compact />)}
       <button
         className={initiativePending
           ? 'is-initiative-pending'
@@ -2702,6 +2726,10 @@ const SelfCombatControls = ({
           🎯
         </button>
       )}
+      {controlledPlayerId && <>
+        <button type="button" aria-label="Ponto de Ação" data-app-tooltip={`Ponto de ação | ${actionPoints} de 5`} disabled={sheetLocked || !active || actionPoints < 1} onClick={() => setModal('action-point')}>◆</button>
+        <button type="button" aria-label="Ponto Heróico" data-app-tooltip={`Ponto heróico | ${heroPoints} de 1`} disabled={sheetLocked || !active || heroPoints < 1} onClick={() => setModal('hero-point')}>♜</button>
+      </>}
     </div>
   );
 
@@ -2846,12 +2874,17 @@ const SelfCombatControls = ({
                 type="text"
                 value={damageFormula}
                 maxLength={80}
-                disabled={attackIndex === -1}
-                data-disabled-reason="Os dados de Punhos seguem a ficha e as regras do sistema"
+                readOnly
+                aria-readonly="true"
                 placeholder="Ex.: 1d8 + 4"
                 onChange={(event) => setDamageFormula(event.currentTarget.value)}
               />
             </label>
+            <label><span>Dados de ataque (arma + perícia)</span><input type="text" readOnly value={attackTestFormulaExpression(parseAttackTestFormula(attackIndex === -1 ? '1d20' : summary.attacks[attackIndex]?.attackBonus), summary.skills.find((skill) => skill.name.toLocaleLowerCase('pt-BR') === (attackType === 'melee' ? 'luta' : 'pontaria'))?.total ?? 0)} /></label>
+            <div className="player-attack-extra-modifiers">
+              <label><span>Bônus adicional de ataque</span><input inputMode="numeric" type="text" value={extraAttackModifier} onChange={(event) => { if (/^-?\d{0,3}$/.test(event.target.value)) setExtraAttackModifier(event.target.value); }} /></label>
+              <label><span>Bônus adicional de dano</span><input inputMode="numeric" type="text" value={extraDamageModifier} onChange={(event) => { if (/^-?\d{0,3}$/.test(event.target.value)) setExtraDamageModifier(event.target.value); }} /></label>
+            </div>
             <fieldset className="player-combat-attack-type">
               <legend>Tipo do ataque</legend>
               <label>
@@ -2982,7 +3015,9 @@ const SelfCombatControls = ({
     </div>
   ) : null;
 
-  const selfHud = document.getElementById('web-player-character-hud');
+  const selfHud = controlledPlayerId
+    ? Array.from(document.querySelectorAll<HTMLElement>('[data-player-hud-id]')).find((element) => element.dataset.playerHudId === controlledPlayerId)
+    : document.getElementById('web-player-character-hud');
   return (
     <>
       {selfHud ? createPortal(hudControls, selfHud) : hudControls}
@@ -3345,6 +3380,7 @@ const PlayerClientSettings = ({
           <h2 id="player-client-settings-title">Configurações pessoais</h2>
           <button type="button" aria-label="Fechar" onClick={() => setOpen(false)}>×</button>
         </header>
+        <label className="player-client-preference"><input type="checkbox" checked={preferences.automaticResistance} onChange={(event) => onChange({ ...preferences, automaticResistance: event.target.checked })} />Rolar resistências automaticamente</label>
         <h3>Volume</h3>
         {volumeRows.map(([key, label]) => (
           <label className="player-client-volume" key={key}>
@@ -3434,6 +3470,7 @@ const PlayerApp = () => {
   const updateClientPreferences = useCallback((next: ClientPresentationPreferences) => {
     setClientPreferences(next);
     saveClientPresentationPreferences(next);
+    if (window.__BOSS_WEB_PLAYER__) void window.bossAPI.setAutomaticResistance(next.automaticResistance);
   }, []);
 
   useEffect(() => {
@@ -3810,6 +3847,8 @@ const PlayerApp = () => {
   }
 
   const backgroundStyle = {
+    '--battle-background-fit': background.mediaFit === 'fill' || !background.mediaFit ? '100% 100%' : background.mediaFit,
+    '--battle-video-fit': background.mediaFit ?? 'fill',
     '--shield-icon': `url("${bundledAssetUrl('shield-icon.png')}")`,
     '--waiting-background': `url("${bundledAssetUrl('waiting-background.png')}")`,
     ...(state.battleStarted && background.url && background.mediaType === 'image'
@@ -3883,6 +3922,7 @@ const PlayerApp = () => {
           turn={turnState}
           bosses={visibleBosses}
         />
+        {!window.__BOSS_WEB_PLAYER__ && playerHuds.filter(({ controlledByMaster }) => controlledByMaster).map((player) => <SelfCombatControls key={player.id} controlledPlayerId={player.id} players={playerHuds} turn={turnState} bosses={visibleBosses} />)}
         {resourceNotices.length > 0 && (
           <aside
             className="player-resource-notices"

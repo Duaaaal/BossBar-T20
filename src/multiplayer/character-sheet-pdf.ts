@@ -12,6 +12,8 @@ import type {
   CharacterSheetSummary,
   CharacterSheetValidation,
 } from '../shared/character-sheet.ts';
+import { normalizeAttackRange, normalizeDamageType } from '../shared/attack-options.ts';
+import { parseDamageFormula } from '../shared/status.ts';
 
 type FieldValues = Record<string, string>;
 
@@ -137,7 +139,7 @@ const skillComponentFields = (rule: SkillRule) => {
 
 const parseCritical = (value: string | undefined) => {
   const normalized = (value ?? '').trim();
-  const margin = normalized.match(/(?:^|\D)(\d{1,2})(?=\D|$)/)?.[1] ?? '';
+  const margin = normalized.match(/^(\d{1,2})(?=\D|$)/)?.[1] ?? (/^[x×]/i.test(normalized) ? '20' : '');
   const multiplier = normalized.match(/[x×]\s*(\d{1,2})/i)?.[1] ?? '';
   return { margin, multiplier };
 };
@@ -145,6 +147,7 @@ const parseCritical = (value: string | undefined) => {
 const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
   const descriptors: EditorFieldDescriptor[] = [
     editorField('NOME DO PERSONAGEM', 'Nome', 'Identidade'),
+    editorField('JOGADOR', 'Jogador', 'Identidade'),
     editorField('RAÇA', 'Raça', 'Identidade'),
     editorField('ORIGEM', 'Origem', 'Identidade'),
     editorField('CLASSE', 'Classe', 'Identidade'),
@@ -173,8 +176,8 @@ const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
   }
 
   descriptors.push(
-    editorField('PVs Totais', 'PV máximo', 'Pontos de vida e mana'),
-    editorField('PVs Atuais', 'PV atual', 'Pontos de vida e mana'),
+    editorField('PVs Totais', 'PV máximo', 'Pontos de vida e mana', undefined, undefined, { validation: integerValidation(1, 1_000_000) }),
+    editorField('PVs Atuais', 'PV atual', 'Pontos de vida e mana', undefined, undefined, { validation: integerValidation(-1_000_000, 1_000_000) }),
     editorField(
       'BossBar.PVs Temporarios',
       'PV temporário',
@@ -183,8 +186,8 @@ const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
       undefined,
       { defaultValue: '0', validation: integerValidation(0, 1_000_000) },
     ),
-    editorField('PMs Totais', 'PM máximo', 'Pontos de vida e mana'),
-    editorField('PMs Atuais', 'PM atual', 'Pontos de vida e mana'),
+    editorField('PMs Totais', 'PM máximo', 'Pontos de vida e mana', undefined, undefined, { validation: integerValidation(0, 1_000_000) }),
+    editorField('PMs Atuais', 'PM atual', 'Pontos de vida e mana', undefined, undefined, { validation: integerValidation(0, 1_000_000) }),
   );
 
   for (const rule of skillRules) {
@@ -264,12 +267,12 @@ const characterSheetEditorDescriptors = (): EditorFieldDescriptor[] => {
   }
 
   descriptors.push(
-    editorField('ModAtribDefe', 'Mod. de Destreza', 'Defesa'),
-    editorField('B.Arm', 'Bônus de armadura', 'Defesa'),
-    editorField('B.Esc', 'Bônus de escudo', 'Defesa'),
-    editorField('Outros B.CA', 'Outros', 'Defesa'),
-    editorField('PArmTotal', 'Penalidade de armadura', 'Defesa'),
-    editorField('CA', 'Total', 'Defesa'),
+    editorField('ModAtribDefe', 'Mod. de Destreza', 'Defesa', undefined, undefined, { validation: integerValidation(-999, 999) }),
+    editorField('B.Arm', 'Bônus de armadura', 'Defesa', undefined, undefined, { validation: integerValidation(0, 999) }),
+    editorField('B.Esc', 'Bônus de escudo', 'Defesa', undefined, undefined, { validation: integerValidation(0, 999) }),
+    editorField('Outros B.CA', 'Outros', 'Defesa', undefined, undefined, { validation: integerValidation(-999, 999) }),
+    editorField('PArmTotal', 'Penalidade de armadura', 'Defesa', undefined, undefined, { validation: integerValidation(-999, 999) }),
+    editorField('CA', 'Total', 'Defesa', undefined, undefined, { validation: integerValidation(0, 999) }),
     editorField('Proficiências', 'Proficiências', 'Proficiências'),
   );
 
@@ -399,11 +402,14 @@ export const validateCharacterSheetEditorUpdates = (
     if (!descriptor) return `O campo ${update.label || update.name} não é reconhecido.`;
     const value = update.value.trim();
     const validation = descriptor.validation;
+    if (value && /^Tipo \d+$/.test(update.name) && !normalizeDamageType(value)) return `${descriptor.group}: selecione um tipo de dano reconhecido.`;
+    if (value && /^Alcance \d+$/.test(update.name) && !normalizeAttackRange(value)) return `${descriptor.group}: selecione um alcance reconhecido.`;
     if (!value || !validation) continue;
     if (validation.maxLength !== undefined && value.length > validation.maxLength) {
       return `${descriptor.label} aceita no máximo ${validation.maxLength} caracteres.`;
     }
-    if (validation.kind === 'formula' && !DICE_FORMULA_PATTERN.test(value)) {
+    const fixedFormula = /^[+-]?\d+$/.test(value) && Math.abs(Number(value)) <= 1_000_000;
+    if (validation.kind === 'formula' && (!DICE_FORMULA_PATTERN.test(value) || (!fixedFormula && !parseDamageFormula(value)))) {
       return `${descriptor.label} deve usar apenas números, dados, + e - (ex.: 2d6 + 3).`;
     }
     if (validation.kind === 'decimal') {
@@ -568,6 +574,20 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
   }
 
   const issues: CharacterSheetIssue[] = [];
+  for (const descriptor of CHARACTER_SHEET_EDITOR_DESCRIPTORS) {
+    // The old attribute scale is intentionally ignored; JdA uses ModFor, etc.
+    if (['For', 'Des', 'Con', 'Int', 'Sab', 'Car'].includes(descriptor.name)) continue;
+    const value = descriptor.valueFrom?.(fields) ?? fields[descriptor.name];
+    if (!value?.trim()) continue;
+    const error = validateCharacterSheetEditorUpdates([{ ...descriptor, kind: 'text', value }]);
+    if (error) issues.push({ id: `invalid:${descriptor.name}`, severity: 'error', field: descriptor.name, message: error, actual: value, autoFixable: false });
+  }
+  for (let index = 1; index <= MAX_ATTACK_ROWS; index += 1) {
+    const critical = fields[`Crítico ${index}`]?.trim();
+    if (critical && !/^(?:\d{1,2}(?:\s*[-–]\s*20)?(?:\s*\/\s*[x×]\s*\d{1,2})?|[x×]\s*\d{1,2})$/i.test(critical)) {
+      issues.push({ id: `invalid:critical:${index}`, severity: 'error', field: `BossBar.Ataque.${index}.MargemCritico`, message: `Ataque ${index}: revise a margem e o multiplicador de crítico (ex.: 19/x2).`, actual: critical, autoFixable: false });
+    }
+  }
   addRequiredIssue(issues, fields, 'NOME DO PERSONAGEM', 'o nome do personagem');
   addRequiredIssue(issues, fields, 'JOGADOR', 'o nome do jogador');
   addRequiredIssue(issues, fields, 'RAÇA', 'a raça');
@@ -618,7 +638,7 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
     ['PVs Totais', maxHealth], ['PVs Atuais', currentHealth],
     ['PMs Totais', maxMana], ['PMs Atuais', currentMana],
   ] as const) {
-    if (value !== null && value < 0) issues.push({
+    if (field !== 'PVs Atuais' && value !== null && value < 0) issues.push({
       id: `range:${field}`, severity: 'error', field,
       message: `${field} não pode ser negativo.`, actual: String(value), autoFixable: false,
     });
@@ -719,8 +739,8 @@ const validateFields = (fields: FieldValues, fieldCount: number): CharacterSheet
       attackBonus: clean(fields[`Bônus Atq ${number}`]),
       damage: clean(fields[`Dano ${number}`]),
       critical: clean(fields[`Crítico ${number}`]),
-      damageType: clean(fields[`Tipo ${number}`]),
-      range: clean(fields[`Alcance ${number}`]),
+      damageType: normalizeDamageType(clean(fields[`Tipo ${number}`])) ?? clean(fields[`Tipo ${number}`]),
+      range: normalizeAttackRange(clean(fields[`Alcance ${number}`])) ?? clean(fields[`Alcance ${number}`]),
     };
   }).filter((attack) => Object.values(attack).some(Boolean));
   const strength = attributes.for ?? 0;
@@ -841,6 +861,8 @@ const editorFields = (document: PDFDocument): CharacterSheetEditorField[] => {
     ))) activeShieldRows.add(index);
   }
   return CHARACTER_SHEET_EDITOR_DESCRIPTORS.filter((descriptor) => {
+    // This legacy metadata field is only exposed when an import needs repair.
+    if (descriptor.name === 'JOGADOR' && values.JOGADOR?.trim()) return false;
     const attackMatch = /^Ataque (\d+)$/.exec(descriptor.group ?? '');
     if (attackMatch) return activeAttackRows.has(Number(attackMatch[1]));
     const spellMatch = /^BossBar\.Magia\.(\d+)\./.exec(descriptor.name);
@@ -921,7 +943,7 @@ export const applyCharacterSheetEditorFields = async (
   for (const field of form.getFields()) {
     const update = byName.get(field.getName());
     if (!update) continue;
-    const value = update.value.slice(0, 2_000);
+    const value = (/^Tipo \d+$/.test(update.name) ? normalizeDamageType(update.value) : /^Alcance \d+$/.test(update.name) ? normalizeAttackRange(update.value) : null) ?? update.value.slice(0, 2_000);
     try {
       if (field instanceof PDFTextField && update.kind === 'text') {
         field.setText(value);

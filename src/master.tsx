@@ -116,6 +116,7 @@ type SoundCategoryMenuPosition = {
   bottom?: number;
 };
 
+
 const MasterApp = () => {
   const [state, setState] = useState<BattleState | null>(null);
   const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null);
@@ -493,21 +494,34 @@ const MasterApp = () => {
     );
   };
 
-  const confirmAppClose = async () => {
+  const [closeOverwriteConfirmation, setCloseOverwriteConfirmation] = useState(false);
+  const [closeError, setCloseError] = useState('');
+  const confirmAppClose = async (save = false, mode: BossLibrarySaveMode = 'prompt') => {
     setClosingApp(true);
+    setCloseError('');
     const draft = latestLibraryDraft.current;
-    if (draft) {
-      const result = await window.bossAPI.saveBossAutosave(draft);
-      if (!result.ok) {
-        setClosingApp(false);
-        setCloseConfirmationOpen(false);
-        setLibraryMessage(
-          result.error ?? 'Não foi possível criar o salvamento automático antes de fechar.',
-        );
-        return;
+    try {
+      if (save && !draft) throw new Error('Aguarde o encontro terminar de carregar antes de salvá-lo.');
+      if (save && draft) {
+        const result = await window.bossAPI.saveBossToLibrary(draft, mode);
+        if (result.requiresOverwrite) {
+          setCloseOverwriteConfirmation(true);
+          setClosingApp(false);
+          return;
+        }
+        if (!result.ok) throw new Error(result.error ?? 'Não foi possível salvar o encontro.');
       }
+      if (draft) {
+        const result = await window.bossAPI.saveBossAutosave(draft);
+        if (!result.ok) {
+          throw new Error(result.error ?? 'Não foi possível criar o salvamento automático antes de fechar.');
+        }
+      }
+      window.bossAPI.confirmAppClose();
+    } catch (error) {
+      setClosingApp(false);
+      setCloseError(error instanceof Error ? error.message : 'Não foi possível salvar. O aplicativo permanece aberto.');
     }
-    window.bossAPI.confirmAppClose();
   };
 
   const startBattle = (force = false) => {
@@ -1402,9 +1416,10 @@ const MasterApp = () => {
                 return (
                   <li className="hosted-character" key={player.id}>
                     <div className="hosted-character-summary">
-                      <strong title={player.characterName}>
-                        {player.characterName}
-                      </strong>
+                      <div className="hosted-character-identity">
+                        <strong title={player.characterName}>{player.characterName}</strong>
+                        {(player.disconnected || player.controlledByMaster) && <button type="button" className="hosted-control-player" onClick={() => void window.bossAPI.setHostedPlayerControl(player.id, !player.controlledByMaster)}>{player.controlledByMaster ? 'Devolver controle' : 'Assumir controle'}</button>}
+                      </div>
                       <span>
                         Ação <b>{player.actionPoints ?? 0}/5</b>
                       </span>
@@ -1508,6 +1523,7 @@ const MasterApp = () => {
       <section className="compact-panel">
         <div className="compact-panel-title"><h2>Personalização de Cena</h2></div>
         <div className="scene-customization-actions">
+          <button className="attack-library-button" type="button" onClick={() => void window.bossAPI.openAttackLibrary()}>Biblioteca de ataques</button>
           <button
             className="sound-customization-button"
             type="button"
@@ -1585,27 +1601,31 @@ const MasterApp = () => {
               >+</button>
             </div>
             <div className="master-notes-toolbar" aria-label="Formatação da nota">
-              <label htmlFor="master-notes-title-input">Título</label>
-              <input
-                id="master-notes-title-input"
-                type="text"
-                maxLength={40}
-                aria-label="Título da nota"
-                value={masterNotes.tabs.find(({ id }) => id === masterNotes.activeTabId)?.title ?? ''}
-                onChange={(event) => updateActiveMasterNoteTitle(event.target.value)}
-              />
-              <label htmlFor="master-notes-font-size">Tamanho</label>
-              <select
-                id="master-notes-font-size"
-                defaultValue="3"
-                aria-label="Tamanho da fonte"
-                onChange={(event) => applyMasterNotesCommand('fontSize', event.target.value)}
-              >
-                <option value="2">Pequeno</option>
-                <option value="3">Normal</option>
-                <option value="4">Grande</option>
-                <option value="5">Muito grande</option>
-              </select>
+              <div className="master-notes-toolbar-field master-notes-title-field">
+                <label htmlFor="master-notes-title-input">Título</label>
+                <input
+                  id="master-notes-title-input"
+                  type="text"
+                  maxLength={40}
+                  aria-label="Título da nota"
+                  value={masterNotes.tabs.find(({ id }) => id === masterNotes.activeTabId)?.title ?? ''}
+                  onChange={(event) => updateActiveMasterNoteTitle(event.target.value)}
+                />
+              </div>
+              <div className="master-notes-toolbar-field">
+                <label htmlFor="master-notes-font-size">Tamanho</label>
+                <select
+                  id="master-notes-font-size"
+                  defaultValue="3"
+                  aria-label="Tamanho da fonte"
+                  onChange={(event) => applyMasterNotesCommand('fontSize', event.target.value)}
+                >
+                  <option value="2">Pequeno</option>
+                  <option value="3">Normal</option>
+                  <option value="4">Grande</option>
+                  <option value="5">Muito grande</option>
+                </select>
+              </div>
               <button
                 type="button"
                 aria-label="Negrito"
@@ -2179,11 +2199,19 @@ const MasterApp = () => {
       {closeConfirmationOpen && (
         <div className="modal-backdrop">
           <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="close-title">
-            <p className="modal-eyebrow">Encerrar aplicativo</p><h2 id="close-title">Deseja realmente fechar?</h2>
-            <p>A apresentação, o painel privado e a trilha sonora também serão fechados.</p>
-            <div className="modal-actions">
-              <button className="modal-cancel-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => setCloseConfirmationOpen(false)}>Cancelar</button>
-              <button className="modal-confirm-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => void confirmAppClose()}>{closingApp ? 'Salvando...' : 'Sim, fechar'}</button>
+            <button className="modal-close-button" aria-label="Cancelar fechamento" type="button" disabled={closingApp} onClick={() => { setCloseConfirmationOpen(false); setCloseOverwriteConfirmation(false); setCloseError(''); }}>×</button>
+            <p className="modal-eyebrow">Encerrar aplicativo</p><h2 id="close-title">{closeOverwriteConfirmation ? 'Sobrescrever o encontro salvo?' : state.battleStarted ? 'Salvar o encontro antes de fechar?' : 'Deseja realmente fechar?'}</h2>
+            <p>{closeOverwriteConfirmation ? 'Atualize o salvamento existente ou guarde uma nova cópia na biblioteca.' : state.battleStarted ? 'O encontro ainda está em andamento. Salve seu estado na biblioteca para continuar depois.' : 'A apresentação, o painel e qualquer sala hospedada também serão fechados.'}</p>
+            {closeError && <p role="alert" className="is-error">{closeError}</p>}
+            <div className="modal-actions three-actions">
+              <button className="modal-cancel-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => { setCloseConfirmationOpen(false); setCloseOverwriteConfirmation(false); setCloseError(''); }}>Cancelar</button>
+              {closeOverwriteConfirmation ? <>
+                <button className="modal-secondary-button" type="button" disabled={closingApp} onClick={() => void confirmAppClose(true, 'new')}>Salvar como novo</button>
+                <button className="modal-confirm-button" type="button" disabled={closingApp} onClick={() => void confirmAppClose(true, 'overwrite')}>Sobrescrever e fechar</button>
+              </> : <>
+                <button className="modal-secondary-button" type="button" disabled={closingApp} data-disabled-reason="O aplicativo está sendo encerrado" onClick={() => void confirmAppClose()}>{state.battleStarted ? 'Fechar sem salvar na biblioteca' : 'Sim, fechar'}</button>
+                {state.battleStarted && <button className="modal-confirm-button" type="button" disabled={closingApp} onClick={() => void confirmAppClose(true)}>{closingApp ? 'Salvando…' : 'Salvar e fechar'}</button>}
+              </>}
             </div>
           </section>
         </div>

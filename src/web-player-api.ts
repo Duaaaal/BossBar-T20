@@ -103,6 +103,8 @@ export type WebPlayerConnectionState =
   | { state: 'closed'; message: string }
   | { state: 'error'; message: string };
 
+import { loadClientPresentationPreferences } from './shared/client-presentation-preferences.ts';
+
 type PlayerApi = Pick<
   BossAPI,
   | 'undoLastChange'
@@ -146,6 +148,8 @@ type PlayerApi = Pick<
   | 'rollEncounterInitiative'
   | 'rollEncounterFormula'
   | 'requestPlayerCombatAction'
+  | 'rollResistance'
+  | 'setAutomaticResistance'
   | 'subscribePlayerResourceNotice'
   | 'usePlayerAction'
 >;
@@ -517,7 +521,7 @@ export const createWebPlayerApi = ({
   };
 
   const prefetchCharacterSheetViewUrl = async () => {
-    if (!accountToken || !currentSheet?.hasSheet) return;
+    if (!accountToken || !currentSheet?.hasSheet || currentSheet.importPending) return;
     try {
       await createCharacterSheetViewUrl();
     } catch {
@@ -589,7 +593,7 @@ export const createWebPlayerApi = ({
       body: file,
     });
     const result = await response.json() as CharacterSheetUploadResult;
-    if (result.sheet) {
+    if (result.ok && result.sheet) {
       currentSheet = result.sheet;
       invalidateCharacterSheetViewUrl();
       if (currentSheet.hasSheet) void prefetchCharacterSheetViewUrl();
@@ -695,10 +699,23 @@ export const createWebPlayerApi = ({
       body: JSON.stringify({ fields }),
     });
     const result = await response.json() as CharacterSheetEditorResult;
+    if (result.ok && result.sheet) {
+      currentSheet = result.sheet;
+      invalidateCharacterSheetViewUrl();
+      void prefetchCharacterSheetViewUrl();
+    }
     return response.ok ? result : {
+      ...result,
       ok: false,
       error: result.error ?? 'Não foi possível salvar as alterações da ficha.',
     };
+  };
+
+  const discardCharacterSheetImport = async (): Promise<CharacterSheetUploadResult> => {
+    const response = await fetch('/api/player/sheet/import', { method: 'DELETE', cache: 'no-store', headers: accountHeaders() });
+    const result = await response.json() as CharacterSheetUploadResult;
+    if (result.ok && result.sheet) currentSheet = result.sheet;
+    return result;
   };
 
   const saveNotes = async (content: string): Promise<NotesSaveResult> => {
@@ -1150,6 +1167,14 @@ export const createWebPlayerApi = ({
       error: 'O jogador ainda não está conectado.',
     });
   const api: PlayerApi = {
+    rollResistance: (id) => new Promise((resolve) => {
+      if (!socket.connected) { resolve({ ok: false, error: 'Reconecte para rolar.' }); return; }
+      socket.timeout(10000).emit('player:roll-resistance', id, (error, result) => resolve(error ? { ok: false, error: 'Aguarde a conexão e tente novamente.' } : result));
+    }),
+    setAutomaticResistance: (enabled) => new Promise((resolve) => {
+      if (!socket.connected) { resolve(false); return; }
+      socket.timeout(10000).emit('player:auto-resistance', enabled, (error, ok) => resolve(!error && ok));
+    }),
     undoLastChange: async () => false,
     getState: async () => battle.current(),
     subscribe: battle.subscribe,
@@ -1228,6 +1253,7 @@ export const createWebPlayerApi = ({
       fetchCharacterSheetBlob,
       createCharacterSheetViewUrl,
       removeCharacterSheet,
+      discardCharacterSheetImport,
       getCharacterSheetEditor,
       saveCharacterSheetEditor,
       setCharacterSheetEditorOpen: async () => ({
@@ -1284,7 +1310,9 @@ export const createWebPlayerApi = ({
       });
     }
   };
+
   socket.on('connect', () => {
+    void api.setAutomaticResistance(loadClientPresentationPreferences().automaticResistance);
     synchronizeClock();
     onConnectionState({
       state: 'connecting',
@@ -1678,6 +1706,7 @@ export const createWebPlayerApi = ({
     fetchCharacterSheetBlob,
     createCharacterSheetViewUrl,
     removeCharacterSheet,
+    discardCharacterSheetImport,
     getCharacterSheetEditor,
     saveCharacterSheetEditor,
     setCharacterSheetEditorOpen,

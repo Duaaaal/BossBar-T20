@@ -14,6 +14,9 @@ export const MAX_SCENE_BOSSES = 3;
 
 export type SceneTransitionKind = 'fade' | 'fade-blackout' | 'blackout';
 export type SceneMediaSlot = 'background' | 'transitionSound' | 'music';
+export type SceneMediaFit = 'contain' | 'cover' | 'fill';
+export const normalizeSceneMediaFit = (value: unknown, fallback: SceneMediaFit = 'fill'): SceneMediaFit =>
+  value === 'contain' || value === 'cover' || value === 'fill' ? value : fallback;
 export type SceneAudioSlot = Exclude<SceneMediaSlot, 'background'>;
 export type SceneBossPresence = 'inherit' | 'present' | 'absent';
 
@@ -28,6 +31,8 @@ export type ScenePlaylistTrack = {
   name: string;
   duration: number;
   url: string;
+  /** Repeat this track until the master explicitly advances. */
+  loop?: boolean;
 };
 
 export type ScenePlaylistSummary = {
@@ -53,6 +58,7 @@ export type ScenePlaylistCommand =
   | { type: 'clear' }
   | { type: 'set-volume'; volume: number }
   | { type: 'set-muted'; muted: boolean }
+  | { type: 'set-track-loop'; trackId: string; loop: boolean }
   | { type: 'set-loop'; loop: boolean };
 
 export type SceneBossPatch = {
@@ -88,6 +94,7 @@ export type SceneBossSlot = {
 };
 
 export type ScenePhase = {
+  mediaFit?: SceneMediaFit;
   hudDelaySeconds?: number;
   hudFadeInSeconds?: number;
   visualFadeInSeconds?: number;
@@ -431,6 +438,7 @@ export const applySceneBossPatch = (
 };
 
 export type SceneCutscene = {
+  mediaFit?: SceneMediaFit;
   blackoutSeconds?: number;
   visualFadeInSeconds?: number;
   visualFadeOutSeconds?: number;
@@ -450,6 +458,7 @@ export type SceneCutscene = {
 };
 
 export type CutscenePlayback = {
+  mediaFit?: SceneMediaFit;
   blackoutSeconds?: number;
   visualFadeInSeconds?: number;
   visualFadeOutSeconds?: number;
@@ -530,8 +539,9 @@ export const playlistPosition = (playlist: ScenePlaylistSummary | null, seconds:
   const first = Math.max(0, playlist.tracks.findIndex((track) => track.id === playlist.currentTrackId));
   const tracks = [...playlist.tracks.slice(first), ...playlist.tracks.slice(0, first)];
   const total = tracks.reduce((sum, track) => sum + track.duration, 0);
-  let time = playlist.loop && total > 0 ? seconds % total : seconds;
+  let time = playlist.loop && !tracks.some((track) => track.loop) && total > 0 ? seconds % total : seconds;
   for (const track of tracks) {
+    if (track.loop && track.duration > 0) return { track, time: Math.max(0, time) % track.duration };
     if (time < track.duration || track.duration <= 0) return { track, time };
     time -= track.duration;
   }

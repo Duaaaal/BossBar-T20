@@ -3,6 +3,7 @@ import type {
   CharacterSheetSummary,
 } from './character-sheet';
 import type { EncounterSoundEffectKind } from './battle';
+import { isAttackStatusEffect } from './boss-attacks.ts';
 import { resolveD20Check } from './d20-rules.ts';
 import {
   historyEntriesForTurn,
@@ -64,7 +65,9 @@ export type PlayerHudActionState = {
 export type PlayerActionKind = keyof PlayerHudActionState;
 
 export type PlayerHudState = {
+  pendingResistances?: import('./resistance').ResistancePrompt[];
   disconnected?: boolean;
+  controlledByMaster?: boolean;
   id: string;
   characterName: string;
   portraitUrl?: string | null;
@@ -334,6 +337,8 @@ export const createUnarmedAttack = (
 };
 
 export type PlayerAttackRequest = {
+  extraAttackModifier?: number;
+  extraDamageModifier?: number;
   kind: 'attack';
   /** @deprecated Prefer attackSource. */
   attackIndex?: number;
@@ -387,7 +392,7 @@ export type PendingActionPointRequest = {
   label: string;
   requestedAt: number;
   actionId?: string;
-  kind?: 'action-point' | 'skill-without-standard-action' | 'pre-initiative-action';
+  kind?: 'action-point' | 'skill-without-standard-action' | 'pre-initiative-action' | 'attack-adjustment';
 };
 
 export type PlayerResourceNotice = {
@@ -912,6 +917,8 @@ export type AreaDamageResult = {
 };
 
 export type DirectPlayerDamageRequest = {
+  independentHits?: boolean;
+  statusEffects?: import('./boss-attacks').AttackStatusEffect[];
   bossTargetIds?: string[];
   playerIds: string[];
   damage: number;
@@ -1034,6 +1041,9 @@ export const isDirectPlayerDamageRequest = (
 ): value is DirectPlayerDamageRequest => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<DirectPlayerDamageRequest>;
+  if (candidate.independentHits !== undefined && typeof candidate.independentHits !== 'boolean') return false;
+  if (candidate.independentHits && (candidate.hits ?? 1) > 20) return false;
+  if (candidate.statusEffects !== undefined && (!Array.isArray(candidate.statusEffects) || candidate.statusEffects.length > 10 || !candidate.statusEffects.every(isAttackStatusEffect))) return false;
   if (candidate.bossTargetIds !== undefined && (!Array.isArray(candidate.bossTargetIds) || candidate.bossTargetIds.length > 3 || !candidate.bossTargetIds.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128))) return false;
   const hasAttackCheck =
     candidate.attackType !== undefined ||
@@ -1388,6 +1398,7 @@ export const isPlayerCombatActionRequest = (
   }
   if (candidate.kind === 'attack') {
     const attack = candidate as Partial<PlayerAttackRequest>;
+    if ([attack.extraAttackModifier, attack.extraDamageModifier].some((value) => value !== undefined && (!Number.isInteger(value) || Math.abs(value) > 999))) return false;
     const source = attack.attackSource ??
       (
         Number.isInteger(attack.attackIndex)

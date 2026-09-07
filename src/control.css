@@ -1257,11 +1257,18 @@ button { cursor: pointer; }
 }
 .control-status-modal.control-boss-arsenal-modal {
   width: min(840px, calc(100vw - 24px));
+  max-height: calc(100dvh - 20px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
+.control-boss-arsenal-modal .control-status-target-header > div { flex: 1; min-width: 0; }
+.control-status-target-header > button.control-open-attack-library { width: auto; height: 32px; min-height: 32px; border: 1px solid #92623f; border-radius: 7px; padding: 6px 12px; background: #36251f; color: #e7c5a2; font: 700 12px/1.2 var(--ui-font); }
+.control-boss-arsenal-actions button.is-selected { border-color: #aa7a44; color: #f3d7a7; background: #453322; }
 .control-boss-arsenal-layout {
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr);
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
 }
 .control-boss-attack-list {
   display: grid;
@@ -1294,6 +1301,8 @@ button { cursor: pointer; }
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 9px;
 }
+.control-boss-attack-editor > label { font-size: 11px; font-weight: 700; }
+.control-boss-attack-editor :is(input, select) { font: 500 13px/1.3 var(--ui-font); }
 .control-boss-attack-editor label:first-child,
 .control-boss-attack-editor label:nth-child(4) { grid-column: span 2; }
 .control-boss-arsenal-actions .is-remove {
@@ -1382,6 +1391,7 @@ button { cursor: pointer; }
   color: #fff;
   font-size: .7rem;
   font-weight: 850;
+  background: #30202c;
 }
 .control-status-modal-cancel { background: linear-gradient(145deg, #40343f, #5e4758); }
 .control-status-modal-apply { background: linear-gradient(145deg, #71365c, #bd4f7e); }
