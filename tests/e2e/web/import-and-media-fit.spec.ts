@@ -1,3 +1,4 @@
+import { keepCustomizedSheetValues } from '../support/sheet-review';
 import { test, expect } from '@playwright/test';
 import { PDFDocument } from 'pdf-lib';
 import { createEditableCharacterSheet, createPublicBattle, joinHostedSession, startHostedTestSession, TEST_MEDIA_IDS } from '../support/hosted-session';
@@ -27,18 +28,26 @@ test('importação inválida fica isolada, exige correção final e preserva a f
     await page.locator('#web-player-sheet-input').setInputFiles({ name: 'corrigir.pdf', mimeType: 'application/pdf', buffer: invalidBytes });
     await expect(editor).toBeVisible();
     await editor.locator('[data-field-name="Tipo 1"] select').selectOption('Corte');
-    await editor.locator('[data-field-name="CA"] input').fill('11');
-    await page.locator('#web-player-sheet-editor-close').click();
-    await expect(editor.locator('[data-field-name="CA"] input')).toHaveAttribute('aria-invalid', 'true');
+    await editor.getByRole('button', { name: 'Validar e corrigir cálculos', exact: true }).click();
+    await keepCustomizedSheetValues(page);
+    await editor.locator('[data-field-name="PVs Totais"] input').fill('-1');
+    await editor.getByRole('button', { name: 'Salvar e fechar', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await expect.poll(() => editor.locator('[data-field-name="PVs Totais"] input').evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false);
     expect(session.server.getPlayerHuds()[0]?.characterName).toBe('Original');
-    await editor.locator('[data-field-name="CA"] input').fill('10');
-    await page.locator('#web-player-sheet-editor-close').click();
+    await editor.locator('[data-field-name="PVs Totais"] input').fill('21');
+    await editor.getByRole('button', { name: 'Salvar e fechar', exact: true }).click();
     await expect(editor).toBeHidden();
     await expect.poll(() => session.server.getPlayerHuds()[0]?.characterName).toBe('Corrigido');
     await page.getByRole('button', { name: 'Ficha', exact: true }).click();
     await page.locator('#web-player-sheet-input').setInputFiles({ name: 'calculo.pdf', mimeType: 'application/pdf', buffer: await createEditableCharacterSheet({ characterName: 'Automático', playerName: 'Importador', autoFixIssue: true }) });
     await expect(editor).toBeVisible();
-    await page.getByRole('button', { name: 'Corrigir cálculos automaticamente', exact: true }).click();
+    await page.getByRole('button', { name: 'Validar e corrigir cálculos', exact: true }).click();
+    await keepCustomizedSheetValues(page);
+    await expect(editor).toBeVisible();
+    expect(session.server.getPlayerHuds()[0]?.characterName).toBe('Corrigido');
+    await expect(editor.locator('[data-field-name="CA"] input')).toHaveValue('10');
+    await editor.getByRole('button', { name: 'Salvar e fechar', exact: true }).click();
     await expect(editor).toBeHidden();
     await expect.poll(() => session.server.getPlayerHuds()[0]?.characterName).toBe('Automático');
   } finally { await session.close(); }

@@ -19,7 +19,7 @@ function AttackBonusField({ value, onChange }: { value: number; onChange: (value
 
 export function AttackLibrary({ onClose, onSelect, context }: {
   onClose: () => void;
-  onSelect?: (attack: BossAttack) => void;
+  onSelect?: (attacks: BossAttack[]) => string | void;
   context?: string;
 }) {
   const [attacks, setAttacks] = useState<BossAttack[]>([]);
@@ -28,6 +28,7 @@ export function AttackLibrary({ onClose, onSelect, context }: {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   useEffect(() => { let active = true; void window.bossAPI.getAttackLibrary().then((entries) => { if (active) setAttacks(entries); }).catch(() => { if (active) setError('Não foi possível abrir a biblioteca.'); }); return () => { active = false; }; }, []);
   const save = async (remove = false) => {
     if (!draft || busy) return;
@@ -57,7 +58,7 @@ export function AttackLibrary({ onClose, onSelect, context }: {
           <div className="attack-library-summary"><strong title={attack.name}>{attack.name}</strong><small>{attack.attackCount ?? 1} ataque(s) · {attack.damageFormula} · {attack.damageType} · {attack.range}</small>{Boolean(attack.tags?.length) && <div className="attack-library-tags">{attack.tags!.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>}</div>
           <div className="attack-library-row-actions">
           <button type="button" onClick={() => { setDraft(structuredClone(attack)); setDeleting(false); }}>Editar</button>
-          {onSelect && <button className="is-primary" type="button" onClick={() => onSelect(structuredClone(attack))}>Selecionar</button>}
+          {onSelect && <label className="attack-library-selection"><input type="checkbox" aria-label={`Selecionar ${attack.name}`} checked={selectedIds.has(attack.id)} onChange={(event) => setSelectedIds((previous) => { const next = new Set(previous); if (event.target.checked) next.add(attack.id); else next.delete(attack.id); return next; })} />Selecionar</label>}
           </div>
         </article>)}{!visibleAttacks.length && <p className="attack-library-empty">{attacks.length ? 'Nenhum ataque corresponde à busca.' : 'Nenhum ataque salvo.'}</p>}</div>
         {draft && <form className="attack-library-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -89,6 +90,7 @@ export function AttackLibrary({ onClose, onSelect, context }: {
         </form>}
       </div>
       {error && <p className="attack-library-error" role="alert">{error}</p>}
+      {onSelect && !draft && <footer className="attack-library-selection-footer"><span>{attacks.filter(({ id }) => selectedIds.has(id)).length} ataque(s) selecionado(s)</span><button type="button" className="is-primary" disabled={!attacks.some(({ id }) => selectedIds.has(id))} onClick={() => { const reason = onSelect(structuredClone(attacks.filter(({ id }) => selectedIds.has(id)))); if (reason) setError(reason); }}>Aplicar selecionados</button></footer>}
       {deleting && <div className="attack-library-confirmation"><section role="alertdialog" aria-modal="true" aria-label="Excluir ataque"><header><h3>Excluir ataque?</h3><button className="attack-library-close" type="button" aria-label="Fechar confirmação" onClick={() => setDeleting(false)}>×</button></header><p>Excluir este ataque da biblioteca? Os arsenais já configurados serão preservados.</p><footer><button type="button" onClick={() => setDeleting(false)}>Cancelar</button><button className="is-destructive" type="button" disabled={busy} onClick={() => void save(true)}>Excluir ataque</button></footer></section></div>}
     </section>
   </div>, document.body);

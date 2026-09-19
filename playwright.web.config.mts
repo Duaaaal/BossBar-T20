@@ -1,9 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
-const firefoxRunnerUnsupported =
-  process.platform === 'win32' && nodeMajor >= 24 && !process.env.CI;
-
 export default defineConfig({
   testDir: './tests/e2e/web',
   fullyParallel: true,
@@ -48,5 +44,5 @@ export default defineConfig({
       retries: 1,
       use: { ...devices['Desktop Firefox'] },
     },
-  ].filter(({ name }) => !(firefoxRunnerUnsupported && name === 'firefox')),
+  ],
 });

@@ -1,0 +1,74 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { characterResources, initializeAutomaticResources, recalculateCharacterResources } from '../src/shared/character-resources.ts';
+import { createBlankCharacterSheetPdf, readCharacterSheetEditorFields, applyCharacterSheetEditorFields, validateCharacterSheetEditorUpdates } from '../src/multiplayer/character-sheet-pdf.ts';
+import { CHARACTER_OPTIONS } from '../src/shared/character-options.ts';
+const base = { Lv: '5', CLASSE: 'Guerreiro 5', ModCon: '2', ModInt: '4', ModSab: '3', ModCar: '2' };
+test('PV e PM respeitam cada progressão básica, Constituição e atributo concedido por habilidade', () => {
+  assert.equal(characterResources(base).health, 50);
+  assert.equal(characterResources(base).mana, 15);
+  assert.equal(characterResources({ ...base, CLASSE: 'Ladino 5' }).mana, 20);
+  assert.equal(characterResources({ ...base, CLASSE: 'Inventor 5' }).mana, 20);
+  assert.equal(characterResources({ ...base, CLASSE: 'Arcanista 5', SeleAtribMagia: 'INT' }).mana, 34);
+  assert.equal(characterResources({ ...base, CLASSE: 'Arcanista 5', SeleAtribMagia: 'CAR' }).mana, 32);
+  assert.equal(characterResources({ ...base, CLASSE: 'Arcanista 5' }).mana, null);
+  assert.equal(characterResources({ ...base, CLASSE: 'Clérigo 5' }).mana, 28);
+  assert.equal(characterResources({ ...base, CLASSE: 'Frade 5' }).mana, 33);
+  assert.equal(characterResources({ ...base, CLASSE: 'Treinador 5' }).mana, 20);
+  assert.equal(characterResources({ ...base, CLASSE: 'Arcanista 5', ModCon: '-5' }).health, 7);
+});
+test('multiclasse usa PV iniciais uma vez e não duplica o mesmo atributo em PM', () => {
+  const sheet = { ...base, CLASSE: 'Bardo 3 / Paladino 2' };
+  assert.equal(characterResources(sheet).health, 38);
+  assert.equal(characterResources(sheet).mana, 20);
+  assert.equal(characterResources({ ...sheet, CLASSE: 'Paladino 2 / Bardo 3' }).health, 44);
+  assert.equal(characterResources({ ...sheet, CLASSE: 'Bardo 2 / Paladino 2' }), null);
+});
+test('todas as classes do catálogo possuem progressão; variantes respeitam seus livros', () => {
+  for (const entry of CHARACTER_OPTIONS.filter(({ kind }) => kind === 'class')) assert.ok(characterResources({ ...base, CLASSE: entry.name + ' 5' }), entry.name);
+  assert.equal(characterResources({ ...base, CLASSE: 'Burguês 5' }).health, 34);
+  assert.equal(characterResources({ ...base, CLASSE: 'Ermitão 5' }).health, 34);
+  assert.equal(characterResources({ ...base, CLASSE: 'Ermitão 5' }).mana, 23);
+  assert.equal(characterResources({ ...base, CLASSE: 'Magimarcialista 5' }).health, 42);
+  assert.equal(characterResources({ ...base, CLASSE: 'Magimarcialista 5' }).mana, 22);
+  assert.equal(characterResources({ ...base, CLASSE: 'Santo 5' }).mana, 22);
+  assert.equal(characterResources({ ...base, CLASSE: 'Usurpador 5' }).mana, 27);
+  assert.equal(characterResources({ ...base, CLASSE: 'Necromante 5', SeleAtribMagia: 'CAR' }).mana, 34);
+});
+test('fontes reconhecidas de PV/PM somam uma vez e menções em descrições não concedem poderes', () => {
+  const sheet = { ...base, 'RAÇA': 'Anão', 'BossBar.Habilidades.Gerais': '- Vitalidade: já incluso.\n- Vontade de Ferro: já incluso.\n- Teste: Pré-requisito: Poder Mágico.' };
+  assert.equal(characterResources(sheet).health, 62);
+  assert.equal(characterResources(sheet).mana, 17);
+  assert.equal(characterResources({ ...base, 'RAÇA': 'Elfo' }).mana, 20);
+});
+test('recursos automáticos preservam gastos e valores personalizados', () => {
+  const sheet = { ...base, 'PVs Totais': '1', 'PVs Atuais': '1', 'PMs Totais': '0', 'PMs Atuais': '0' };
+  initializeAutomaticResources(sheet); recalculateCharacterResources(sheet);
+  assert.equal(sheet['PVs Totais'], '50'); assert.equal(sheet['PVs Atuais'], '50');
+  sheet['PVs Atuais'] = '12'; sheet['PMs Totais'] = '99'; sheet['PMs Atuais'] = '4'; sheet.Lv = '6'; sheet.CLASSE = 'Guerreiro 6';
+  recalculateCharacterResources(sheet); assert.equal(sheet['PVs Totais'], '57'); assert.equal(sheet['PVs Atuais'], '12'); assert.equal(sheet['PMs Totais'], '99'); assert.equal(sheet['PMs Atuais'], '4');
+  const imported = { ...base, 'PVs Totais': '99' }; recalculateCharacterResources(imported); assert.equal(imported['PVs Totais'], '99');
+  const arcane = { ...base, CLASSE: 'Arcanista 5', 'PVs Totais': '1', 'PVs Atuais': '1', 'PMs Totais': '0', 'PMs Atuais': '0' };
+  initializeAutomaticResources(arcane); recalculateCharacterResources(arcane);
+  assert.equal(arcane['PMs Totais'], '30'); assert.equal(characterResources(arcane).unresolved.length, 1);
+  arcane.SeleAtribMagia = 'INT'; recalculateCharacterResources(arcane); assert.equal(arcane['PMs Totais'], '34');
+});
+test('ficha vazia abre apenas dois itens e calcula recursos ao escolher classe, inclusive após salvar', async () => {
+  const blank = await createBlankCharacterSheetPdf(await readFile(new URL('../assets/ficha-t20-nimb.pdf', import.meta.url)));
+  const fields = await readCharacterSheetEditorFields(blank.bytes);
+  assert.equal(fields.find(({ name }) => name === 'PVs Totais').value, '');
+  assert.equal(fields.find(({ name }) => name === 'PMs Totais').value, '');
+  for (const name of ['CargaMax', 'Levantar', 'Desloc', 'PesoItem1', 'NOME DO PERSONAGEM', 'CLASSE']) assert.equal(fields.find((field) => field.name === name).value, '', name);
+  assert.equal(fields.find(({ name }) => name === '010').value, '0');
+  assert.equal(fields.find(({ name }) => name === 'BossBar.Ataque.1.Base').value, '0');
+  assert.equal(fields.some(({ value }) => /^[-+]?0{2,}(?:[.,]0+)?$/.test(value)), false);
+  assert.equal(validateCharacterSheetEditorUpdates(fields), null);
+  assert.deepEqual([...new Set(fields.filter(({ group }) => group?.startsWith('Item ')).map(({ group }) => group))], ['Item 1', 'Item 2']);
+  fields.find(({ name }) => name === 'CLASSE').value = 'Ladino 1';
+  const result = await applyCharacterSheetEditorFields(blank.bytes, fields, true);
+  const reopened = await readCharacterSheetEditorFields(result.bytes);
+  const value = (name) => reopened.find((entry) => entry.name === name).value;
+  assert.equal(value('PVs Totais'), '12'); assert.equal(value('PVs Atuais'), '12'); assert.equal(value('PMs Totais'), '4'); assert.equal(value('PMs Atuais'), '4');
+  assert.equal(reopened.filter(({ name }) => /^Item\d+$|^BossBar\.Item\.\d+\.Nome$/.test(name)).length, 2);
+});

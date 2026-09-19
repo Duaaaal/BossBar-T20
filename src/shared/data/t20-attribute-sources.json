@@ -1,0 +1,2104 @@
+{
+  "version": 1,
+  "races": [
+    {
+      "name": "Humano",
+      "fixed": {},
+      "sourceId": "core",
+      "page": 18,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Anão",
+      "fixed": {
+        "Con": 2,
+        "Sab": 1,
+        "Des": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Dahllan",
+      "fixed": {
+        "Sab": 2,
+        "Des": 1,
+        "Int": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Elfo",
+      "fixed": {
+        "Int": 2,
+        "Des": 1,
+        "Con": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Goblin",
+      "fixed": {
+        "Des": 2,
+        "Int": 1,
+        "Car": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Lefou",
+      "fixed": {
+        "Car": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Minotauro",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Sab": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Qareen",
+      "fixed": {
+        "Car": 2,
+        "Int": 1,
+        "Sab": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Golem",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Car": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Hynne",
+      "fixed": {
+        "Des": 2,
+        "Car": 1,
+        "For": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Kliren",
+      "fixed": {
+        "Int": 2,
+        "Car": 1,
+        "For": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Medusa",
+      "fixed": {
+        "Des": 2,
+        "Car": 1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Osteon",
+      "fixed": {
+        "Con": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Sereia/Tritão",
+      "fixed": {},
+      "sourceId": "core",
+      "page": 18,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Sílfide",
+      "fixed": {
+        "Car": 2,
+        "Des": 1,
+        "For": -2
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Aggelus",
+      "fixed": {
+        "Sab": 2,
+        "Car": 1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Sulfure",
+      "fixed": {
+        "Des": 2,
+        "Int": 1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Trog",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Int": -1
+      },
+      "sourceId": "core",
+      "page": 18,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Eiradaan",
+      "fixed": {
+        "Sab": 2,
+        "Car": 1,
+        "For": -1
+      },
+      "sourceId": "heroes",
+      "page": 12,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Galokk",
+      "fixed": {
+        "For": 1,
+        "Con": 1,
+        "Car": -1
+      },
+      "sourceId": "heroes",
+      "page": 13,
+      "choices": 1,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Meio-Elfo",
+      "fixed": {
+        "Int": 1
+      },
+      "sourceId": "heroes",
+      "page": 14,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Sátiro",
+      "fixed": {
+        "Car": 2,
+        "Des": 1,
+        "Sab": -1
+      },
+      "sourceId": "heroes",
+      "page": 15,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Bugbear",
+      "fixed": {
+        "For": 2,
+        "Des": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 79,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Centauro",
+      "fixed": {
+        "Sab": 2,
+        "For": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 105,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Ceratops",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Des": -1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 265,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Elfo-do-mar",
+      "fixed": {
+        "Des": 2,
+        "Con": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 316,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Finntroll",
+      "fixed": {
+        "Int": 2,
+        "Con": 1,
+        "For": -1
+      },
+      "sourceId": "threats",
+      "page": 339,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Gnoll",
+      "fixed": {
+        "Con": 2,
+        "Sab": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 115,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Harpia",
+      "fixed": {
+        "Des": 2,
+        "Car": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 201,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Hobgoblin",
+      "fixed": {
+        "Con": 2,
+        "Des": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 84,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Kaijin",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Car": -2
+      },
+      "sourceId": "threats",
+      "page": 157,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Kappa",
+      "fixed": {
+        "Des": 2,
+        "Con": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 158,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Kobolds",
+      "fixed": {
+        "Des": 2,
+        "For": -1
+      },
+      "sourceId": "threats",
+      "page": 183,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Meio-orc",
+      "fixed": {
+        "For": 2
+      },
+      "sourceId": "threats",
+      "page": 31,
+      "choices": 1,
+      "allowed": [
+        "Des",
+        "Con",
+        "Int",
+        "Sab"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Minauro",
+      "fixed": {
+        "For": 1
+      },
+      "sourceId": "threats",
+      "page": 175,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Nezumi",
+      "fixed": {
+        "Con": 2,
+        "Des": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 162,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Ogro",
+      "fixed": {
+        "For": 3,
+        "Con": 2,
+        "Int": -1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 40,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Orc",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 33,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Pteros",
+      "fixed": {
+        "Sab": 2,
+        "Des": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 267,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Tabrachi",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 37,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Tengu",
+      "fixed": {
+        "Des": 2,
+        "Int": 1
+      },
+      "sourceId": "threats",
+      "page": 164,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Velocis",
+      "fixed": {
+        "Des": 2,
+        "Sab": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 268,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Voracis",
+      "fixed": {
+        "Des": 2,
+        "Con": 1,
+        "Int": -1
+      },
+      "sourceId": "threats",
+      "page": 270,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Yidishan",
+      "fixed": {
+        "Car": -2
+      },
+      "sourceId": "threats",
+      "page": 300,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Coruja",
+      "fixed": {
+        "Sab": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Hiena",
+      "fixed": {
+        "Sab": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Raposa",
+      "fixed": {
+        "Int": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Serpente",
+      "fixed": {
+        "Int": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Búfalo",
+      "fixed": {
+        "For": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Coelho",
+      "fixed": {
+        "Des": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Crocodilo",
+      "fixed": {
+        "Con": 1
+      },
+      "sourceId": "threats",
+      "page": 304,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Gato",
+      "fixed": {
+        "Car": 1
+      },
+      "sourceId": "threats",
+      "page": 305,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Leão",
+      "fixed": {
+        "For": 1
+      },
+      "sourceId": "threats",
+      "page": 305,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Lobo",
+      "fixed": {
+        "Car": 1
+      },
+      "sourceId": "threats",
+      "page": 305,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Morcego",
+      "fixed": {
+        "Des": 1
+      },
+      "sourceId": "threats",
+      "page": 305,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Moreau — Urso",
+      "fixed": {
+        "Con": 1
+      },
+      "sourceId": "threats",
+      "page": 305,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Golem — Barro",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Bronze",
+      "fixed": {
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Carne",
+      "fixed": {
+        "Con": 2,
+        "For": 2,
+        "Car": -2
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Espelhos",
+      "fixed": {
+        "Car": 1,
+        "Sab": 1,
+        "Con": -1,
+        "For": 1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Ferro",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Gelo Eterno",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Pedra",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Sucata",
+      "fixed": {
+        "For": 2,
+        "Con": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 134,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Mashin",
+      "fixed": {
+        "For": 1,
+        "Car": -1
+      },
+      "sourceId": "threats",
+      "page": 160,
+      "choices": 2,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Golem — Dourado",
+      "fixed": {
+        "Car": 1,
+        "For": 2
+      },
+      "sourceId": "gods",
+      "page": 279,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": "Chassi: soma Força +1, Carisma −1 e o ajuste de tamanho do golem."
+    },
+    {
+      "name": "Trog anão",
+      "fixed": {
+        "Con": 2,
+        "For": 1,
+        "Int": -1,
+        "Des": -1
+      },
+      "sourceId": "threats",
+      "page": 39,
+      "choices": 0,
+      "allowed": [
+        "For",
+        "Des",
+        "Con",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    },
+    {
+      "name": "Soterrado",
+      "fixed": {
+        "Con": -1
+      },
+      "sourceId": "threats",
+      "page": 354,
+      "choices": 3,
+      "allowed": [
+        "For",
+        "Des",
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "note": ""
+    }
+  ],
+  "sources": [
+    {
+      "id": "core:aumentodeatributo",
+      "name": "Aumento de Atributo",
+      "sourceId": "core",
+      "page": 38,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "+1 por escolha; uma escolha por patamar para cada atributo.",
+      "tierLimited": true
+    },
+    {
+      "id": "core:desejo",
+      "name": "Desejo",
+      "sourceId": "core",
+      "page": 190,
+      "kind": "spell",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "Cada atributo só pode receber este aumento uma vez.",
+      "unique": true
+    },
+    {
+      "id": "core:alterartamanho",
+      "name": "Alterar Tamanho",
+      "sourceId": "core",
+      "page": 179,
+      "kind": "spell",
+      "duration": "temporary",
+      "amount": 2,
+      "note": "Confirme o aprimoramento utilizado e a duração. Bônus de magias não se acumulam entre si."
+    },
+    {
+      "id": "core:aparenciaperfeita",
+      "name": "Aparência Perfeita",
+      "sourceId": "core",
+      "page": 180,
+      "kind": "spell",
+      "duration": "temporary",
+      "attribute": "Car",
+      "note": "A magia fixa Carisma em 5 (ou fornece +2 se o valor já for 5 ou maior); registre a diferença necessária como ajuste. Aprimoramentos e duração precisam ser conferidos. Esse registro não executa a magia."
+    },
+    {
+      "id": "core:fisicodivino",
+      "name": "Físico Divino",
+      "sourceId": "core",
+      "page": 193,
+      "kind": "spell",
+      "duration": "temporary",
+      "amount": 2,
+      "note": "Confirme o aprimoramento utilizado e a duração. Bônus de magias não se acumulam entre si.",
+      "allowedAttributes": [
+        "For",
+        "Des",
+        "Con"
+      ]
+    },
+    {
+      "id": "core:mentedivina",
+      "name": "Mente Divina",
+      "sourceId": "core",
+      "page": 198,
+      "kind": "spell",
+      "duration": "temporary",
+      "amount": 2,
+      "note": "Confirme o aprimoramento utilizado e a duração. Bônus de magias não se acumulam entre si.",
+      "allowedAttributes": [
+        "Int",
+        "Sab",
+        "Car"
+      ]
+    },
+    {
+      "id": "core:potenciadivina",
+      "name": "Potência Divina",
+      "sourceId": "core",
+      "page": 201,
+      "kind": "spell",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 4,
+      "note": "Confirme o aprimoramento utilizado e a duração. Bônus de magias não se acumulam entre si."
+    },
+    {
+      "id": "core:poderoculto",
+      "name": "Poder Oculto",
+      "sourceId": "core",
+      "page": 134,
+      "kind": "power",
+      "duration": "temporary",
+      "amount": 2,
+      "note": "Atributo físico definido por 1d6; duração cena.",
+      "allowedAttributes": [
+        "For",
+        "Des",
+        "Con"
+      ]
+    },
+    {
+      "id": "core:formaselvagem",
+      "name": "Forma Selvagem",
+      "sourceId": "core",
+      "page": 63,
+      "kind": "power",
+      "duration": "temporary",
+      "note": "Registre a forma e sua versão; apenas a forma atualmente utilizada."
+    },
+    {
+      "id": "core:couracadocomando",
+      "name": "Couraça do Comando",
+      "sourceId": "core",
+      "page": 340,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:amuletodarobustez",
+      "name": "Amuleto da Robustez",
+      "sourceId": "core",
+      "page": 342,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Con",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:brincosdasagacidade",
+      "name": "Brincos da Sagacidade",
+      "sourceId": "core",
+      "page": 342,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Int",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:cintodocampeao",
+      "name": "Cinto do Campeão",
+      "sourceId": "core",
+      "page": 343,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:cintodaforcadogigante",
+      "name": "Cinto da Força do Gigante",
+      "sourceId": "core",
+      "page": 343,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:coroamajestosa",
+      "name": "Coroa Majestosa",
+      "sourceId": "core",
+      "page": 344,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Car",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:estoladaserenidade",
+      "name": "Estola da Serenidade",
+      "sourceId": "core",
+      "page": 344,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Sab",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:luvasdadelicadeza",
+      "name": "Luvas da Delicadeza",
+      "sourceId": "core",
+      "page": 344,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Des",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:manoplasdaforcadoogro",
+      "name": "Manoplas da Força do Ogro",
+      "sourceId": "core",
+      "page": 344,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:mantodofascinio",
+      "name": "Manto do Fascínio",
+      "sourceId": "core",
+      "page": 344,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:pingentedasensatez",
+      "name": "Pingente da Sensatez",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:pulseirasdaceleridade",
+      "name": "Pulseiras da Celeridade",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Des",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:tiaradasapiencia",
+      "name": "Tiara da Sapiência",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Int",
+      "amount": 2,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:torquedovigor",
+      "name": "Torque do Vigor",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Con",
+      "amount": 1,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:joiadaalma",
+      "name": "Joia da Alma",
+      "sourceId": "core",
+      "page": 347,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Int",
+      "amount": 3,
+      "note": "Depende do uso do item; confira a exigência de um dia de uso. Bônus de itens não se acumulam entre si."
+    },
+    {
+      "id": "core:manualdobomexercicio",
+      "name": "Manual do Bom Exercício",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "For",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:manualdasaudecorporal",
+      "name": "Manual da Saúde Corporal",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "Con",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:manualdosmovimentosprecisos",
+      "name": "Manual dos Movimentos Precisos",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "Des",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:tomodacompreensao",
+      "name": "Tomo da Compreensão",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:tomodaliderancaeinfluencia",
+      "name": "Tomo da Liderança e Influência",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:tomodosgrandespensamentos",
+      "name": "Tomo dos Grandes Pensamentos",
+      "sourceId": "core",
+      "page": 345,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "Int",
+      "amount": 1,
+      "note": "Aumento permanente após estudo; leituras repetidas do mesmo tipo não acumulam.",
+      "unique": true
+    },
+    {
+      "id": "core:baralhodocaoscoracao",
+      "name": "Baralho do Caos — Coração",
+      "sourceId": "core",
+      "page": 347,
+      "kind": "artifact",
+      "duration": "permanent",
+      "amount": 1,
+      "note": ""
+    },
+    {
+      "id": "heroes:ritualdolich",
+      "name": "Ritual do Lich",
+      "sourceId": "heroes",
+      "page": 36,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "Inteligência, Sabedoria e Carisma +1; Constituição −1."
+    },
+    {
+      "id": "heroes:viscondecaminhodogovernante",
+      "name": "Visconde — Caminho do Governante",
+      "sourceId": "heroes",
+      "page": 42,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Int",
+      "amount": 1,
+      "note": "Vassalo de nível 11."
+    },
+    {
+      "id": "heroes:reimercenario",
+      "name": "Rei Mercenário",
+      "sourceId": "heroes",
+      "page": 43,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "3 pontos físicos ou mentais, conforme o caminho; nível 17."
+    },
+    {
+      "id": "heroes:rei",
+      "name": "Rei",
+      "sourceId": "heroes",
+      "page": 43,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Vassalo de nível 18."
+    },
+    {
+      "id": "heroes:imperador",
+      "name": "Imperador",
+      "sourceId": "heroes",
+      "page": 43,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "+1 em dois atributos diferentes; nível 20."
+    },
+    {
+      "id": "heroes:apoteosecelestial",
+      "name": "Apoteose Celestial",
+      "sourceId": "heroes",
+      "page": 54,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": "Também reduz Constituição em 1; requer Herança Superior celestial e nível 17."
+    },
+    {
+      "id": "heroes:banqueteselvagem",
+      "name": "Banquete Selvagem",
+      "sourceId": "heroes",
+      "page": 66,
+      "kind": "power",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 2,
+      "note": "Requer Forma Selvagem e a condição descrita no poder; dura uma cena."
+    },
+    {
+      "id": "heroes:forcadanatureza",
+      "name": "Força da Natureza",
+      "sourceId": "heroes",
+      "page": 66,
+      "kind": "power",
+      "duration": "temporary",
+      "amount": 4,
+      "note": "Requer Forma Selvagem Superior e nível 17; dura uma cena."
+    },
+    {
+      "id": "heroes:crescimentofeerico",
+      "name": "Crescimento Feérico",
+      "sourceId": "heroes",
+      "page": 86,
+      "kind": "power",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 1,
+      "note": "+1, ou +2 a partir do patamar veterano com 3 PM.",
+      "allowedAmounts": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "heroes:rainhaamazona",
+      "name": "Rainha Amazona",
+      "sourceId": "heroes",
+      "page": 114,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Requer os poderes e feito da distinção."
+    },
+    {
+      "id": "heroes:bracodeogro",
+      "name": "Braço de Ogro",
+      "sourceId": "heroes",
+      "page": 150,
+      "kind": "item",
+      "duration": "permanent",
+      "attribute": "For",
+      "amount": 2,
+      "note": "Implante; substitui um braço."
+    },
+    {
+      "id": "heroes:saudeperfeita",
+      "name": "Saúde Perfeita",
+      "sourceId": "heroes",
+      "page": 183,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Con",
+      "amount": 1,
+      "note": "Requer Acompanhamento Médico e Fortitude treinada."
+    },
+    {
+      "id": "heroes:mutageniaexaurir",
+      "name": "Mutagenia — Exaurir",
+      "sourceId": "heroes",
+      "page": 201,
+      "kind": "power",
+      "duration": "temporary",
+      "amount": 1,
+      "note": "Escolha um atributo com modificador racial positivo. Não concede PV, PM ou perícias."
+    },
+    {
+      "id": "heroes:memorial",
+      "name": "Memorial",
+      "sourceId": "heroes",
+      "page": 247,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "Benefício para o próximo personagem do jogador após a morte de um residente."
+    },
+    {
+      "id": "heroes:bracadeirasdaforcadocolosso",
+      "name": "Braçadeiras da Força do Colosso",
+      "sourceId": "heroes",
+      "page": 264,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 4,
+      "note": "Após um dia de uso; pode elevar o bônus para +8 por uma rodada.",
+      "allowedAmounts": [
+        4,
+        8
+      ]
+    },
+    {
+      "id": "heroes:iteminteligentepodermaior",
+      "name": "Item inteligente — poder maior",
+      "sourceId": "heroes",
+      "page": 270,
+      "kind": "item",
+      "duration": "temporary",
+      "amount": 1,
+      "note": "Atributo definido aleatoriamente; depende do item."
+    },
+    {
+      "id": "heroes:objetivoconclusao",
+      "name": "Objetivo — Conclusão",
+      "sourceId": "heroes",
+      "page": 293,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "O atributo e a quantidade dependem do objetivo efetivamente concluído."
+    },
+    {
+      "id": "heroes:banquetedosherois",
+      "name": "Banquete dos Heróis",
+      "sourceId": "heroes",
+      "page": 306,
+      "kind": "power",
+      "duration": "temporary",
+      "amount": 1,
+      "note": "Alimentação; não oferece PV, PM ou perícias adicionais."
+    },
+    {
+      "id": "heroes:maaaisklunc",
+      "name": "Maaais Klunc",
+      "sourceId": "heroes",
+      "page": 254,
+      "kind": "spell",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 10,
+      "note": "Também define Inteligência em −3 antes das penalidades. Registre a alteração correspondente."
+    },
+    {
+      "id": "gods:autoridadeeclesiasticamarah",
+      "name": "Autoridade Eclesiástica — Marah",
+      "sourceId": "gods",
+      "page": 23,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Confirme a habilidade e a condição de uso."
+    },
+    {
+      "id": "gods:herancasuperiorlinhagemabencoada",
+      "name": "Herança Superior — Linhagem Abençoada",
+      "sourceId": "gods",
+      "page": 33,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": ""
+    },
+    {
+      "id": "gods:herancadealgazara",
+      "name": "Herança de Al-Gazara",
+      "sourceId": "gods",
+      "page": 36,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "Atributo definido aleatoriamente."
+    },
+    {
+      "id": "gods:aprimoramentodivino",
+      "name": "Aprimoramento Divino",
+      "sourceId": "gods",
+      "page": 234,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "Pré-requisito: status divino 2."
+    },
+    {
+      "id": "gods:coroadeflores",
+      "name": "Coroa de Flores",
+      "sourceId": "gods",
+      "page": 55,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": "Exige devoção e um dia de uso/posse, conforme a descrição."
+    },
+    {
+      "id": "gods:pirapostera",
+      "name": "Pira Póstera",
+      "sourceId": "gods",
+      "page": 59,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Sab",
+      "amount": 1,
+      "note": "Exige devoção e um dia de uso/posse, conforme a descrição."
+    },
+    {
+      "id": "gods:botasinquietas",
+      "name": "Botas Inquietas",
+      "sourceId": "gods",
+      "page": 59,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Con",
+      "amount": 1,
+      "note": "Exige devoção e um dia de uso/posse, conforme a descrição."
+    },
+    {
+      "id": "gods:paixaodemarah",
+      "name": "Paixão de Marah",
+      "sourceId": "gods",
+      "page": 62,
+      "kind": "spell",
+      "duration": "temporary",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Aprimoramento para devotos de Marah; não fornece PV ou PM."
+    },
+    {
+      "id": "threats:transformacaoemdragao",
+      "name": "Transformação em Dragão",
+      "sourceId": "threats",
+      "page": 405,
+      "kind": "spell",
+      "duration": "temporary",
+      "amount": 2,
+      "note": "Força, Constituição, Inteligência e Carisma; +4 com aprimoramento. Não fornece PV, PM ou perícias.",
+      "allowedAttributes": [
+        "For",
+        "Con",
+        "Int",
+        "Car"
+      ]
+    },
+    {
+      "id": "atlas:aspiranteaheroi",
+      "name": "Aspirante a Herói",
+      "sourceId": "atlas",
+      "page": 471,
+      "kind": "origin",
+      "duration": "permanent",
+      "amount": 1,
+      "note": ""
+    },
+    {
+      "id": "atlas:criadafavela",
+      "name": "Cria da Favela",
+      "sourceId": "atlas",
+      "page": 472,
+      "kind": "origin",
+      "duration": "permanent",
+      "attribute": "Con",
+      "amount": 1,
+      "note": ""
+    },
+    {
+      "id": "minor-gods:despertardogigante",
+      "name": "Despertar do Gigante",
+      "sourceId": "minor-gods",
+      "page": 46,
+      "kind": "power",
+      "duration": "temporary",
+      "attribute": "For",
+      "amount": 1,
+      "note": "Requer uma ação de movimento e 3 PM; dura uma cena."
+    },
+    {
+      "id": "core:herancasuperiorlinhagemfeerica",
+      "name": "Herança Superior — Linhagem Feérica",
+      "sourceId": "core",
+      "page": 39,
+      "kind": "power",
+      "duration": "permanent",
+      "attribute": "Car",
+      "amount": 2,
+      "note": "Requer a herança superior efetivamente adquirida; não basta possuir a linhagem."
+    },
+    {
+      "id": "core:poderesdatormentaperdadeatributo",
+      "name": "Poderes da Tormenta — perda de atributo",
+      "sourceId": "core",
+      "page": 136,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "Registre a perda total: −1 pelo primeiro poder e mais −1 por cada dois adicionais. Confira isenções de Lefou, Afinidade com a Tormenta e Linhagem Rubra. A linhagem pode mudar o atributo perdido."
+    },
+    {
+      "id": "core:envelhecimentolivrobasico",
+      "name": "Envelhecimento — Livro Básico",
+      "sourceId": "core",
+      "page": 108,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "Maduro: físicos −1 e mentais +1. Velho acrescenta físicos −2 e mentais +1. Confira os multiplicadores de idade da raça; registre cada atributo afetado. Não combine com a variante de idade de Heróis."
+    },
+    {
+      "id": "heroes:couracadoguardiaoceleste",
+      "name": "Couraça do Guardião Celeste",
+      "sourceId": "heroes",
+      "page": 259,
+      "kind": "item",
+      "duration": "temporary",
+      "attribute": "Car",
+      "amount": 1,
+      "note": "Após um dia de uso; confira se está vestida."
+    },
+    {
+      "id": "heroes:bencaodehippionmontariaanterior",
+      "name": "Bênção de Hippion — montaria anterior",
+      "sourceId": "heroes",
+      "page": 114,
+      "kind": "power",
+      "duration": "temporary",
+      "attribute": "Des",
+      "amount": 2,
+      "note": "Só se já possuía uma montaria de outra habilidade e ela está disponível. A aquisição do poder por si só não confirma esse caso."
+    },
+    {
+      "id": "heroes:envelhecimentovariantedeherois",
+      "name": "Envelhecimento — variante de Heróis",
+      "sourceId": "heroes",
+      "page": 289,
+      "kind": "power",
+      "duration": "permanent",
+      "note": "Regra opcional alternativa à do Básico, dependente da aprovação do mestre. Registre os ajustes da faixa etária e as mudanças descritas nas pp. 289–291, sem acumular as duas versões."
+    },
+    {
+      "id": "heroes:falhacriticaatividadecerebralextraplanar",
+      "name": "Falha crítica — atividade cerebral extraplanar",
+      "sourceId": "heroes",
+      "page": 302,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "allowedAttributes": [
+        "Int",
+        "Sab",
+        "Car"
+      ],
+      "unique": true,
+      "note": "Resultado 1 da tabela opcional de falhas críticas. Atributo mental aleatório, uma vez por personagem; confira o resultado com o mestre."
+    },
+    {
+      "id": "gods:abencoarachegadaavatardelena",
+      "name": "Abençoar a Chegada — Avatar de Lena",
+      "sourceId": "gods",
+      "page": 179,
+      "kind": "power",
+      "duration": "permanent",
+      "amount": 1,
+      "allowedAttributes": [
+        "Con",
+        "Car"
+      ],
+      "unique": true,
+      "note": "Con +1 e Car +1 quando o avatar está presente no nascimento. Registre os dois atributos; exige confirmação desse evento."
+    },
+    {
+      "id": "custom:mestre",
+      "name": "Mestre",
+      "sourceId": "custom",
+      "page": 0,
+      "kind": "master",
+      "duration": "permanent",
+      "amount": 1,
+      "note": "Personalização da mesa. Descreva o motivo; requer aprovação do mestre."
+    }
+  ]
+}

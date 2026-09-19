@@ -10,7 +10,8 @@
   --ui-radius: 8px;
 }
 :where(button, input, select, textarea) { font-family: var(--ui-font); }
-:where(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+:where(button, input:not([readonly]), select, textarea:not([readonly]), summary):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+:where(input[readonly], textarea[readonly]):focus { outline: none; }
 :where(input, textarea)::placeholder { color: #988693; opacity: 1; }
 :where(input[type="checkbox"], input[type="radio"]) { accent-color: #bf6685; }
 :where([role="dialog"], [role="alertdialog"]) { min-width: 0; }

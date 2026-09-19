@@ -8,7 +8,8 @@ import {
   type ActiveBossStatus,
   type StatusId,
 } from './status.ts';
-import { applyStatusRules } from './status-rules.ts';
+import { applyStatusRules, deriveStatusAttributes } from './status-rules.ts';
+import { damageReductionError, normalizeDamageReduction, reduceDamage, isDamageContext, type DamageReductionProfile, type DamageContext } from './damage-reduction.ts';
 import {
   MEDIA_CACHE_GLOBAL_LIMIT_BYTES,
   MEDIA_CACHE_ITEM_LIMIT_BYTES,
@@ -55,6 +56,7 @@ export type BossState = {
   skillValues: BossSkillValues;
   skillOverrides: BossSkillOverrides;
   damageReduction: number;
+  damageReductions?: DamageReductionProfile;
   attacks: BossAttack[];
   selectedAttackId: string;
   nextAction: string;
@@ -222,7 +224,7 @@ export const chooseNonRepeatingIndex = (
   return candidate >= previousIndex ? candidate + 1 : candidate;
 };
 
-export type HealthSequenceRequest = {
+export type HealthSequenceRequest = DamageContext & {
   bossId: string;
   type: 'damage' | 'heal';
   total: number;
@@ -245,28 +247,35 @@ export const calculateHealthSequence = ({
   hits,
   damageReduction = 0,
   ignoreDamageReduction = false,
+  damageImmunity = false,
 }: {
   type: 'damage' | 'heal';
   total: number;
   hits: number;
   damageReduction?: number;
   ignoreDamageReduction?: boolean;
+  damageImmunity?: boolean;
 }) => {
-  const amountPerHit = Math.ceil(total / hits);
+  const normalizedTotal = Math.max(0, Math.ceil(total));
+  const amountPerHit = Math.ceil(normalizedTotal / hits);
+  const reduction = type === 'damage' && !ignoreDamageReduction ? Math.max(0, damageReduction) : 0;
+  const effectiveTotal = type === 'damage' && !ignoreDamageReduction && damageImmunity && normalizedTotal > 0 ? 1 : Math.max(0, normalizedTotal - reduction);
+  const amounts = Array.from({ length: hits }, (_, index) => Math.floor(effectiveTotal / hits) + (index < effectiveTotal % hits ? 1 : 0));
   const reductionPerHit =
     type === 'damage' && !ignoreDamageReduction
       ? Math.ceil(damageReduction / hits)
       : 0;
   const effectiveAmountPerHit =
     type === 'damage'
-      ? Math.max(1, amountPerHit - reductionPerHit)
+      ? Math.ceil(effectiveTotal / hits)
       : amountPerHit;
 
   return {
     amountPerHit,
     reductionPerHit,
     effectiveAmountPerHit,
-    effectiveTotal: effectiveAmountPerHit * hits,
+    effectiveTotal,
+    amounts,
   };
 };
 
@@ -535,12 +544,13 @@ export type BattleCommand =
       skillValues?: BossSkillValues;
       skillOverrides?: BossSkillOverrides;
       damageReduction: number;
+      damageReductions?: DamageReductionProfile;
       attacks?: BossAttack[];
       selectedAttackId?: string;
       controlAmount?: string;
       applyDamageReduction?: boolean;
     }
-  | { type: 'damage'; bossId: string; amount: number }
+  | ({ type: 'damage'; bossId: string; amount: number } & DamageContext)
   | { type: 'heal'; bossId: string; amount: number }
   | {
       type: 'publish-action';
@@ -623,6 +633,7 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
   switch (command.type) {
     case 'configure':
       return (
+        (command.damageReductions === undefined || !damageReductionError(command.damageReductions)) &&
         hasBossId(command) &&
         typeof command.bossName === 'string' &&
         ['maxHealth', 'attack', 'rangedAttack', 'defense', 'shield', 'skills', 'damageReduction'].every(
@@ -657,6 +668,7 @@ export const isBattleCommand = (value: unknown): value is BattleCommand => {
     case 'damage':
     case 'heal':
       return (
+        isDamageContext(command as DamageContext) &&
         hasBossId(command) &&
         typeof command.amount === 'number' &&
         Number.isFinite(command.amount)
@@ -814,6 +826,7 @@ export const applyBattleCommand = (
           ),
           skillOverrides,
           damageReduction: clampInteger(command.damageReduction, 0, 999),
+          damageReductions: normalizeDamageReduction(command.damageReductions ?? boss.damageReductions, command.damageReduction),
           attacks,
           selectedAttackId: attack?.id ?? attacks[0].id,
         };
@@ -976,6 +989,7 @@ export const advanceBossTurn = (
   state: BattleState,
   bossId: string,
   randomInt: RandomIntGenerator,
+  automaticStatusEffects = true,
 ): { state: BattleState; ticks: StatusDamageTick[] } => {
   const boss = state.bosses.find((item) => item.id === bossId);
   if (!boss) return { state, ticks: [] };
@@ -991,7 +1005,11 @@ export const advanceBossTurn = (
 
       if (definition && parsedFormula) {
         const rolledDamage = rollDamageFormulaDetailed(parsedFormula, randomInt);
-        const damage = rolledDamage.total;
+        const statusReduction = deriveStatusAttributes({ attack: 0, rangedAttack: 0, skills: 0, meleeDefense: 0, rangedDefense: 0, damageReduction: 0, shield: 0 }, boss.activeStatuses, automaticStatusEffects).values.damageReduction;
+        const damage = reduceDamage(rolledDamage.total, normalizeDamageReduction(boss.damageReductions, boss.damageReduction), {
+          damageType: status.statusId === 'em-chamas' ? 'Fogo' : undefined,
+          lossOfLife: status.statusId === 'sangrando' || status.statusId === 'envenenado',
+        }, statusReduction);
         const from = currentHealth;
         currentHealth = Math.max(0, currentHealth - damage);
         if (damage > 0 && from > currentHealth) {

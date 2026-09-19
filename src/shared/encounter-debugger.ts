@@ -1,3 +1,4 @@
+import { normalizeDamageReduction } from './damage-reduction.ts';
 import type { BossState } from './battle.ts';
 import {
   normalizeBossSkillOverrides,
@@ -101,6 +102,7 @@ export const normalizeDebugBoss = (
       skillValues,
     ),
     damageReduction: integer(value.damageReduction, current.damageReduction, 0, 999),
+    damageReductions: normalizeDamageReduction(value.damageReductions ?? current.damageReductions, Number(value.damageReduction ?? current.damageReduction)),
     attacks,
     selectedAttackId:
       selectedBossAttack(attacks, value.selectedAttackId ?? current.selectedAttackId)?.id ??

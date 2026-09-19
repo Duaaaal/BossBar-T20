@@ -1,3 +1,5 @@
+import { openDamageReductionEditor } from './damage-reduction-editor';
+import { normalizeDamageReduction, resolveDamageReduction, damageReductionSummary, DAMAGE_ORIGINS, type DamageOrigin } from './shared/damage-reduction';
 import {
   type CSSProperties,
   type FocusEvent,
@@ -140,6 +142,8 @@ type EncounterTarget = {
 };
 
 type PendingBossDamage = {
+  damageType?: string;
+  damageOrigin?: DamageOrigin;
   id: string;
   bossId: string;
   attackName: string;
@@ -343,7 +347,6 @@ const ControlApp = () => {
   const [music, setMusic] = useState<MusicState | null>(null);
   const [bossName, setBossName] = useState('');
   const [amount, setAmount] = useState('50');
-  const [applyDamageReduction, setApplyDamageReduction] = useState(true);
   const [maxHealth, setMaxHealth] = useState('500');
   const [currentHealth, setCurrentHealth] = useState('500');
   const [attack, setAttack] = useState('10');
@@ -352,6 +355,9 @@ const ControlApp = () => {
   const [defense, setDefense] = useState('10');
   const [rangedDefense, setRangedDefense] = useState('10');
   const [damageReduction, setDamageReduction] = useState('0');
+  const [damageReductions, setDamageReductions] = useState(() => normalizeDamageReduction(undefined));
+  const [manualDamageType, setManualDamageType] = useState('');
+  const [manualDamageOrigin, setManualDamageOrigin] = useState<DamageOrigin>('unknown');
   const [shield, setShield] = useState('0');
   const [skillValues, setSkillValues] = useState<Record<BossSkillId, string>>(
     () => Object.fromEntries(
@@ -587,7 +593,6 @@ const ControlApp = () => {
       loadedAmountSource.current = amountSource;
       setAmount(activeBoss.controlAmount);
     }
-    setApplyDamageReduction(activeBoss.applyDamageReduction);
     setMaxHealth(String(activeBoss.maxHealth));
     setCurrentHealth(String(activeBoss.currentHealth));
     setAttack(String(activeBoss.attack));
@@ -610,6 +615,7 @@ const ControlApp = () => {
     setDefense(String(activeBoss.defense));
     setRangedDefense(String(activeBoss.rangedDefense));
     setDamageReduction(String(activeBoss.damageReduction));
+    setDamageReductions(normalizeDamageReduction(activeBoss.damageReductions, activeBoss.damageReduction));
     setShield(String(activeBoss.shield));
     const nextAttacks = normalizeBossAttacks(activeBoss.attacks, activeBoss.id);
     const nextSelectedAttack = selectedBossAttack(
@@ -619,9 +625,12 @@ const ControlApp = () => {
     setBossAttacks(nextAttacks);
     setSelectedBossAttackId(nextSelectedAttack?.id ?? '');
     setBossArsenalSelectedId(nextSelectedAttack?.id ?? '');
-    setActionDraft(activeBoss.nextAction);
     setFormError('');
   }, [activeBoss, bossSource]);
+
+  useEffect(() => {
+    setActionDraft(activeBoss?.nextAction ?? '');
+  }, [activeBoss?.id, activeBoss?.nextAction]);
 
   useEffect(() => {
     setSelectedStatusId(null);
@@ -992,6 +1001,7 @@ const ControlApp = () => {
     setDefense(String(activeBoss.defense));
     setRangedDefense(String(activeBoss.rangedDefense));
     setDamageReduction(String(activeBoss.damageReduction));
+    setDamageReductions(normalizeDamageReduction(activeBoss.damageReductions, activeBoss.damageReduction));
     setShield(String(activeBoss.shield));
     const nextAttacks = normalizeBossAttacks(activeBoss.attacks, activeBoss.id);
     const nextSelectedAttack = selectedBossAttack(
@@ -1076,10 +1086,11 @@ const ControlApp = () => {
       bossId: activeBoss.id,
       bossName,
       controlAmount: amount,
-      applyDamageReduction,
+      applyDamageReduction: true,
       skillValues: numericSkillValues,
       skillOverrides: [...manuallyEditedSkills],
       ...numericDrafts,
+      damageReductions,
     });
     setAttributesOpen(false);
   };
@@ -1099,7 +1110,7 @@ const ControlApp = () => {
         total: parsedAmount.total,
         hits: parsedAmount.hits,
         damageReduction:
-          authoritativeAttributes?.values.damageReduction ?? activeBoss.damageReduction,
+          resolveDamageReduction(normalizeDamageReduction(activeBoss.damageReductions, activeBoss.damageReduction), { damageType: manualDamageType, damageOrigin: manualDamageOrigin }, authoritativeAttributes?.modifiers.damageReduction ?? 0),
       })
     : null;
   const damagingHits = parsedAmount?.kind === 'sequence' && activeBoss
@@ -1109,9 +1120,7 @@ const ControlApp = () => {
           (authoritativeAttributes?.values.shield ?? activeBoss.shield),
       )
     : 0;
-  const damagePerHit = applyDamageReduction
-    ? reducedSequence?.effectiveAmountPerHit ?? 0
-    : rawSequence?.effectiveAmountPerHit ?? 0;
+  const damagePerHit = reducedSequence?.effectiveAmountPerHit ?? 0;
   const displayedDamage = damagePerHit * damagingHits;
   const rawAmount = rawSequence?.effectiveTotal ?? 0;
   const displayedFormulaValue = parsedAmount?.kind === 'formula'
@@ -1155,9 +1164,9 @@ const ControlApp = () => {
     const result = await window.bossAPI.applyHealthSequence({
       bossId: activeBoss.id,
       type,
+      damageType: manualDamageType, damageOrigin: manualDamageOrigin,
       total: resolved.total,
       hits: resolved.hits,
-      ignoreDamageReduction: type === 'damage' && !applyDamageReduction,
       ...(resolved.rollId ? { relatedRollId: resolved.rollId } : {}),
     });
     if (!result.ok) setFormError(result.error ?? 'Não foi possível aplicar o valor.');
@@ -1367,6 +1376,7 @@ const ControlApp = () => {
           playerIds,
           bossTargetIds: bosses.map(({ sourceId }) => sourceId),
           damage: fixedValue,
+          damageType: selectedAttack.damageType, damageOrigin: selectedAttack.damageOrigin,
           hits: selectedAttack.attackCount ?? requestedHits,
           independentHits: (selectedAttack.attackCount ?? 1) > 1,
           statusEffects: selectedAttack.statusEffects,
@@ -1402,6 +1412,7 @@ const ControlApp = () => {
             attackName: selectedAttack.name,
             bossTargetIds: bosses.map(({ sourceId }) => sourceId),
             fallbackDamage: fixedValue,
+            damageType: selectedAttack.damageType, damageOrigin: selectedAttack.damageOrigin,
             hits: requestedHits,
           });
           return;
@@ -1412,6 +1423,7 @@ const ControlApp = () => {
         const result = await window.bossAPI.applyAreaDamage({
           playerIds,
           damage: fixedValue,
+          damageType: selectedAttack.damageType, damageOrigin: selectedAttack.damageOrigin,
           hits: requestedHits,
           ...(damageFormula ? { damageFormula } : {}),
           reflexDc,
@@ -1455,7 +1467,7 @@ const ControlApp = () => {
         type: 'damage',
         total: resolvedDamageForBosses ?? fixedValue,
         hits: requestedHits,
-        ignoreDamageReduction: true,
+        damageType: selectedAttack.damageType, damageOrigin: selectedAttack.damageOrigin,
       });
     }
     if (skipped.length > 0) {
@@ -1479,7 +1491,7 @@ const ControlApp = () => {
         type: 'damage',
         total: resolvedDamage,
         hits: pending.hits,
-        ignoreDamageReduction: true,
+        damageType: pending.damageType, damageOrigin: pending.damageOrigin,
       });
     }
     setPendingBossDamage(null);
@@ -1752,13 +1764,8 @@ const ControlApp = () => {
               }
             }} />
           </label>
-          <label className="control-rd-toggle">
-            <span>RD</span>
-            <input type="checkbox" checked={applyDamageReduction} onChange={(event) => {
-              setApplyDamageReduction(event.target.checked);
-              markIdentityUnprepared();
-            }} />
-          </label>
+          <label className="control-damage-type-field"><span>Tipo</span><DamageTypeField value={manualDamageType} onChange={setManualDamageType} /></label>
+          <label className="control-damage-origin-field"><span>Origem</span><select value={manualDamageOrigin} onChange={(event) => setManualDamageOrigin(event.target.value as DamageOrigin)}>{DAMAGE_ORIGINS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
           <button className="control-damage" type="button" onClick={() => void applyHealthChange('damage')}><span style={{ fontSize: healthButtonFontSize('Dano', displayedFormulaValue ?? displayedDamage) }}>Dano <small>({displayedFormulaValue ?? displayedDamage})</small></span></button>
           <button className="control-heal" type="button" onClick={() => void applyHealthChange('heal')}><span style={{ fontSize: healthButtonFontSize('Cura', displayedFormulaValue ?? rawAmount) }}>Cura <small>({displayedFormulaValue ?? rawAmount})</small></span></button>
           <button className="control-full-heal" type="button" onClick={() => window.bossAPI.dispatch({ type: 'reset-health', bossId: activeBoss.id })}><span style={{ fontSize: healthButtonFontSize('Full Heal', activeBoss.maxHealth) }}>Full Heal <small>({activeBoss.maxHealth})</small></span></button>
@@ -2256,9 +2263,12 @@ const ControlApp = () => {
           </section>
         </div>
       )}
-      {attackLibraryOpen && <AttackLibrary context={activeBoss.bossName} onClose={() => setAttackLibraryOpen(false)} onSelect={(attack) => {
-        setBossAttacks((current) => normalizeBossAttacks([...current.filter((entry) => entry.id !== attack.id), attack], activeBoss.id));
-        setBossArsenalSelectedId(attack.id); setSelectedBossAttackId(attack.id); setAttackLibraryOpen(false);
+      {attackLibraryOpen && <AttackLibrary context={activeBoss.bossName} onClose={() => setAttackLibraryOpen(false)} onSelect={(attacks) => {
+        const selected = new Set(attacks.map(({ id }) => id));
+        const combined = [...bossAttacks.filter(({ id }) => !selected.has(id)), ...attacks];
+        if (combined.length > 20) return 'O arsenal aceita até 20 ataques. Reduza a seleção ou remova ataques do arsenal antes de aplicar.';
+        setBossAttacks(normalizeBossAttacks(combined, activeBoss.id));
+        setBossArsenalSelectedId(attacks[0].id); setSelectedBossAttackId(attacks[0].id); setAttackLibraryOpen(false);
       }} />}
       {bossArsenalOpen && arsenalDraftAttack && (
         <div className="control-modal-backdrop" role="presentation">
@@ -2386,6 +2396,7 @@ const ControlApp = () => {
                   />
                 </label>
                 <label><span>Tipo de dano</span><DamageTypeField value={arsenalDraftAttack.damageType} onChange={(value) => updateArsenalAttack('damageType', value)} /></label>
+                <label><span>Origem do dano</span><select value={arsenalDraftAttack.damageOrigin ?? 'unknown'} onChange={(event) => updateArsenalAttack('damageOrigin', event.target.value as DamageOrigin)}>{DAMAGE_ORIGINS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
                 <label>
                   <span>Alcance</span>
                   <AttackRangeField value={arsenalDraftAttack.range} onChange={(value) => updateArsenalAttack('range', value)} />
@@ -2607,7 +2618,6 @@ const ControlApp = () => {
                 ['Pontaria', rangedAttack, setRangedAttack, -99, 99],
                 ['Defesa CaC', defense, setDefense, 0, 999],
                 ['Defesa AaD', rangedDefense, setRangedDefense, 0, 999],
-                ['RD', damageReduction, setDamageReduction, 0, 999],
               ] as const).map(([label, value, setter, min, max]) => (
                 <label key={label}>
                   <span title={label}>{label}</span>
@@ -2624,6 +2634,10 @@ const ControlApp = () => {
                   />
                 </label>
               ))}
+              <label><span>Redução de dano</span><button className="control-rd-button" type="button" title={damageReductionSummary(damageReductions)} aria-label="Configurar redução de dano" onClick={async () => {
+                const result = await openDamageReductionEditor(damageReductions);
+                if (result) { setDamageReductions(result); setDamageReduction(String(Math.min(999, resolveDamageReduction(result)))); }
+              }}>Configurar RD</button></label>
             </div>
             <section className="control-exact-skills">
               <h3>Valores exatos de perícia</h3>

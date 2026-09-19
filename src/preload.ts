@@ -196,6 +196,10 @@ ipcRenderer.on(
 );
 
 const bossAPI = {
+  healEncounterTarget: (request: import('./shared/player-combat').PlayerHealingRequest) => ipcRenderer.invoke('multiplayer:heal-target', request),
+  getReferenceVariants: () => ipcRenderer.invoke('reference-variants:get'),
+  saveReferenceVariant: (draft: import('./shared/reference-variants').ReferenceVariantDraft) => ipcRenderer.invoke('reference-variants:save', draft),
+  reviewReferenceVariant: (id: string, approve: boolean) => ipcRenderer.invoke('reference-variants:review', id, approve),
   getState: async (): Promise<BattleState> => {
     const state = (await ipcRenderer.invoke('battle:get-state')) as BattleState;
     latestBattleState = state;
@@ -244,11 +248,13 @@ const bossAPI = {
   rollEncounterInitiative: (
     participantId?: string | null,
     extremeAdvantage = false,
+    effects?:import('./shared/skill-test-context').SkillTestActivation[],
   ): Promise<EncounterTurnActionResult> =>
     ipcRenderer.invoke(
       'multiplayer:roll-initiative',
       participantId,
       extremeAdvantage,
+      effects,
     ),
   rollEncounterFormula: (
     request: EncounterFormulaRollRequest,
@@ -317,7 +323,8 @@ const bossAPI = {
   requestControlledPlayerAction: (playerId, request) => ipcRenderer.invoke('multiplayer:controlled-player-action', playerId, request),
   closeAttackLibrary: () => ipcRenderer.send('attack-library:close'),
   getAttackLibrary: () => ipcRenderer.invoke('attack-library:get'),
-  rollResistance: (id) => ipcRenderer.invoke('player:roll-resistance', id),
+  setPlayerSkillEffect: (playerId,change) => ipcRenderer.invoke('player:set-skill-effect',playerId,change),
+  rollResistance: (id,effects) => ipcRenderer.invoke('player:roll-resistance', id,effects),
   setAutomaticResistance: async () => false,
   saveLibraryAttack: (attack, remove = false) => ipcRenderer.invoke('attack-library:save', attack, remove),
   createCustomStatusPreset: (

@@ -8,6 +8,8 @@ import { isAreaDamageRequest } from './player-combat.ts';
 import { isAttackStatusEffect } from './boss-attacks.ts';
 
 export type PendingPlayerDamageInternal = {
+  damageType?: string;
+  damageOrigin?: import('./damage-reduction').DamageOrigin;
   id: string;
   profileId: string;
   playerId: string;
@@ -15,6 +17,10 @@ export type PendingPlayerDamageInternal = {
   targetBossName: string;
   attackName: string;
   damageFormula: string;
+  baseDamageFormula?: string;
+  extraDamageFormula?: string;
+  multiWeapon?: boolean;
+  rolledDamage?: { rolls: number[]; modifier: number; total: number };
   critical: boolean;
   criticalMultiplier: number;
   nonlethal: boolean;
@@ -28,6 +34,7 @@ export type PendingPlayerDamageInternal = {
 };
 
 export type PendingBossDamageSummary = {
+  damageType?: string; damageOrigin?: import('./damage-reduction').DamageOrigin;
   id: string; bossId: string; attackName: string;
   bossTargetIds: string[]; fallbackDamage: number; hits: number;
 };
@@ -47,7 +54,12 @@ export type PendingDirectPlayerDamageInternal = {
 
 /** Local-only data: never put this object in a public presentation snapshot. */
 export type SavedPlayerEncounter = {
-  sheetDocument?: { fileName: string; base64: string };
+  characterId?: string;
+  sheetDocument?: {
+    fileName: string; base64: string;
+    beforeModel3?: { fileName: string; base64: string };
+    migrationError?: string;
+  };
   profileId: string;
   clientId: string;
   playerId: string;
@@ -62,6 +74,7 @@ export type SavedPlayerEncounter = {
 export type SavedSessionMember = Pick<SavedPlayerEncounter, 'profileId' | 'clientId' | 'playerId' | 'name'>;
 
 export type MultiplayerEncounterCheckpoint = {
+  inactiveCharacters?: Array<[string, SavedPlayerEncounter]>;
   pendingResistances?: import('./resistance').PendingResistance[];
   /** Includes authenticated spectators who have not uploaded a character yet. */
   members?: SavedSessionMember[];
@@ -116,6 +129,17 @@ const turns = z.object({
   rollResults: z.array(z.object({ id, participantId: id, rolls: z.array(finite), total: finite }).passthrough()).max(10_000),
   history: z.array(z.object({ id }).passthrough()).max(100_000), revision: finite,
 }).passthrough();
+const savedCharacterSchema = z.object({
+      characterId: id.optional(), profileId: id, clientId: id, playerId: id, name: z.string().max(200),
+      sheetDocument: z.object({
+        fileName: z.string().max(255), base64: z.string().max(Math.ceil(MAX_CHARACTER_SHEET_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/),
+        beforeModel3: z.object({ fileName: z.string().max(255), base64: z.string().max(Math.ceil(MAX_CHARACTER_SHEET_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/) }).optional(),
+        migrationError: z.string().max(10_000).optional(),
+      }).optional(),
+      state: playerState, privateMode: z.boolean(), actions,
+      validation: z.object({ supported: z.boolean(), summary: z.object({}).passthrough().nullable(), issues: z.array(z.object({}).passthrough()) }).passthrough().nullable(),
+      usedActionIds: z.array(id).max(10_000),
+});
 const checkpointSchema = z.object({
   bossRuntime: z.array(z.object({ id, setupStatus: z.enum(['initial', 'pending', 'ready']), identityPrepared: z.boolean(), actionPrepared: z.boolean(), applyDamageReduction: z.boolean(), actionVersion: finite.optional() })).max(3).optional(),
   savedAt: finite, battleStarted: z.boolean(), hudVisible: z.boolean(),
@@ -134,7 +158,12 @@ const checkpointSchema = z.object({
     members: z.array(z.object({ profileId: id, clientId: id, playerId: id, name: z.string().max(200) })).max(10).optional(),
     pendingPlayerDamages: z.array(z.object({
       id, profileId: id, playerId: id, targetBossId: id, targetBossName: z.string().max(200),
-      attackName: z.string().max(200), damageFormula: z.string().max(200), critical: z.boolean(),
+      attackName: z.string().max(200), damageFormula: z.string().max(400), critical: z.boolean(),
+      baseDamageFormula: z.string().max(200).optional(), extraDamageFormula: z.string().max(120).optional(),
+      multiWeapon: z.boolean().optional(),
+      damageType: z.string().max(80).optional(),
+      damageOrigin: z.enum(['unknown', 'mundane', 'magical', 'arcane', 'divine']).optional(),
+      rolledDamage: z.object({ rolls: z.array(finite).max(1000), modifier: finite, total: finite }).optional(),
       criticalMultiplier: finite.int().min(1).max(10), nonlethal: z.boolean(), actionId: id,
       correlationId: id.optional(), resourceEffect: z.enum(['action-point', 'hero-point']).optional(),
       stateBefore: playerState, actionsBefore: actions, retainedByParticipantId: id.nullable(), createdAt: finite,
@@ -148,13 +177,8 @@ const checkpointSchema = z.object({
     lateInitiativeQueue: z.array(id).max(10).optional(),
     interruptedTurnParticipantId: id.nullable().optional(),
     turns,
-    players: z.array(z.object({
-      profileId: id, clientId: id, playerId: id, name: z.string().max(200),
-      sheetDocument: z.object({ fileName: z.string().max(255), base64: z.string().max(Math.ceil(MAX_CHARACTER_SHEET_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/) }).optional(),
-      state: playerState, privateMode: z.boolean(), actions,
-      validation: z.object({ supported: z.boolean(), summary: z.object({}).passthrough().nullable(), issues: z.array(z.object({}).passthrough()) }).passthrough().nullable(),
-      usedActionIds: z.array(id).max(10_000),
-    })).max(10),
+    inactiveCharacters: z.array(z.tuple([id, savedCharacterSchema])).max(30).optional(),
+    players: z.array(savedCharacterSchema).max(10),
   }),
 });
 

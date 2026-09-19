@@ -1,3 +1,4 @@
+import { validSkillActivations, type SkillTestActivation } from './skill-activation.ts';
 import type {
   CharacterSheetInteractionState,
   CharacterSheetSummary,
@@ -10,6 +11,7 @@ import {
   type EncounterHistoryEntry,
 } from './encounter-history.ts';
 import { applyPlayerDamage } from './player-survival.ts';
+import { isDamageContext, type DamageReductionProfile, type DamageContext } from './damage-reduction.ts';
 import {
   normalizeDamageFormula,
   parseDamageFormula,
@@ -23,6 +25,7 @@ export type AttackType = 'melee' | 'ranged';
 export type EncounterFaction = 'players' | 'bosses';
 
 export type PlayerEncounterState = {
+  damageReduction?: DamageReductionProfile;
   clientId: string;
   characterName: string;
   currentHealth: number;
@@ -65,6 +68,7 @@ export type PlayerHudActionState = {
 export type PlayerActionKind = keyof PlayerHudActionState;
 
 export type PlayerHudState = {
+  skillEffects?: import('./skill-effect-runtime').ActiveSkillEffect[];
   pendingResistances?: import('./resistance').ResistancePrompt[];
   disconnected?: boolean;
   controlledByMaster?: boolean;
@@ -124,6 +128,7 @@ export type EncounterTurnParticipant = {
   faction?: EncounterFaction;
   initiativeModifier: number;
   initiativeRoll: number;
+  initiativeEffectModifier?:number;
   initiativeTotal: number;
   initiativeRolled?: boolean;
   eligibleRound: number;
@@ -148,12 +153,12 @@ export type EncounterRollResult = {
   modifier: number;
   total: number;
   outcome: EncounterRollOutcome;
-  category: 'initiative' | 'test' | 'attack' | 'damage' | 'status';
+  category: 'initiative' | 'test' | 'attack' | 'damage' | 'status' | 'healing';
   createdAt: number;
   retainedByParticipantId: string | null;
   visibility?: EncounterRollVisibility;
   resourceEffect?: 'action-point' | 'hero-point';
-  rollMode?: 'sum' | 'sum-capped' | 'reroll';
+  rollMode?: 'sum' | 'sum-capped' | 'reroll' | 'best' | 'worst';
   /** Monotonic order assigned by the authoritative encounter server. */
   sequence?: number;
   /** Stable identity shared by every result produced by one action. */
@@ -191,6 +196,7 @@ export const getEncounterRollNatural = (
     rollOffset += count;
   }
   if (d20Rolls.length === 0) return null;
+  if ((rollMode === 'best' || rollMode === 'worst') && d20Rolls.length >= 2) { const value = rollMode === 'best' ? Math.max(...d20Rolls) : Math.min(...d20Rolls); return value === 1 || value === 20 ? value : null; }
   if (rollMode === 'sum-capped' && d20Rolls.length >= 2) {
     return Math.min(20, d20Rolls.reduce((total, die) => total + die, 0)) === 20
       ? 20
@@ -267,6 +273,7 @@ export type PlayerResourceUse =
   | null;
 
 export type PlayerSkillTestRequest = {
+  effects?: SkillTestActivation[];
   kind: 'skill';
   skillId: string;
   resource: PlayerResourceUse;
@@ -275,6 +282,7 @@ export type PlayerSkillTestRequest = {
 };
 
 export type PlayerStabilizeRequest = {
+  effects?:SkillTestActivation[];
   kind: 'stabilize';
   targetPlayerId: string;
   actionId?: string;
@@ -286,6 +294,7 @@ export type PlayerAttackSource =
   | { kind: 'unarmed' };
 
 export type CanonicalAttack = {
+  damageOrigin?: import('./damage-reduction').DamageOrigin;
   source: PlayerAttackSource;
   name: string;
   attackBonus: number;
@@ -300,6 +309,7 @@ export type CanonicalAttack = {
 export const UNARMED_ATTACK = Object.freeze({
   source: { kind: 'unarmed' },
   name: 'Punhos',
+  damageOrigin: 'mundane',
   damageFormula: '1d3',
   criticalThreat: 20,
   criticalMultiplier: 2,
@@ -337,8 +347,9 @@ export const createUnarmedAttack = (
 };
 
 export type PlayerAttackRequest = {
-  extraAttackModifier?: number;
-  extraDamageModifier?: number;
+  effects?: { primary?: SkillTestActivation[]; secondary?: SkillTestActivation[] };
+  extraAttackModifier?: number | string;
+  extraDamageModifier?: number | string;
   kind: 'attack';
   /** @deprecated Prefer attackSource. */
   attackIndex?: number;
@@ -368,6 +379,7 @@ export type PlayerStandaloneResourceRequest =
   };
 
 export type PlayerCombatActionRequest =
+  | PlayerHealingRequest
   | PlayerSkillTestRequest
   | PlayerStabilizeRequest
   | PlayerAttackRequest
@@ -376,6 +388,9 @@ export type PlayerCombatActionRequest =
     pendingDamageId: string;
   }
   | PlayerStandaloneResourceRequest;
+
+/** Common manual healing command. Future abilities can reuse target resolution. */
+export type PlayerHealingRequest = { kind: 'healing'; targetParticipantId: string; formula: string; actionId: string; correlationId?: string };
 
 export type PlayerCombatActionResult = {
   ok: boolean;
@@ -392,7 +407,7 @@ export type PendingActionPointRequest = {
   label: string;
   requestedAt: number;
   actionId?: string;
-  kind?: 'action-point' | 'skill-without-standard-action' | 'pre-initiative-action' | 'attack-adjustment';
+  kind?: 'action-point' | 'skill-without-standard-action' | 'pre-initiative-action' | 'attack-adjustment' | 'healing';
 };
 
 export type PlayerResourceNotice = {
@@ -538,6 +553,7 @@ export const rollManualInitiative = (
   state: EncounterTurnState,
   participantId: string,
   rollD20: () => number,
+  effectModifier=0,
 ): ManualInitiativeRoll | null => {
   if (!state.participants.length) return null;
   const participantIndex = state.participants.findIndex(
@@ -557,8 +573,10 @@ export const rollManualInitiative = (
   const rolledParticipant = {
     ...state.participants[participantIndex],
     initiativeRoll,
+    initiativeModifier:state.participants[participantIndex].initiativeModifier-(state.participants[participantIndex].initiativeEffectModifier||0)+effectModifier,
+    initiativeEffectModifier:effectModifier,
     initiativeTotal:
-      initiativeRoll + state.participants[participantIndex].initiativeModifier,
+      initiativeRoll + state.participants[participantIndex].initiativeModifier-(state.participants[participantIndex].initiativeEffectModifier||0)+effectModifier,
     initiativeRolled: true,
   };
   const participants = state.participants.map((participant, index) =>
@@ -830,6 +848,7 @@ export const personalizeEncounterTurnState = (
       return {
         ...participant,
         initiativeModifier: concealed ? 0 : participant.initiativeModifier,
+        initiativeEffectModifier: concealed ? 0 : participant.initiativeEffectModifier,
         initiativeTotal: concealed ? 0 : participant.initiativeTotal,
         initiativeHidden: concealed,
         isSelf:
@@ -890,7 +909,7 @@ export const personalizeEncounterTurnState = (
   };
 };
 
-export type AreaDamageRequest = {
+export type AreaDamageRequest = DamageContext & {
   damage: number;
   damageFormula?: string;
   /** Splits the resolved total into this many consecutive impacts. */
@@ -916,7 +935,7 @@ export type AreaDamageResult = {
   error?: string;
 };
 
-export type DirectPlayerDamageRequest = {
+export type DirectPlayerDamageRequest = DamageContext & {
   independentHits?: boolean;
   statusEffects?: import('./boss-attacks').AttackStatusEffect[];
   bossTargetIds?: string[];
@@ -984,6 +1003,7 @@ export type PlayerAreaDamageImpact = {
 export const isAreaDamageRequest = (value: unknown): value is AreaDamageRequest => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<AreaDamageRequest>;
+  if (!isDamageContext(candidate)) return false;
   const formula = candidate.damageFormula === undefined
     ? null
     : typeof candidate.damageFormula === 'string'
@@ -1041,6 +1061,7 @@ export const isDirectPlayerDamageRequest = (
 ): value is DirectPlayerDamageRequest => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<DirectPlayerDamageRequest>;
+  if (!isDamageContext(candidate)) return false;
   if (candidate.independentHits !== undefined && typeof candidate.independentHits !== 'boolean') return false;
   if (candidate.independentHits && (candidate.hits ?? 1) > 20) return false;
   if (candidate.statusEffects !== undefined && (!Array.isArray(candidate.statusEffects) || candidate.statusEffects.length > 10 || !candidate.statusEffects.every(isAttackStatusEffect))) return false;
@@ -1206,9 +1227,14 @@ const standardAttackTestFormula = () => parseDamageFormula('1d20') as ParsedDama
  */
 export const parseAttackTestFormula = (
   value: string | null | undefined,
+  includesSkill = false,
 ): ParsedDamageFormula => {
   const source = String(value ?? '').trim();
   if (!source) return standardAttackTestFormula();
+  if (includesSkill && /^[+-]?\d+$/.test(source)) {
+    const modifier = Number(source);
+    return parseDamageFormula(`1d20 ${modifier < 0 ? '-' : '+'} ${Math.abs(modifier)}`) ?? standardAttackTestFormula();
+  }
   const parsed = parseDamageFormula(source);
   if (!parsed) return standardAttackTestFormula();
   if (parsed.kind === 'fixed') {
@@ -1384,13 +1410,19 @@ export const isPlayerCombatActionRequest = (
     return typeof skill.skillId === 'string' &&
       skill.skillId.length > 0 &&
       skill.skillId.length <= 80 &&
+      (skill.effects === undefined || validSkillActivations(skill.effects)) &&
       isPlayerResourceUse(skill.resource) &&
       isSafeActionIdentity(skill.actionId) &&
       isSafeActionIdentity(skill.correlationId);
   }
+  if (candidate.kind === 'healing') {
+    return typeof candidate.targetParticipantId === 'string' && /^(player|boss|npc):[A-Za-z0-9:_-]{1,128}$/.test(candidate.targetParticipantId) &&
+      typeof candidate.formula === 'string' && candidate.formula.length <= 120 && Boolean(normalizeDamageFormula(candidate.formula)) &&
+      typeof candidate.actionId === 'string' && isSafeActionIdentity(candidate.actionId) && isSafeActionIdentity(candidate.correlationId);
+  }
   if (candidate.kind === 'stabilize') {
     const stabilize = candidate as Partial<PlayerStabilizeRequest>;
-    return typeof stabilize.targetPlayerId === 'string' &&
+    return (stabilize.effects===undefined||validSkillActivations(stabilize.effects))&&typeof stabilize.targetPlayerId === 'string' &&
       stabilize.targetPlayerId.length > 0 &&
       stabilize.targetPlayerId.length <= 128 &&
       isSafeActionIdentity(stabilize.actionId) &&
@@ -1398,19 +1430,20 @@ export const isPlayerCombatActionRequest = (
   }
   if (candidate.kind === 'attack') {
     const attack = candidate as Partial<PlayerAttackRequest>;
-    if ([attack.extraAttackModifier, attack.extraDamageModifier].some((value) => value !== undefined && (!Number.isInteger(value) || Math.abs(value) > 999))) return false;
+    if(attack.effects && (typeof attack.effects!=='object'||Array.isArray(attack.effects)||Object.keys(attack.effects).some(key=>!['primary','secondary'].includes(key))||Object.values(attack.effects).some(value=>!validSkillActivations(value))))return false;
+    if ([attack.extraAttackModifier, attack.extraDamageModifier].some((value) => !parseCombatAdjustment(value))) return false;
     const source = attack.attackSource ??
       (
         Number.isInteger(attack.attackIndex)
           ? { kind: 'sheet' as const, attackIndex: attack.attackIndex! }
           : null
       );
-    const sourceIsValid = source?.kind === 'unarmed' ||
+    const sourceIsValid = (attack.attackSource === undefined && attack.attackIndex === undefined) || source?.kind === 'unarmed' ||
       (
         source?.kind === 'sheet' &&
         Number.isInteger(source.attackIndex) &&
         source.attackIndex >= 0 &&
-        source.attackIndex < 5
+        source.attackIndex < 20
       );
     return sourceIsValid &&
       (attack.attackType === 'melee' || attack.attackType === 'ranged') &&
@@ -1493,12 +1526,13 @@ export const resolveAreaDamage = (
   // attack itself no longer decides between half and zero damage.
   const successRule = request.successRule ?? 'half';
   const applied = success
-    ? successRule === 'none' ? 0 : Math.ceil(request.damage / 2)
+    ? successRule === 'none' ? 0 : Math.floor(request.damage / 2)
     : request.damage;
   const healthBefore = Math.min(state.maxHealth, state.currentHealth);
   const transition = applyPlayerDamage(
     { ...state, currentHealth: healthBefore },
     applied,
+    request,
   );
   const playerState = transition.state;
   const healthAfter = playerState.currentHealth;
@@ -1515,10 +1549,11 @@ export const resolveAreaDamage = (
     },
     damage: {
       requested: request.damage,
-      applied,
+      applied: Math.max(0, healthBefore + (state.temporaryHealth ?? 0) - healthAfter - (playerState.temporaryHealth ?? 0)),
       healthBefore,
       healthAfter,
       successRule,
     },
   };
 };
+import { parseCombatAdjustment } from './combat-adjustment.ts';

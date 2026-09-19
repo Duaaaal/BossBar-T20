@@ -1,6 +1,6 @@
 export const MAX_CHARACTER_SHEET_BYTES = 25 * 1024 * 1024;
 export const MAX_CHARACTER_PORTRAIT_BYTES = 5 * 1024 * 1024;
-export const BLANK_CHARACTER_SHEET_ASSET_PATH = 'ficha-t20-v2-editavel.pdf';
+export const BLANK_CHARACTER_SHEET_ASSET_PATH = 'ficha-t20-nimb.pdf';
 
 export type CharacterSheetIssueSeverity = 'error' | 'warning';
 
@@ -12,9 +12,22 @@ export type CharacterSheetIssue = {
   expected?: string;
   actual?: string;
   autoFixable: boolean;
+  reason?: string;
+  location?: string;
+  correction?: string;
+  source?: string;
+  dismissible?: boolean;
+  fingerprint?: string;
+  comparison?: { sheetExcerpt: string; referenceExcerpt: string; referenceId: string };
 };
 
 export type CharacterSheetSummary = {
+  skillContext?: import('./skill-test-context').SkillCalculationContext;
+  catalogVersion?: string;
+  abilities?: import('./rules-catalog').CharacterAbility[];
+  spells?: import('./rules-catalog').CharacterSpell[];
+  damageReduction?: import('./damage-reduction').DamageReductionProfile;
+  equippedShield?: boolean;
   characterName: string;
   playerName: string;
   race: string;
@@ -48,12 +61,31 @@ export type CharacterSheetSummary = {
     armorPenalty: number;
     sizeModifier: number;
     calculation: string;
+    bonusDice?: string[];
+    rollMode?: 'best' | 'worst' | null;
+    replacement?: string;
+    sources?: import('./skill-mechanics').AppliedSkillSource[];
   }>;
   attacks: Array<{
     name: string;
     attackBonus: string;
+    attackBonusIncludesSkill?: boolean;
+    skill?: 'Luta' | 'Pontaria';
+    primary?: boolean;
+    secondaryWeapon?: {
+      name: string;
+      attackBonus: string;
+      attackBonusIncludesSkill?: boolean;
+      skill?: 'Luta' | 'Pontaria';
+      damage: string;
+      critical: string;
+      damageOrigin?: import('./damage-reduction').DamageOrigin;
+    damageType: string;
+      range: string;
+    };
     damage: string;
     critical: string;
+    damageOrigin?: import('./damage-reduction').DamageOrigin;
     damageType: string;
     range: string;
   }>;
@@ -65,7 +97,10 @@ export type CharacterSheetSummary = {
 
 export type CharacterSheetValidation = {
   supported: boolean;
-  template: 'ficha-t20-editavel-v2' | 'unknown';
+  template: 'ficha-t20-editavel-v2' | 'ficha-nimb-v3' | 'unknown';
+  modelVersion?: number;
+  rulesVersion?: string;
+  migratedFrom?: string;
   summary: CharacterSheetSummary;
   issues: CharacterSheetIssue[];
   fieldCount: number;
@@ -85,6 +120,17 @@ export type PlayerCharacterPortraitStatus = {
   fileName: string | null;
   uploadedAt: number | null;
   contentType: 'image/png' | 'image/jpeg' | 'image/webp' | null;
+};
+
+export type PlayerCharacterSlot = {
+  id: string;
+  sheet: PlayerCharacterSheetStatus;
+  portrait: PlayerCharacterPortraitStatus;
+};
+
+export type PlayerCharacterSelection = {
+  activeCharacterId: string;
+  characters: PlayerCharacterSlot[];
 };
 
 export type PlayerAccountStatus = {
@@ -139,6 +185,7 @@ export type CharacterSheetEditorField = {
 };
 
 export type CharacterSheetEditorDocument = {
+  characterId?: string;
   importPending?: boolean;
   issues?: CharacterSheetIssue[];
   fileName: string;

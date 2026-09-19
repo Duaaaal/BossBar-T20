@@ -1585,8 +1585,10 @@ const SceneEditorApp = () => {
       <footer className="scene-footer">
         <button type="button" disabled={busy || Boolean(rangeError) || !dirty} data-disabled-reason={busy ? 'Aguarde o salvamento atual' : rangeError ? 'Corrija as margens das fases' : 'Nenhuma alteração para salvar'} onClick={() => void persistDraft()}>{busy ? 'Salvando...' : 'Salvar cena'}</button>
       </footer>
-      {attackLibraryOpen && <AttackLibrary context={`${currentPhase.name} · ${resolvedCurrentBoss.bossName}`} onClose={() => setAttackLibraryOpen(false)} onSelect={(attack) => {
-        updateDirective(selectedBossId, (directive) => ({ ...directive, patch: { ...directive.patch, attacks: normalizeBossAttacks([...(resolvedCurrentBoss.attacks ?? []).filter((item) => item.id !== attack.id), attack], selectedBossId), selectedAttackId: attack.id } }));
+      {attackLibraryOpen && <AttackLibrary context={`${currentPhase.name} · ${resolvedCurrentBoss.bossName}`} onClose={() => setAttackLibraryOpen(false)} onSelect={(attacks) => {
+        const combined = [...(resolvedCurrentBoss.attacks ?? []).filter((item) => !attacks.some(({ id }) => id === item.id)), ...attacks];
+        if (combined.length > 20) return 'O arsenal permite até 20 ataques. Reduza a seleção ou remova ataques atuais.';
+        updateDirective(selectedBossId, (directive) => ({ ...directive, patch: { ...directive.patch, attacks: normalizeBossAttacks(combined, selectedBossId), selectedAttackId: attacks[0].id } }));
         setAttackLibraryOpen(false);
       }} />}
 

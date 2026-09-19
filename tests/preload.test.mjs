@@ -13,7 +13,8 @@ test('cada renderer recebe somente os métodos de preload que utiliza', async ()
       path.join(projectRoot, 'src', `${role}.tsx`),
       'utf8',
     );
-    if (role === 'player') rendererSource += await readFile(path.join(projectRoot, 'src', 'CutscenePlayer.tsx'), 'utf8');
+    if (role === 'player') for (const component of ['CutscenePlayer.tsx', 'player-skill-effects.tsx']) rendererSource += await readFile(path.join(projectRoot, 'src', component), 'utf8');
+    if (role === 'master') rendererSource += await readFile(path.join(projectRoot, 'src', 'rules-catalog-dialog.ts'), 'utf8');
     if (['attack-library', 'control', 'scene-editor'].includes(role)) rendererSource += await readFile(path.join(projectRoot, 'src', 'AttackLibrary.tsx'), 'utf8');
     const usedMethods = Array.from(
       new Set(
@@ -32,6 +33,7 @@ test('cada renderer recebe somente os métodos de preload que utiliza', async ()
 
 test('mantém controles administrativos de personagens restritos ao mestre', () => {
   const administrativeMethods = [
+    'saveReferenceVariant', 'reviewReferenceVariant', 'healEncounterTarget',
     'grantHostedActionPoint',
     'grantHostedHeroPoint',
     'revokeHostedActionPoint',

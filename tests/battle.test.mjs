@@ -230,7 +230,7 @@ test('uma nova base atualiza somente perícias que continuam herdadas', () => {
   assert.equal(state.bosses[0].skillValues.reflexos, 14);
 });
 
-test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () => {
+test('calcula dano parcelado com RD e permite absorção completa', () => {
   assert.deepEqual(
     calculateHealthSequence({
       type: 'damage',
@@ -243,6 +243,7 @@ test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () =>
       reductionPerHit: 3,
       effectiveAmountPerHit: 22,
       effectiveTotal: 88,
+      amounts: [22, 22, 22, 22],
     },
   );
   assert.equal(
@@ -252,7 +253,7 @@ test('calcula dano parcelado com RD e preserva o mínimo de um por golpe', () =>
       hits: 3,
       damageReduction: 99,
     }).effectiveTotal,
-    3,
+    0,
   );
 });
 
@@ -621,7 +622,7 @@ test('integra progressões automáticas de condições ao estado da batalha', ()
   }]);
 });
 
-test('dano de status ignora escudo e RD e expira após o último efeito', () => {
+test('dano de fogo por condição aplica RD e expira após o último efeito', () => {
   let state = applyBattleCommand(freshBattle(), {
     type: 'configure',
     bossId: 'boss-1',
@@ -632,7 +633,7 @@ test('dano de status ignora escudo e RD e expira após o último efeito', () => 
     defense: 10,
     shield: 4,
     skills: 10,
-    damageReduction: 999,
+    damageReduction: 5,
   });
   state = applyBattleCommand(state, {
     type: 'apply-status',
@@ -648,21 +649,21 @@ test('dano de status ignora escudo e RD e expira após o último efeito', () => 
 
   assert.equal(boss.turnCount, 1);
   assert.equal(boss.shield, 4);
-  assert.equal(boss.currentHealth, 488);
+  assert.equal(boss.currentHealth, 493);
   assert.deepEqual(boss.activeStatuses, []);
   assert.deepEqual(advanced.ticks, [{
     statusId: 'em-chamas',
     statusName: 'Em chamas',
     formula: '2d6 + 3',
-    damage: 12,
+    damage: 7,
     from: 500,
-    to: 488,
+    to: 493,
     rolls: [4, 5],
     modifier: 3,
   }]);
 });
 
-test('dano de status pode ignorar RD sem consumir o escudo', () => {
+test('RD das condições não depende do botão de dano manual', () => {
   let state = applyBattleCommand(freshBattle(), {
     type: 'configure',
     bossId: 'boss-1',
@@ -685,9 +686,9 @@ test('dano de status pode ignorar RD sem consumir o escudo', () => {
   });
 
   const advanced = advanceBossTurn(state, 'boss-1', () => 1);
-  assert.equal(advanced.state.bosses[0].currentHealth, 488);
+  assert.equal(advanced.state.bosses[0].currentHealth, 500);
   assert.equal(advanced.state.bosses[0].shield, 4);
-  assert.equal(advanced.ticks[0].damage, 12);
+  assert.deepEqual(advanced.ticks, []);
 });
 
 test('condições sem dano apenas reduzem sua duração por chefão', () => {

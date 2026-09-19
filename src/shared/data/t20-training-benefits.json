@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "origin:acolito",
+      "identity": "ORIGEM",
+      "owner": "Acólito",
+      "max": 2,
+      "allowed": [
+        "Medicina",
+        "Membro da Igreja",
+        "Vontade de Ferro"
+      ],
+      "sourceId": "core",
+      "page": 85
+    },
+    {
+      "id": "origin:amigodosanimais",
+      "identity": "ORIGEM",
+      "owner": "Amigo dos Animais",
+      "max": 2,
+      "allowed": [
+        "Amigo Especial Amnésico Uma perícia e um poder escolhidos pelo mestre e o poder Lembranças Graduais"
+      ],
+      "sourceId": "core",
+      "page": 85
+    },
+    {
+      "id": "origin:aristocrata",
+      "identity": "ORIGEM",
+      "owner": "Aristocrata",
+      "max": 2,
+      "allowed": [
+        "Comandar",
+        "Sangue Azul"
+      ],
+      "sourceId": "core",
+      "page": 86
+    },
+    {
+      "id": "origin:artesao",
+      "identity": "ORIGEM",
+      "owner": "Artesão",
+      "max": 2,
+      "allowed": [
+        "Frutos do Trabalho",
+        "Sortudo"
+      ],
+      "sourceId": "core",
+      "page": 86
+    },
+    {
+      "id": "origin:artista",
+      "identity": "ORIGEM",
+      "owner": "Artista",
+      "max": 2,
+      "allowed": [
+        "Atraente",
+        "Dom Artístico",
+        "Sortudo",
+        "Torcida"
+      ],
+      "sourceId": "core",
+      "page": 86
+    },
+    {
+      "id": "origin:assistentedelaboratorio",
+      "identity": "ORIGEM",
+      "owner": "Assistente de Laboratório",
+      "max": 2,
+      "allowed": [
+        "Esse Cheiro...",
+        "Venefício",
+        "#tormenta"
+      ],
+      "sourceId": "core",
+      "page": 87
+    },
+    {
+      "id": "origin:batedor",
+      "identity": "ORIGEM",
+      "owner": "Batedor",
+      "max": 2,
+      "allowed": [
+        "À Prova de Tudo",
+        "Estilo de Disparo",
+        "Sentidos Aguçados"
+      ],
+      "sourceId": "core",
+      "page": 88
+    },
+    {
+      "id": "origin:capanga",
+      "identity": "ORIGEM",
+      "owner": "Capanga",
+      "max": 2,
+      "allowed": [
+        "Confissão",
+        "#combate"
+      ],
+      "sourceId": "core",
+      "page": 88
+    },
+    {
+      "id": "origin:charlatao",
+      "identity": "ORIGEM",
+      "owner": "Charlatão",
+      "max": 2,
+      "allowed": [
+        "Alpinista Social",
+        "Aparência Inofensiva",
+        "Sortudo"
+      ],
+      "sourceId": "core",
+      "page": 88
+    },
+    {
+      "id": "origin:circense",
+      "identity": "ORIGEM",
+      "owner": "Circense",
+      "max": 2,
+      "allowed": [
+        "Acrobático",
+        "Torcida",
+        "Truque de Mágica"
+      ],
+      "sourceId": "core",
+      "page": 89
+    },
+    {
+      "id": "origin:criminoso",
+      "identity": "ORIGEM",
+      "owner": "Criminoso",
+      "max": 2,
+      "allowed": [
+        "Punguista",
+        "Venefício"
+      ],
+      "sourceId": "core",
+      "page": 89
+    },
+    {
+      "id": "origin:curandeiro",
+      "identity": "ORIGEM",
+      "owner": "Curandeiro",
+      "max": 2,
+      "allowed": [
+        "Medicina",
+        "Médico de Campo",
+        "Venefício"
+      ],
+      "sourceId": "core",
+      "page": 89
+    },
+    {
+      "id": "origin:eremita",
+      "identity": "ORIGEM",
+      "owner": "Eremita",
+      "max": 2,
+      "allowed": [
+        "Busca Interior",
+        "Lobo Solitário"
+      ],
+      "sourceId": "core",
+      "page": 89
+    },
+    {
+      "id": "origin:escravo",
+      "identity": "ORIGEM",
+      "owner": "Escravo",
+      "max": 2,
+      "allowed": [
+        "Desejo de Liberdade",
+        "Vitalidade"
+      ],
+      "sourceId": "core",
+      "page": 89
+    },
+    {
+      "id": "origin:estudioso",
+      "identity": "ORIGEM",
+      "owner": "Estudioso",
+      "max": 2,
+      "allowed": [
+        "Aparência Inofensiva",
+        "Palpite Fundamentado"
+      ],
+      "sourceId": "core",
+      "page": 90
+    },
+    {
+      "id": "origin:fazendeiro",
+      "identity": "ORIGEM",
+      "owner": "Fazendeiro",
+      "max": 2,
+      "allowed": [
+        "Água no Feijão",
+        "Ginete"
+      ],
+      "sourceId": "core",
+      "page": 90
+    },
+    {
+      "id": "origin:forasteiro",
+      "identity": "ORIGEM",
+      "owner": "Forasteiro",
+      "max": 2,
+      "allowed": [
+        "Cultura Exótica",
+        "Lobo Solitário"
+      ],
+      "sourceId": "core",
+      "page": 90
+    },
+    {
+      "id": "origin:gladiador",
+      "identity": "ORIGEM",
+      "owner": "Gladiador",
+      "max": 2,
+      "allowed": [
+        "Atraente",
+        "Pão e Circo",
+        "Torcida",
+        "#combate"
+      ],
+      "sourceId": "core",
+      "page": 90
+    },
+    {
+      "id": "origin:guarda",
+      "identity": "ORIGEM",
+      "owner": "Guarda",
+      "max": 2,
+      "allowed": [
+        "Detetive",
+        "Investigador",
+        "#combate"
+      ],
+      "sourceId": "core",
+      "page": 91
+    },
+    {
+      "id": "origin:herdeiro",
+      "identity": "ORIGEM",
+      "owner": "Herdeiro",
+      "max": 2,
+      "allowed": [
+        "Comandar",
+        "Herança"
+      ],
+      "sourceId": "core",
+      "page": 91
+    },
+    {
+      "id": "origin:heroicampones",
+      "identity": "ORIGEM",
+      "owner": "Herói Camponês",
+      "max": 2,
+      "allowed": [
+        "Coração Heroico",
+        "Sortudo",
+        "Surto Heroico",
+        "Torcida"
+      ],
+      "sourceId": "core",
+      "page": 91
+    },
+    {
+      "id": "origin:marujo",
+      "identity": "ORIGEM",
+      "owner": "Marujo",
+      "max": 2,
+      "allowed": [
+        "Acrobático",
+        "Passagem de Navio"
+      ],
+      "sourceId": "core",
+      "page": 92
+    },
+    {
+      "id": "origin:mateiro",
+      "identity": "ORIGEM",
+      "owner": "Mateiro",
+      "max": 2,
+      "allowed": [
+        "Lobo Solitário",
+        "Sentidos Aguçados",
+        "Vendedor de Carcaças"
+      ],
+      "sourceId": "core",
+      "page": 92
+    },
+    {
+      "id": "origin:membrodeguilda",
+      "identity": "ORIGEM",
+      "owner": "Membro de Guilda",
+      "max": 2,
+      "allowed": [
+        "Foco em Perícia",
+        "Rede de Contatos"
+      ],
+      "sourceId": "core",
+      "page": 92
+    },
+    {
+      "id": "origin:mercador",
+      "identity": "ORIGEM",
+      "owner": "Mercador",
+      "max": 2,
+      "allowed": [
+        "Negociação",
+        "Proficiência",
+        "Sortudo"
+      ],
+      "sourceId": "core",
+      "page": 93
+    },
+    {
+      "id": "origin:minerador",
+      "identity": "ORIGEM",
+      "owner": "Minerador",
+      "max": 2,
+      "allowed": [
+        "Ataque Poderoso",
+        "Escavador",
+        "Sentidos Aguçados"
+      ],
+      "sourceId": "core",
+      "page": 93
+    },
+    {
+      "id": "origin:nomade",
+      "identity": "ORIGEM",
+      "owner": "Nômade",
+      "max": 2,
+      "allowed": [
+        "Lobo Solitário",
+        "Mochileiro",
+        "Sentidos Aguçados"
+      ],
+      "sourceId": "core",
+      "page": 93
+    },
+    {
+      "id": "origin:pivete",
+      "identity": "ORIGEM",
+      "owner": "Pivete",
+      "max": 2,
+      "allowed": [
+        "Acrobático",
+        "Aparência Inofensiva",
+        "Quebra-Galho"
+      ],
+      "sourceId": "core",
+      "page": 93
+    },
+    {
+      "id": "origin:refugiado",
+      "identity": "ORIGEM",
+      "owner": "Refugiado",
+      "max": 2,
+      "allowed": [
+        "Estoico",
+        "Vontade de Ferro"
+      ],
+      "sourceId": "core",
+      "page": 93
+    },
+    {
+      "id": "origin:seguidor",
+      "identity": "ORIGEM",
+      "owner": "Seguidor",
+      "max": 2,
+      "allowed": [
+        "Antigo Mestre",
+        "Proficiência",
+        "Surto Heroico"
+      ],
+      "sourceId": "core",
+      "page": 94
+    },
+    {
+      "id": "origin:selvagem",
+      "identity": "ORIGEM",
+      "owner": "Selvagem",
+      "max": 2,
+      "allowed": [
+        "Lobo Solitário",
+        "Vida Rústica",
+        "Vitalidade"
+      ],
+      "sourceId": "core",
+      "page": 94
+    },
+    {
+      "id": "origin:soldado",
+      "identity": "ORIGEM",
+      "owner": "Soldado",
+      "max": 2,
+      "allowed": [
+        "Influência Militar",
+        "#combate"
+      ],
+      "sourceId": "core",
+      "page": 94
+    },
+    {
+      "id": "origin:taverneiro",
+      "identity": "ORIGEM",
+      "owner": "Taverneiro",
+      "max": 2,
+      "allowed": [
+        "Gororoba",
+        "Proficiência",
+        "Vitalidade"
+      ],
+      "sourceId": "core",
+      "page": 94
+    },
+    {
+      "id": "origin:trabalhador",
+      "identity": "ORIGEM",
+      "owner": "Trabalhador",
+      "max": 2,
+      "allowed": [
+        "Atlético",
+        "Esforçado"
+      ],
+      "sourceId": "core",
+      "page": 95
+    },
+    {
+      "id": "race:humano",
+      "identity": "RAÇA",
+      "owner": "Humano",
+      "max": 2,
+      "allowed": [
+        "#general"
+      ],
+      "sourceId": "core",
+      "page": 19
+    },
+    {
+      "id": "race:osteon",
+      "identity": "RAÇA",
+      "owner": "Osteon",
+      "max": 1,
+      "allowed": [
+        "#general",
+        "#inheritance"
+      ],
+      "sourceId": "core",
+      "page": 29
+    },
+    {
+      "id": "race:yidishan",
+      "identity": "RAÇA",
+      "owner": "Yidishan",
+      "max": 1,
+      "allowed": [
+        "#general",
+        "#inheritance"
+      ],
+      "sourceId": "threats",
+      "page": 300
+    },
+    {
+      "id": "race:mashin",
+      "identity": "RAÇA",
+      "owner": "Mashin",
+      "max": 2,
+      "allowed": [
+        "#mashin"
+      ],
+      "sourceId": "threats",
+      "page": 160
+    },
+    {
+      "id": "race:lefou",
+      "identity": "RAÇA",
+      "owner": "Lefou",
+      "max": 2,
+      "allowed": [
+        "#tormenta"
+      ],
+      "effectChoiceId": "core:race:lefou:deformidade:0",
+      "sourceId": "core",
+      "page": 24
+    }
+  ]
+}

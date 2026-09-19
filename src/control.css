@@ -116,9 +116,9 @@ button { cursor: pointer; }
 .control-form input:focus, .control-form textarea:focus, .control-form select:focus { border-color: #b25b75; box-shadow: 0 0 0 2px rgba(178, 82, 110, .18); }
 .required-star { margin-left: 3px; color: #ff5f70; font-size: .82rem; text-shadow: 0 0 8px rgba(255, 80, 102, .55); }
 
-.control-combat-row { display: grid; grid-template-columns: minmax(170px, 2fr) minmax(72px, .58fr) 44px repeat(3, minmax(88px, .76fr)); gap: 7px; align-items: end; }
-.control-rd-toggle { place-items: center; }
-.control-rd-toggle input { width: 18px; height: 18px; accent-color: #a95265; }
+.control-combat-row { display: grid; grid-template-columns: minmax(120px, 1.6fr) minmax(66px, .6fr) minmax(112px, 1fr) minmax(116px, 1fr) repeat(3, minmax(70px, .8fr)); gap: 7px; align-items: end; }
+.control-combat-row > label { min-width: 0; }
+.control-combat-row select { width: 100%; min-width: 0; padding-inline: 5px; }
 .control-reflex-dc, .control-area-result { min-width: 0; }
 .control-reflex-dc > span, .control-area-result > span { overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .control-reflex-dc input, .control-area-result select { width: 100%; padding-inline: 5px; text-align: center; }
@@ -1663,7 +1663,7 @@ button { cursor: pointer; }
 @media (max-width: 860px) {
   .control-header { gap: 7px; }
   .control-tab button, .control-add-boss { padding-inline: 7px; font-size: .62rem; }
-  .control-combat-row { grid-template-columns: minmax(130px, 1.6fr) 66px 40px repeat(3, minmax(70px, .68fr)); }
+  .control-combat-row { gap: 5px; grid-template-columns: minmax(90px, 1.3fr) 62px 106px 110px repeat(3, minmax(60px, .75fr)); }
   .control-reflex-dc > span, .control-area-result > span { font-size: .5rem; }
   .control-reflex-dc input, .control-area-result select { padding-inline: 2px; font-size: .55rem; }
   .control-attributes-row { gap: 4px; }
@@ -1686,3 +1686,6 @@ button { cursor: pointer; }
   .control-turn-meter { gap: 2px; font-size: .48rem; }
   .control-turn-meter strong { font-size: .58rem; }
 }
+
+.control-rd-button { width: 100%; min-height: 34px; border: 1px solid rgba(188, 94, 124, .55); border-radius: 8px; padding: 5px 8px; background: linear-gradient(145deg, #4f2940, #733950); color: #f4e8ef; font: inherit; font-size: .68rem; font-weight: 850; cursor: pointer; white-space: nowrap; }
+.control-rd-button:hover { border-color: #d57391; filter: brightness(1.12); }

@@ -1,4 +1,5 @@
 import type { BossState } from './battle';
+import type { DamageReductionProfile } from './damage-reduction';
 import type { BossSkillOverrides, BossSkillValues } from './boss-skills';
 import type { ActiveBossStatus } from './status';
 import type { BossAttack } from './boss-attacks';
@@ -18,6 +19,7 @@ export type BossLibraryBossDraft = {
   skillValues?: BossSkillValues;
   skillOverrides?: BossSkillOverrides;
   damageReduction: number;
+  damageReductions?: DamageReductionProfile;
   attacks?: BossAttack[];
   selectedAttackId?: string;
   description: string;
@@ -44,6 +46,7 @@ export type BossLibraryBossSummary = {
   skillValues?: BossSkillValues;
   skillOverrides?: BossSkillOverrides;
   damageReduction: number;
+  damageReductions?: DamageReductionProfile;
   attacks?: BossAttack[];
   selectedAttackId?: string;
 };

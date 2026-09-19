@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { volumeToGain } from './shared/battle';
 import { cutsceneFade, cutsceneBlackoutSeconds, cutscenePosition, cutsceneMusicPosition, cutsceneNextMusicPosition, type CutscenePlayback, type ScenePlaylistSummary } from './shared/scene';
+import { schedulePresentationDeadline } from './shared/presentation-deadline';
 import { presentationMediaUrl } from './presentation-media-cache';
 import { retainPhaseAudio } from './phase-audio-handoff';
 import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback } from './gapless-audio-loop';
@@ -38,8 +39,11 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
   const boundaryTick = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (playback.stage !== 'ending' || playback.endingAt == null) return;
-    const timer = setTimeout(() => boundaryTick.current?.(), Math.max(0, playback.endingAt - window.bossAPI.getPresentationTime()));
-    return () => clearTimeout(timer);
+    return schedulePresentationDeadline(
+      playback.endingAt,
+      () => boundaryTick.current?.(),
+      { now: () => window.bossAPI.getPresentationTime() },
+    );
   }, [playback.stage, playback.endingAt]);
 
   useEffect(() => {
@@ -52,16 +56,38 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
     const video = videoRef.current;
     // Keep the visual element permanently silent. Its audio has an independent
     // transport/gain, so hiding/fading the picture cannot mute the soundtrack.
-    const videoAudio = video ? new Audio() : null;
+    let videoAudio: HTMLMediaElement | null = video ? new Audio() : null;
     if (videoAudio) {
       videoAudio.crossOrigin = 'anonymous'; videoAudio.preload = 'auto';
       videoAudio.dataset.cutsceneVideoAudio = 'true';
       videoAudio.src = presentationMediaUrl(playback.backgroundUrl!);
     }
-    const videoSource = videoAudio ? context.createMediaElementSource(videoAudio) : null;
+    let videoSource = videoAudio ? context.createMediaElementSource(videoAudio) : null;
     const videoGain = context.createGain();
     videoSource?.connect(videoGain).connect(context.destination);
     if (video) video.muted = true;
+    const prepareVideoAudio = async () => {
+      const initialVideoAudio = videoAudio;
+      if (!initialVideoAudio) return;
+      try {
+        await waitForMedia(initialVideoAudio, controller.signal);
+      } catch (reason) {
+        if (!active || controller.signal.aborted || initialVideoAudio.error?.code !== MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) throw reason;
+        // Firefox rejects video-only containers in audio elements. Keep the
+        // normal audio decoder and retry a detached video only on this error.
+        const fallback = document.createElement('video');
+        fallback.crossOrigin = initialVideoAudio.crossOrigin;
+        fallback.preload = initialVideoAudio.preload;
+        fallback.dataset.cutsceneVideoAudio = 'true';
+        fallback.src = initialVideoAudio.src;
+        videoSource?.disconnect();
+        initialVideoAudio.pause(); initialVideoAudio.removeAttribute('src'); initialVideoAudio.load();
+        videoAudio = fallback;
+        videoSource = context.createMediaElementSource(fallback);
+        videoSource.connect(videoGain);
+        await waitForMedia(fallback, controller.signal);
+      }
+    };
     const audioEntries = new Map<string, { audio: HTMLAudioElement; gain: GainNode; source: MediaElementAudioSourceNode; disposeLoop: () => void }>();
     for (const [role, playlist] of [['music', playback.music], ['sound', playback.sound], ['next', playback.nextMusic]] as const) {
       for (const track of playlist?.tracks ?? []) {
@@ -159,7 +185,7 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
     const prepare = async () => {
       const media: Promise<unknown>[] = [...audioEntries.values()].map(({ audio }) => waitForMedia(audio, controller.signal));
       if (videoRef.current) media.push(waitForMedia(videoRef.current, controller.signal));
-      if (videoAudio) media.push(waitForMedia(videoAudio, controller.signal));
+      if (videoAudio) media.push(prepareVideoAudio());
       else if (playback.backgroundUrl) {
         const image = new Image(); image.src = playback.backgroundUrl;
         media.push(image.decode());
@@ -180,16 +206,21 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
       boundaryTick.current = null;
       document.documentElement.classList.remove('cutscene-active');
       const incoming = [...audioEntries].find(([key, entry]) => key.startsWith('next:') && !entry.audio.paused);
-      const releaseEntry = ({ audio, gain, source, disposeLoop }: NonNullable<ReturnType<typeof audioEntries.get>>) => {
+      const releaseEntry = ({ audio, gain, source, disposeLoop }: NonNullable<ReturnType<typeof audioEntries.get>>, keepGain = false) => {
         audio.removeEventListener('ended', tick); disposeLoop();
-        audio.pause(); audio.removeAttribute('src'); audio.load(); source.disconnect(); gain.disconnect();
+        audio.pause(); audio.removeAttribute('src'); audio.load(); source.disconnect();
+        if (!keepGain) gain.disconnect();
+      };
+      const releaseAudio = () => {
+        for (const entry of audioEntries.values()) releaseEntry(entry, true);
+        audioEntries.clear();
       };
       let released = false;
       const release = () => {
         if (released) return;
         released = true;
-        for (const entry of audioEntries.values()) releaseEntry(entry);
-        audioEntries.clear();
+        releaseAudio();
+        incoming?.[1].gain.disconnect();
         void context.close();
       };
       for (const [key, entry] of audioEntries) if (key !== incoming?.[0]) { releaseEntry(entry); audioEntries.delete(key); }
@@ -199,7 +230,7 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
       unsubscribe();
       for (const { audio } of audioEntries.values()) audio.removeEventListener('ended', tick);
       if (incoming && playbackRef.current.stage === 'ending') retainPhaseAudio(incoming[0].slice(5), {
-        audio: incoming[1].audio, context, source: incoming[1].source, gain: incoming[1].gain, release,
+        audio: incoming[1].audio, context, source: incoming[1].source, gain: incoming[1].gain, releaseAudio, release,
       });
       else release();
     };

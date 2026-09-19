@@ -40,29 +40,35 @@ jobs:
           retention-days: 14
 
   web-e2e:
-    name: Web player compatibility
+    name: Web player compatibility (${{ matrix.browser }})
     runs-on: windows-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        browser: [chromium, chrome, edge, firefox]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Playwright 1.61.1 + Firefox currently fails before page creation on
-          # Windows under Node 24. The browser matrix stays complete on Node 22.
+          # Keep Node 22 for the existing CI browser matrix.
+          # Local Firefox smoke passed on Node 24 outside the agent execution sandbox;
+          # changing Node alone did not resolve it (see docs/KNOWN-ISSUES.md).
           node-version: 22
           cache: npm
       - name: Use the lockfile-tested npm release
         run: npm install --global npm@12.0.2 --ignore-scripts
       - run: npm ci
       - run: npx playwright install chromium firefox
-      - run: npm run test:e2e:web
+      - run: npm run test:e2e:web -- --project=${{ matrix.browser }} --retries=0
       - name: Upload Playwright diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: web-playwright-diagnostics
+          name: web-playwright-diagnostics-${{ matrix.browser }}
           path: |
             playwright-report/web/
             test-results/web/

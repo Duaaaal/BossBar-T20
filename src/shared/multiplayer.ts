@@ -257,7 +257,9 @@ export interface MultiplayerServerToClientEvents {
 }
 
 export interface MultiplayerClientToServerEvents {
+  'player:set-skill-effect':(change:import('./skill-effect-runtime').SkillEffectChange,acknowledge:(result:{ok:boolean;error?:string})=>void)=>void;
   'player:roll-resistance': (id: string, acknowledge: (result: { ok: boolean; error?: string }) => void) => void;
+  'player:roll-resistance-with-effects': (id:string,effects:import('./skill-test-context').SkillTestActivation[],acknowledge:(result:{ok:boolean;error?:string})=>void)=>void;
   'player:auto-resistance': (enabled: boolean, acknowledge: (ok: boolean) => void) => void;
   'presentation:cutscene-ready': (id: string, duration: number | null) => void;
   'session:clock': (acknowledge: (serverTime: number) => void) => void;
@@ -280,6 +282,11 @@ export interface MultiplayerClientToServerEvents {
     extremeAdvantage: boolean,
     acknowledge: (result: EncounterTurnActionResult) => void,
   ) => void;
+  'encounter:roll-initiative-with-effects': (
+    extremeAdvantage:boolean,
+    effects:import('./skill-test-context').SkillTestActivation[],
+    acknowledge:(result:EncounterTurnActionResult)=>void,
+  )=>void;
   'encounter:combat-action': (
     request: PlayerCombatActionRequest,
     acknowledge: (result: PlayerCombatActionResult) => void,

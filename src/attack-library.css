@@ -81,3 +81,6 @@
   .attack-library.is-editing .attack-library-list { max-height: 92px; }
   .attack-library-empty { padding: 10px; }
 }
+.attack-library-selection { display: flex; align-items: center; gap: 6px; color: #e5c18a; font-size: 12px; cursor: pointer; }
+.attack-library-selection input { accent-color: #c18c45; }
+.attack-library-selection-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 12px; border-top: 1px solid #75552d; }

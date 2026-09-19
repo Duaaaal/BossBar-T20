@@ -2,7 +2,7 @@ import type { CharacterSheetEditorField } from './character-sheet';
 
 export const CHARACTER_SHEET_DRAFT_VERSION = 1;
 export const CHARACTER_SHEET_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
-export const CHARACTER_SHEET_DRAFT_MAX_BYTES = 512 * 1_024;
+export const CHARACTER_SHEET_DRAFT_MAX_BYTES = 2 * 1_024 * 1_024;
 
 type StoredCharacterSheetDraft = {
   version: typeof CHARACTER_SHEET_DRAFT_VERSION;
@@ -30,7 +30,7 @@ const normalizeField = (value: unknown): CharacterSheetEditorField | null => {
   const group = field.group === undefined
     ? undefined
     : boundedString(field.group, 120);
-  const fieldValue = boundedString(field.value, 10_000);
+  const fieldValue = boundedString(field.value, 100_000);
   if (
     !name ||
     label === null ||
@@ -56,7 +56,7 @@ const normalizeField = (value: unknown): CharacterSheetEditorField | null => {
       (validation.maxLength !== undefined && (
         !Number.isInteger(validation.maxLength) ||
         validation.maxLength < 0 ||
-        validation.maxLength > 10_000
+        validation.maxLength > 100_000
       ))
     )
   ) return null;
@@ -73,7 +73,7 @@ const normalizeField = (value: unknown): CharacterSheetEditorField | null => {
 };
 
 const normalizeFieldList = (value: unknown) => {
-  if (!Array.isArray(value) || value.length > 600) return null;
+  if (!Array.isArray(value) || value.length > 2_500) return null;
   const fields = value.map(normalizeField);
   if (fields.some((field) => field === null)) return null;
   const names = new Set<string>();

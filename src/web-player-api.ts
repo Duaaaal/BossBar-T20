@@ -1,4 +1,6 @@
+import { setReferenceBookResolver } from './reference-book-client.ts';
 import { io, type Socket } from 'socket.io-client';
+import { normalizedMediaPosition } from './gapless-audio-loop.ts';
 import { rewriteCutsceneMedia } from './multiplayer/public-presentation.ts';
 import type { BossAPI } from './shared/api.ts';
 import type {
@@ -9,6 +11,7 @@ import type {
   NotesSaveResult,
   PlayerAccountStatus,
   PlayerAuthenticationResult,
+  PlayerCharacterSelection,
   PlayerCharacterSheetStatus,
   PlayerCharacterPortraitStatus,
 } from './shared/character-sheet.ts';
@@ -107,6 +110,7 @@ import { loadClientPresentationPreferences } from './shared/client-presentation-
 
 type PlayerApi = Pick<
   BossAPI,
+  | 'getReferenceVariants' | 'saveReferenceVariant' | 'reviewReferenceVariant'
   | 'undoLastChange'
   | 'getState'
   | 'subscribe'
@@ -148,6 +152,7 @@ type PlayerApi = Pick<
   | 'rollEncounterInitiative'
   | 'rollEncounterFormula'
   | 'requestPlayerCombatAction'
+  | 'setPlayerSkillEffect'
   | 'rollResistance'
   | 'setAutomaticResistance'
   | 'subscribePlayerResourceNotice'
@@ -468,6 +473,8 @@ export const createWebPlayerApi = ({
     url: string;
     expiresAt: number;
   } | null = null;
+  let currentCharacters: PlayerCharacterSelection | null = null;
+  let editorCharacterId: string | null = null;
   let sheetViewUrlRequest: Promise<string> | null = null;
 
   const inviteHeaders = () => ({
@@ -477,8 +484,17 @@ export const createWebPlayerApi = ({
   });
   const accountHeaders = (contentType?: string) => ({
     Authorization: `Bearer ${accountToken}`,
+    ...(currentCharacters ? { 'X-BossBar-Character': currentCharacters.activeCharacterId } : {}),
     ...(contentType ? { 'Content-Type': contentType } : {}),
     'X-BossBar-Room': roomCode,
+  });
+  setReferenceBookResolver(async (id, page) => {
+    const response = await fetch('/api/player/reference-books/authorize', { method: 'POST', headers: accountHeaders('application/json'), body: JSON.stringify({ id, page }) });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Erro inesperado ao abrir o livro.');
+    const url = new URL(result.url, location.origin);
+    if (url.origin !== location.origin || !url.pathname.startsWith('/reference-books/')) throw new Error('Referência inválida.');
+    return url.href;
   });
   const readError = async (response: Response, fallback: string) => {
     try {
@@ -574,11 +590,67 @@ export const createWebPlayerApi = ({
     }
     accountToken = result.sessionToken;
     authenticatedUsername = result.username;
-    currentSheet = result.sheet ?? null;
+    currentSheet = result.sheet ?? null; currentCharacters = null;
     currentPortrait = result.portrait ?? null;
     currentNotes = result.notes ?? '';
+    currentCharacters = null; editorCharacterId = null;
+    await getCharacterSelection();
     if (currentSheet?.hasSheet) void prefetchCharacterSheetViewUrl();
     return result;
+  };
+
+  const acceptCharacterProfile = (profile: PlayerCharacterSelection & { sheet?: PlayerCharacterSheetStatus; portrait?: PlayerCharacterPortraitStatus }) => {
+    currentCharacters = { activeCharacterId: profile.activeCharacterId, characters: profile.characters };
+    if (!currentSheet?.importPending) currentSheet = profile.sheet ?? null;
+    currentPortrait = profile.portrait ?? null;
+    return currentCharacters;
+  };
+  let profileRequest: Promise<PlayerCharacterSelection> | null = null;
+  let selectionInFlight = false;
+  const getCharacterSelection = async (refresh = false) => {
+    if (!refresh && currentCharacters) return currentCharacters;
+    if (profileRequest) return profileRequest;
+    profileRequest = (async () => {
+      const response = await fetch('/api/player/profile', { cache: 'no-store', headers: accountHeaders() });
+      if (!response.ok) throw new Error(await readError(response, 'Não foi possível carregar as fichas.'));
+      return acceptCharacterProfile(await response.json());
+    })().finally(() => { profileRequest = null; });
+    return profileRequest;
+  };
+  const selectCharacter = async (characterId: string) => {
+    selectionInFlight = true;
+    try {
+    if (profileRequest) await profileRequest;
+    const response = await fetch('/api/player/characters/select', { method: 'POST', cache: 'no-store', headers: accountHeaders('application/json'), body: JSON.stringify({ characterId }) });
+    const result = await response.json() as { ok: boolean; pendingApproval?: boolean; error?: string; profile?: PlayerCharacterSelection & { sheet: PlayerCharacterSheetStatus; portrait: PlayerCharacterPortraitStatus } };
+    if (result.ok && !result.pendingApproval) { currentSheet = null; invalidateCharacterSheetViewUrl(); if (result.profile) acceptCharacterProfile(result.profile); else await getCharacterSelection(true); }
+    return result;
+    } finally { selectionInFlight = false; }
+  };
+  const characterPortraitBlob = async (characterId: string) => {
+    const response = await fetch(`/api/player/characters/${encodeURIComponent(characterId)}/portrait`, { headers: accountHeaders(), cache: 'no-store' });
+    return response.ok ? response.blob() : null;
+  };
+  const createCharacterSheet = async (): Promise<CharacterSheetUploadResult> => {
+    const response = await fetch('/api/player/sheet/create', { method: 'POST', headers: accountHeaders() });
+    const result = await response.json();
+    if (result.ok) currentSheet = result.sheet; currentCharacters = null;
+    return result;
+  };
+  const rollCharacterAttribute = async (options: { attribute?: import('./shared/character-attributes').AttributeCode; generation?: string; reset?: boolean }) => {
+    const response = await fetch('/api/player/sheet/attributes/roll', { method: 'POST', headers: { ...accountHeaders('application/json'), ...(editorCharacterId ? { 'X-BossBar-Character': editorCharacterId } : {}) }, body: JSON.stringify(options) });
+    const result = await response.json() as { ok: boolean; rolls?: import('./shared/character-attributes').AttributeRolls; error?: string };
+    if (!response.ok || !result.ok || !result.rolls) throw new Error(result.error || 'Não foi possível rolar os atributos.');
+    return result.rolls;
+  };
+  const exportCharacterSheet = async () => {
+    const response = await fetch('/api/player/sheet/export', { headers: accountHeaders(), cache: 'no-store' });
+    if (!response.ok) throw new Error(await readError(response, 'Não foi possível exportar a ficha.'));
+    return response.blob();
+  };
+  const dismissSheetWarnings = async (ids: string[], fields?: CharacterSheetEditorField[]) => {
+    const response = await fetch('/api/player/sheet/warnings/dismiss', { method: 'POST', headers: { ...accountHeaders('application/json'), ...(fields && editorCharacterId ? { 'X-BossBar-Character': editorCharacterId } : {}) }, body: JSON.stringify({ ids, fields }) });
+    return response.json() as Promise<CharacterSheetEditorResult>;
   };
 
   const uploadCharacterSheet = async (file: File): Promise<CharacterSheetUploadResult> => {
@@ -594,7 +666,7 @@ export const createWebPlayerApi = ({
     });
     const result = await response.json() as CharacterSheetUploadResult;
     if (result.ok && result.sheet) {
-      currentSheet = result.sheet;
+      currentSheet = result.sheet; currentCharacters = null;
       invalidateCharacterSheetViewUrl();
       if (currentSheet.hasSheet) void prefetchCharacterSheetViewUrl();
     }
@@ -610,7 +682,7 @@ export const createWebPlayerApi = ({
     });
     const result = await response.json() as CharacterSheetUploadResult;
     if (result.sheet) {
-      currentSheet = result.sheet;
+      currentSheet = result.sheet; currentCharacters = null;
       invalidateCharacterSheetViewUrl();
       if (currentSheet.hasSheet) void prefetchCharacterSheetViewUrl();
     }
@@ -636,7 +708,7 @@ export const createWebPlayerApi = ({
     });
     const result = await response.json() as CharacterSheetUploadResult;
     if (result.ok) {
-      currentSheet = result.sheet ?? null;
+      currentSheet = result.sheet ?? null; currentCharacters = null;
       invalidateCharacterSheetViewUrl();
     }
     return result;
@@ -656,7 +728,7 @@ export const createWebPlayerApi = ({
       body: file,
     });
     const result = await response.json() as CharacterPortraitUploadResult;
-    if (result.portrait) currentPortrait = result.portrait;
+    if (result.portrait) { currentPortrait = result.portrait; currentCharacters = null; }
     return response.ok ? result : {
       ok: false,
       error: result.error ?? 'Não foi possível salvar o retrato.',
@@ -670,7 +742,7 @@ export const createWebPlayerApi = ({
       headers: accountHeaders(),
     });
     const result = await response.json() as CharacterPortraitUploadResult;
-    if (result.ok) currentPortrait = result.portrait ?? null;
+    if (result.ok) { currentPortrait = result.portrait ?? null; currentCharacters = null; }
     return response.ok ? result : {
       ok: false,
       error: result.error ?? 'Não foi possível remover o retrato.',
@@ -683,6 +755,7 @@ export const createWebPlayerApi = ({
       headers: accountHeaders(),
     });
     const result = await response.json() as CharacterSheetEditorResult;
+    if (result.document?.characterId) editorCharacterId = result.document.characterId;
     return response.ok ? result : {
       ok: false,
       error: result.error ?? 'Não foi possível abrir o editor da ficha.',
@@ -691,16 +764,17 @@ export const createWebPlayerApi = ({
 
   const saveCharacterSheetEditor = async (
     fields: CharacterSheetEditorField[],
+    automaticallyFix = false,
   ): Promise<CharacterSheetEditorResult> => {
     const response = await fetch('/api/player/sheet/editor', {
       method: 'PUT',
       cache: 'no-store',
-      headers: accountHeaders('application/json'),
-      body: JSON.stringify({ fields }),
+      headers: { ...accountHeaders('application/json'), ...(editorCharacterId ? { 'X-BossBar-Character': editorCharacterId } : {}) },
+      body: JSON.stringify({ fields, automaticallyFix }),
     });
     const result = await response.json() as CharacterSheetEditorResult;
     if (result.ok && result.sheet) {
-      currentSheet = result.sheet;
+      currentSheet = result.sheet; currentCharacters = null;
       invalidateCharacterSheetViewUrl();
       void prefetchCharacterSheetViewUrl();
     }
@@ -714,7 +788,7 @@ export const createWebPlayerApi = ({
   const discardCharacterSheetImport = async (): Promise<CharacterSheetUploadResult> => {
     const response = await fetch('/api/player/sheet/import', { method: 'DELETE', cache: 'no-store', headers: accountHeaders() });
     const result = await response.json() as CharacterSheetUploadResult;
-    if (result.ok && result.sheet) currentSheet = result.sheet;
+    if (result.ok && result.sheet) currentSheet = result.sheet; currentCharacters = null;
     return result;
   };
 
@@ -732,17 +806,8 @@ export const createWebPlayerApi = ({
 
   const refreshCharacterSheetStatus = async () => {
     if (!accountToken) return;
-    const response = await fetch('/api/player/profile', {
-      cache: 'no-store',
-      headers: accountHeaders(),
-    });
-    if (!response.ok) return;
-    const profile = await response.json() as {
-      sheet?: PlayerCharacterSheetStatus;
-      portrait?: PlayerCharacterPortraitStatus;
-    };
-    currentSheet = profile.sheet ?? null;
-    currentPortrait = profile.portrait ?? null;
+    currentSheet = null;
+    await getCharacterSelection(true);
     invalidateCharacterSheetViewUrl();
     onCharacterSheetChanged?.(currentSheet);
   };
@@ -1114,10 +1179,7 @@ export const createWebPlayerApi = ({
     const elapsed = snapshot.music.isPlaying
       ? Math.max(0, Date.now() - snapshot.music.synchronizedAt) / 1000
       : 0;
-    musicSeek.publish(Math.min(
-      currentTrack?.duration ?? Number.POSITIVE_INFINITY,
-      Math.max(0, snapshot.music.currentTime + elapsed),
-    ));
+    musicSeek.publish(normalizedMediaPosition(snapshot.music.currentTime + elapsed, currentTrack?.duration ?? Infinity, snapshot.music.loop));
     soundboard.publish(toSoundboardState(snapshot.soundboard));
     void preloadEncounterSounds(snapshot.encounterSoundUrls ?? []);
     if (snapshot.scene.blackoutActive) {
@@ -1150,8 +1212,10 @@ export const createWebPlayerApi = ({
   });
   let rollInitiativeHandler = async (
     extremeAdvantage = false,
+    effects?:import('./shared/skill-test-context').SkillTestActivation[],
   ): Promise<EncounterTurnActionResult> => {
     void extremeAdvantage;
+    void effects;
     return {
       ok: false,
       error: 'O jogador ainda não está conectado.',
@@ -1167,15 +1231,20 @@ export const createWebPlayerApi = ({
       error: 'O jogador ainda não está conectado.',
     });
   const api: PlayerApi = {
-    rollResistance: (id) => new Promise((resolve) => {
+    setPlayerSkillEffect: (_playerId,change) => new Promise(resolve=>{if(!socket.connected){resolve({ok:false,error:'Reconecte para alterar os efeitos.'});return;}socket.timeout(10000).emit('player:set-skill-effect',change,(error,result)=>resolve(error?{ok:false,error:'A conexão falhou. Confira o estado antes de tentar novamente.'}:result));}),
+    rollResistance: (id,effects) => new Promise((resolve) => {
       if (!socket.connected) { resolve({ ok: false, error: 'Reconecte para rolar.' }); return; }
-      socket.timeout(10000).emit('player:roll-resistance', id, (error, result) => resolve(error ? { ok: false, error: 'Aguarde a conexão e tente novamente.' } : result));
+      if(effects)socket.timeout(10000).emit('player:roll-resistance-with-effects',id,effects,(error,result)=>resolve(error?{ok:false,error:'Aguarde a conexão e tente novamente.'}:result));
+      else socket.timeout(10000).emit('player:roll-resistance', id, (error, result) => resolve(error ? { ok: false, error: 'Aguarde a conexão e tente novamente.' } : result));
     }),
     setAutomaticResistance: (enabled) => new Promise((resolve) => {
       if (!socket.connected) { resolve(false); return; }
       socket.timeout(10000).emit('player:auto-resistance', enabled, (error, ok) => resolve(!error && ok));
     }),
     undoLastChange: async () => false,
+    getReferenceVariants: async () => (await fetch('/api/player/reference-variants', { headers: accountHeaders() })).json(),
+    saveReferenceVariant: async (draft) => (await fetch('/api/player/reference-variants', { method: 'POST', headers: accountHeaders('application/json'), body: JSON.stringify(draft) })).json(),
+    reviewReferenceVariant: async () => ({ ok: false, error: 'Somente o mestre pode aprovar variantes.' }),
     getState: async () => battle.current(),
     subscribe: battle.subscribe,
     getBackground: async () => background.current(),
@@ -1221,8 +1290,8 @@ export const createWebPlayerApi = ({
       return unsubscribe;
     },
     advanceEncounterTurn: () => endOwnTurnHandler(),
-    rollEncounterInitiative: (_participantId, extremeAdvantage = false) =>
-      rollInitiativeHandler(extremeAdvantage),
+    rollEncounterInitiative: (_participantId, extremeAdvantage = false,effects) =>
+      rollInitiativeHandler(extremeAdvantage,effects),
     rollEncounterFormula: async () => ({
       ok: false,
       error: 'Somente o mestre pode rolar fórmulas pelo painel.',
@@ -1246,7 +1315,8 @@ export const createWebPlayerApi = ({
       leave: () => undefined,
       dispose: () => undefined,
       socket: null,
-      uploadCharacterSheet,
+      getCharacterSelection, selectCharacter, characterPortraitBlob, createCharacterSheet, rollCharacterAttribute, exportCharacterSheet, dismissSheetWarnings,
+    uploadCharacterSheet,
       uploadCharacterPortrait,
       removeCharacterPortrait,
       automaticallyFixCharacterSheet,
@@ -1419,6 +1489,7 @@ export const createWebPlayerApi = ({
     });
   });
   socket.on('player:resource-notice', (notice) => {
+    if (notice.id.startsWith('sheet-change:character:')) { if (!selectionInFlight) void refreshCharacterSheetStatus(); return; }
     resourceNotices.publish(notice);
     if (notice.id.startsWith('sheet-change:')) {
       if (notice.tone === 'approved') void refreshCharacterSheetStatus();
@@ -1595,7 +1666,7 @@ export const createWebPlayerApi = ({
       });
     });
   endOwnTurnHandler = endOwnTurn;
-  const rollInitiative = (extremeAdvantage = false) =>
+  const rollInitiative = (extremeAdvantage = false,effects?:import('./shared/skill-test-context').SkillTestActivation[]) =>
     new Promise<EncounterTurnActionResult>((resolve) => {
       if (!socket.connected) {
         resolve({ ok: false, error: 'O jogador não está conectado.' });
@@ -1604,10 +1675,12 @@ export const createWebPlayerApi = ({
       const timeout = window.setTimeout(() => {
         resolve({ ok: false, error: 'A sala não confirmou a iniciativa.' });
       }, 5_000);
-      socket.emit('encounter:roll-initiative', extremeAdvantage, (result) => {
+      const acknowledge=(result:EncounterTurnActionResult) => {
         window.clearTimeout(timeout);
         resolve(result);
-      });
+      };
+      if(effects)socket.emit('encounter:roll-initiative-with-effects',extremeAdvantage,effects,acknowledge);
+      else socket.emit('encounter:roll-initiative',extremeAdvantage,acknowledge);
     });
   rollInitiativeHandler = rollInitiative;
   const usePlayerAction: BossAPI['usePlayerAction'] = (action) =>
@@ -1699,6 +1772,7 @@ export const createWebPlayerApi = ({
     leave,
     dispose,
     socket,
+      getCharacterSelection, selectCharacter, characterPortraitBlob, createCharacterSheet, rollCharacterAttribute, exportCharacterSheet, dismissSheetWarnings,
     uploadCharacterSheet,
     uploadCharacterPortrait,
     removeCharacterPortrait,

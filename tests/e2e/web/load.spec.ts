@@ -34,7 +34,7 @@ test('dez jogadores recebem mídia e o mesmo impacto sem divergência', async ({
           name: `ficha-${index + 1}.pdf`, mimeType: 'application/pdf',
           buffer: await createEditableCharacterSheet({ characterName: `Personagem ${index + 1}`, playerName: `Jogador ${index + 1}` }),
         });
-        await expect(page.locator('#web-player-sheet-status')).toContainText(`ficha-${index + 1}.pdf`);
+        await expect(page.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText(`Personagem ${index + 1}`);
         await page.locator('#web-player-sheet-close').click();
       }
     }

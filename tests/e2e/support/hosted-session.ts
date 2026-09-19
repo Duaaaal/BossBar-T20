@@ -145,7 +145,7 @@ export const createEditableCharacterSheet = async ({
     CA: autoFixIssue ? '99' : '10', 'Base CA': '10', 'B.Arm': '0', 'B.Esc': '0',
     'Outros B.CA': '0', ModAtribDefe: '0',
     TesteResist: '10', ModAtribMagia: '0',
-    Desloc: '9m', SeleTamanho: 'Médio', CargaTotal: '3',
+    Desloc: '9m', SeleTamanho: 'Médio', CargaTotal: '0', CargaMax: '14', Levantar: '28',
     'Ataque 1': 'Espada longa', 'Bônus Atq 1': '+5',
     'Dano 1': '1d8+2', 'Crítico 1': '19/x2',
     'Tipo 1': 'Corte', 'Alcance 1': 'Corpo a corpo',
@@ -169,13 +169,23 @@ export const createEditableCharacterSheet = async ({
     'ModAtribPilo', 'ModAtribNobr', 'ModAtribOfi1', 'ModAtribOfi2',
     'ModAtribPerc', 'ModAtribPont', 'ModAtribRefl', 'ModAtribReli',
     'ModAtribSobr', 'ModAtribVont',
-  ]) values[name] = '0';
+  ]) {
+    values[name] = '0';
+    const suffix = name.slice('ModAtrib'.length);
+    values['SeleAtrib' + suffix] = ['Atle', 'Luta'].includes(suffix) ? 'FOR' : suffix === 'Fort' ? 'CON' : ['Acro', 'Cava', 'Furt', 'Inic', 'Ladi', 'Pont', 'Refl'].includes(suffix) ? 'DES' : ['Cura', 'Intu', 'Perc', 'Reli', 'Sobr', 'Vont'].includes(suffix) ? 'SAB' : ['Ades', 'Atua', 'Dipl', 'Enga', 'Inti', 'Joga'].includes(suffix) ? 'CAR' : 'INT';
+  }
+  values.SeleAtribDefe = 'DES'; values.SeleAtribMagia = 'SAB';
+  // Coherent legacy sheet: Strength 2, Constitution 1, mandatory Fortitude training.
+  Object.assign(values, { '030': '2', '190': '2', '100': '3', '103': '2', ModAtribAtle: '2', ModAtribLuta: '2', ModAtribFort: '1' });
   for (const [name, value] of Object.entries(values)) {
     form.createTextField(name).setText(value);
   }
   const heavyArmor = form.createCheckBox('arm pesa');
   heavyArmor.addToPage(page, { x: 8, y: 8, width: 8, height: 8 });
   heavyArmor.check();
+  const trainedFortitude = form.createCheckBox('Mar Trei forti');
+  trainedFortitude.addToPage(page, { x: 32, y: 8, width: 8, height: 8 });
+  trainedFortitude.check();
   const trainedReflexes = form.createCheckBox('Mar Trei refle');
   trainedReflexes.addToPage(page, { x: 20, y: 8, width: 8, height: 8 });
   trainedReflexes.check();
@@ -184,9 +194,15 @@ export const createEditableCharacterSheet = async ({
 
 export const startHostedTestSession = async ({
   battleStarted = false,
+  prepareProfiles,
   bossDefense,
+  applyBossDamage,
   randomInteger,
   onCutsceneReady,
+  extraMedia,
+  referenceVariantStore,
+  resolveReferenceBook,
+  applyBossHealing,
   preloadMediaIds = [
     TEST_MEDIA_IDS.background,
     TEST_MEDIA_IDS.animation,
@@ -195,7 +211,13 @@ export const startHostedTestSession = async ({
   ],
 }: {
   battleStarted?: boolean;
+  prepareProfiles?: (store: PlayerProfileStore) => Promise<void>;
+  extraMedia?: Map<string, SessionMediaResource>;
+  referenceVariantStore?: import('../../../src/reference-variant-store').ReferenceVariantStore;
+  resolveReferenceBook?: import('../../../src/multiplayer/session-server').MultiplayerSessionServerOptions['resolveReferenceBook'];
+  applyBossHealing?: import('../../../src/multiplayer/session-server').MultiplayerSessionServerOptions['applyBossHealing'];
   bossDefense?: number;
+  applyBossDamage?: (bossId: string, damage: number) => { ok: boolean; appliedDamage: number };
   randomInteger?: (minimum: number, maximumExclusive: number) => number;
   onCutsceneReady?: (playerId: string, id: string, duration: number | null) => void;
   preloadMediaIds?: string[];
@@ -206,8 +228,13 @@ export const startHostedTestSession = async ({
     `bossbar-e2e-players-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   const playerProfileStore = await PlayerProfileStore.open(profileDirectory);
+  await prepareProfiles?.(playerProfileStore);
   const server = await MultiplayerSessionServer.start({
     getBossDefense: bossDefense === undefined ? undefined : () => bossDefense,
+    applyBossDamage,
+    applyBossHealing,
+    referenceVariantStore,
+    resolveReferenceBook,
     randomInteger,
     onCutsceneReady,
     playerProfileStore,
@@ -260,7 +287,7 @@ export const startHostedTestSession = async ({
       encounterSoundUrls: [],
     }),
     resolveMedia: ({ id }) => {
-      const resource = mediaResources.get(id) ?? null;
+      const resource = extraMedia?.get(id) ?? mediaResources.get(id) ?? null;
       if (resource) mediaRequests.set(id, (mediaRequests.get(id) ?? 0) + 1);
       return resource;
     },
@@ -293,7 +320,7 @@ export const joinHostedSession = async (
   await page.locator('#web-player-create-password').fill('test-password');
   await page.locator('#web-player-create-password-confirm').fill('test-password');
   await createDialog.getByRole('button', { name: 'Criar acesso' }).click();
-  const joined = await page.locator('.player-stage')
+  const joined = await page.getByRole('button', { name: 'Ficha', exact: true })
     .waitFor({ state: 'visible', timeout: 1_500 })
     .then(() => true)
     .catch(() => false);
@@ -309,7 +336,7 @@ export const joinHostedSession = async (
     await expect(page.locator('#web-player-confirmed-name')).toHaveText(playerName);
     await page.getByRole('button', { name: 'Confirmar' }).click();
   }
-  await expect(page.locator('.player-stage')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ficha', exact: true })).toBeVisible();
 };
 
 export const damageImpact = ({

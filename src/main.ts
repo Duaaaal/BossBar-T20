@@ -1,3 +1,6 @@
+import { openLocalReferenceBook, closeReferenceBookBrowser } from './reference-book-browser';
+import { parseReferenceLink } from './shared/reference-books';
+import { normalizeDamageReduction, damageContextError, reduceDamage, resolveDamageReduction, hasDamageImmunity, isDamageContext, type DamageContext } from './shared/damage-reduction';
 import {
   app,
   BrowserWindow,
@@ -23,6 +26,9 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { migrateCharacterSheetPdf } from './multiplayer/character-sheet-pdf';
+import { migrateEncounterCharacterSheets } from './multiplayer/character-sheet-migration';
+import { BLANK_CHARACTER_SHEET_ASSET_PATH } from './shared/character-sheet';
 import { normalizeEncounterCheckpoint, resumeEncounterTurns, type EncounterCheckpoint } from './shared/encounter-checkpoint';
 import { CutsceneCoordinator } from './cutscene-coordinator';
 import { cutsceneFade, cutsceneBlackoutSeconds, cutsceneMusicPosition, cutsceneNextMusicPosition, playlistPosition, normalizeSceneMediaFit } from './shared/scene';
@@ -217,6 +223,7 @@ import {
 import { PlayerProfileStore } from './multiplayer/player-profile-store';
 import { CustomStatusLibraryStore } from './custom-status-library-store';
 import { AttackLibraryStore } from './attack-library-store';
+import { ReferenceVariantStore } from './reference-variant-store';
 import {
   CLOUDFLARED_VERSION,
   ensureCloudflaredBinary,
@@ -301,11 +308,13 @@ const getPlayerProfileStore = () => {
   playerProfileStorePromise ??= PlayerProfileStore.open(path.join(
     app.getPath('userData'),
     'multiplayer-players',
-  ));
+  ), async (bytes) => migrateCharacterSheetPdf(bytes, await readFile(path.join(bundledAssetsDirectory(), BLANK_CHARACTER_SHEET_ASSET_PATH))));
   return playerProfileStorePromise;
 };
 let customStatusLibraryStorePromise: Promise<CustomStatusLibraryStore> | null = null;
 let attackLibraryStorePromise: Promise<AttackLibraryStore> | null = null;
+let referenceVariantStorePromise: Promise<ReferenceVariantStore> | null = null;
+const getReferenceVariantStore = () => referenceVariantStorePromise ??= ReferenceVariantStore.open(app.getPath('userData')).catch((error) => { referenceVariantStorePromise = null; throw error; });
 const getAttackLibraryStore = () => {
   attackLibraryStorePromise ??= AttackLibraryStore.open(app.getPath('userData')).catch((error) => {
     attackLibraryStorePromise = null;
@@ -1040,7 +1049,10 @@ const loadRenderer = (
     if (navigationUrl !== allowedUrl) event.preventDefault();
   };
 
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (parseReferenceLink(url)) void openLocalReferenceBook(url).catch((error) => dialog.showErrorBox('Referência indisponível', error instanceof Error ? error.message : 'Erro inesperado ao abrir o livro.'));
+    return { action: 'deny' };
+  });
   window.webContents.on('will-navigate', blockUnexpectedNavigation);
   window.webContents.on('will-redirect', blockUnexpectedNavigation);
   void window.loadURL(allowedUrl);
@@ -1295,6 +1307,7 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
       webIndexFile: 'web-player.html',
       assetRoot: bundledAssetsDirectory(),
       playerProfileStore,
+      referenceVariantStore: await getReferenceVariantStore().catch(() => undefined),
       initialSnapshot: ({ mediaUrl }) =>
         createHostedPresentationSnapshot(mediaUrl),
       resolveMedia: ({ id }) => hostedMediaSources.get(id) ?? null,
@@ -1375,6 +1388,12 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
           ? effective.values.meleeDefense
           : effective.values.rangedDefense;
       },
+      applyBossHealing: (bossId, amount, sourceParticipantId) => {
+        const before = battleState.bosses.find(({ id }) => id === bossId);
+        if (!before) return { ok: false, applied: 0, error: 'O inimigo não está mais disponível.' };
+        if (amount > 0) { rememberAppChange(); applyHealthMutation('heal', bossId, amount, { sourceParticipantId }); }
+        return { ok: true, applied: (battleState.bosses.find(({ id }) => id === bossId)?.currentHealth ?? before.currentHealth) - before.currentHealth };
+      },
       applyBossDamage: (bossId, damage, context) => {
         const before = battleState.bosses.find(
           (candidate) => candidate.id === bossId,
@@ -1386,6 +1405,8 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
             error: 'Chefão não encontrado.',
           };
         }
+        const rdError = damageContextError(normalizeDamageReduction(before.damageReductions, before.damageReduction), context);
+        if (rdError) return { ok: false, appliedDamage: 0, error: rdError };
         if (context?.nonlethal === true && before.currentHealth <= 1) {
           return { ok: true, appliedDamage: 0 };
         }
@@ -1393,11 +1414,13 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
         applyHealthMutation(
           'damage',
           bossId,
-          Math.max(1, Math.ceil(damage)),
+          Math.max(0, Math.ceil(damage)),
           {
             critical: context?.critical === true,
             minimumHealth: context?.nonlethal === true ? 1 : 0,
             sourceParticipantId: context?.sourceParticipantId,
+            damageType: context?.damageType,
+            damageOrigin: context?.damageOrigin,
           },
         );
         const after = battleState.bosses.find(
@@ -1433,7 +1456,8 @@ const startHostedSession = async (): Promise<HostedEncounterStartResult> => {
     const publicInvite = server.publicInviteUrl(tunnel.publicBaseUrl);
     hostedSessionServer = server;
     if (restoredEncounterCheckpoint) {
-      server.restoreEncounter({ ...restoredEncounterCheckpoint.multiplayer, turns: encounterTurnState });
+      restoredEncounterCheckpoint.multiplayer = await server.prepareEncounterSheets({ ...restoredEncounterCheckpoint.multiplayer, turns: encounterTurnState });
+      server.restoreEncounter(restoredEncounterCheckpoint.multiplayer);
     }
     hostedQuickTunnel = tunnel;
     hostedSessionPresence = server.getPresence();
@@ -1818,6 +1842,7 @@ const normalizeStoredLibraryBoss = (
     skillValues: resolveBossSkillValues(value.skills, skillValues, skillOverrides),
     skillOverrides,
     damageReduction: value.damageReduction,
+    damageReductions: normalizeDamageReduction(value.damageReductions, Number(value.damageReduction)),
     attacks,
     selectedAttackId: selectedBossAttack(attacks, value.selectedAttackId)?.id ?? attacks[0].id,
     description: value.description,
@@ -2298,6 +2323,7 @@ const normalizeLibraryDraft = (value: unknown): BossLibraryDraft | null => {
       skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
       skillOverrides,
       damageReduction: clampInteger(rawBoss.damageReduction as number, 0, 999),
+      damageReductions: normalizeDamageReduction(rawBoss.damageReductions, Number(rawBoss.damageReduction)),
       attacks,
       selectedAttackId:
         selectedBossAttack(attacks, rawBoss.selectedAttackId)?.id ?? attacks[0].id,
@@ -2347,6 +2373,7 @@ const captureLibraryEntry = (
     skillValues: boss.skillValues,
     skillOverrides: boss.skillOverrides,
     damageReduction: boss.damageReduction,
+    damageReductions: normalizeDamageReduction(boss.damageReductions, Number(boss.damageReduction)),
     attacks: boss.attacks,
     selectedAttackId: boss.selectedAttackId,
     description: boss.description,
@@ -2426,6 +2453,7 @@ const captureLibraryEntry = (
         skillValues: boss.skillValues,
         skillOverrides: boss.skillOverrides,
         damageReduction: boss.damageReduction,
+        damageReductions: normalizeDamageReduction(boss.damageReductions, Number(boss.damageReduction)),
         attacks: boss.attacks,
         selectedAttackId: boss.selectedAttackId,
         description: boss.nextAction,
@@ -2515,6 +2543,7 @@ const getBossLibrarySummaries = (): BossLibraryEntrySummary[] =>
         shield: boss.shield ?? 0,
         skills: boss.skills,
         damageReduction: boss.damageReduction,
+        damageReductions: normalizeDamageReduction(boss.damageReductions, Number(boss.damageReduction)),
       })),
       updatedAt: entry.updatedAt,
     }));
@@ -5356,6 +5385,7 @@ ipcMain.handle(
     event,
     participantId: unknown,
     extremeAdvantage: unknown,
+    effects: unknown,
   ): EncounterTurnActionResult => {
     if (typeof participantId !== 'string' || participantId.length > 160) {
       return { ok: false, error: 'Participante inválido.' };
@@ -5364,9 +5394,10 @@ ipcMain.handle(
       return { ok: false, error: 'Configuração de vantagem inválida.' };
     }
     const useExtremeAdvantage = extremeAdvantage === true;
+    if(effects!==undefined&&!validSkillActivations(effects))return {ok:false,error:'Situações de perícia inválidas.'};
     if (isControlSender(event.sender.id)) {
       return hostedSessionServer
-        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage)
+        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage,effects)
         : rollLocalEncounterInitiative(
           participantId,
           new Set(['boss', 'npc']),
@@ -5375,7 +5406,7 @@ ipcMain.handle(
     }
     if (isPlayerSender(event.sender.id)) {
       return hostedSessionServer
-        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage)
+        ? hostedSessionServer.rollInitiativeAsHost(participantId, useExtremeAdvantage,effects)
         : rollLocalEncounterInitiative(participantId, new Set(['npc']));
     }
     return { ok: false, error: 'Ação não autorizada.' };
@@ -6229,10 +6260,37 @@ ipcMain.handle('attack-library:get', async (event) => {
   assertAuthorizedIpcSender(event.sender.id === attackLibraryWindow?.webContents.id || isControlSender(event.sender.id) || isSceneEditorSender(event.sender.id));
   return (await getAttackLibraryStore()).list();
 });
-ipcMain.handle('player:roll-resistance', (event, id: unknown) => {
+ipcMain.handle('reference-variants:get', async (event) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  try { return { ok: true, variants: (await getReferenceVariantStore()).list() }; }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Erro inesperado ao carregar variantes.' }; }
+});
+ipcMain.handle('multiplayer:heal-target', (event, request: unknown) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  rememberAppChange();
+  return hostedSessionServer?.healEncounterTarget(request) ?? { ok: false, error: 'A sala está indisponível.' };
+});
+ipcMain.handle('reference-variants:save', async (event, draft: unknown) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  try { const store = await getReferenceVariantStore(); await store.create(draft); return { ok: true, variants: store.list() }; }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Erro inesperado ao salvar a variante.' }; }
+});
+ipcMain.handle('reference-variants:review', async (event, id: unknown, approve: unknown) => {
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id));
+  if (typeof id !== 'string' || typeof approve !== 'boolean') return { ok: false, error: 'Revisão inválida.' };
+  try { const store = await getReferenceVariantStore(); await store.review(id, approve); return { ok: true, variants: store.list() }; }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Erro inesperado ao revisar a variante.' }; }
+});
+ipcMain.handle('player:set-skill-effect',(event,playerId:unknown,change:unknown)=>{
+  assertAuthorizedIpcSender(isMasterSender(event.sender.id)||Boolean(playerWindow&&event.sender.id===playerWindow.webContents.id));
+  if(typeof playerId!=='string')return {ok:false,error:'Personagem inválido.'};
+  return hostedSessionServer?.setSkillEffectAsHost(playerId,change)??{ok:false,error:'Sala indisponível.'};
+});
+ipcMain.handle('player:roll-resistance', (event, id: unknown,effects:unknown) => {
   assertAuthorizedIpcSender(Boolean(playerWindow && event.sender.id === playerWindow.webContents.id));
   if (typeof id !== 'string' || id.length > 160) return { ok: false, error: 'Teste inválido.' };
-  return hostedSessionServer?.rollResistance(id) ?? { ok: false, error: 'Sala indisponível.' };
+  if(effects!==undefined&&!validSkillActivations(effects))return {ok:false,error:'Situações de perícia inválidas.'};
+  return hostedSessionServer?.rollResistance(id,undefined,effects) ?? { ok: false, error: 'Sala indisponível.' };
 });
 ipcMain.handle('attack-library:save', async (event, attack: unknown, remove: unknown) => {
   assertAuthorizedIpcSender(event.sender.id === attackLibraryWindow?.webContents.id || isControlSender(event.sender.id) || isSceneEditorSender(event.sender.id));
@@ -6811,10 +6869,16 @@ ipcMain.handle(
   },
 );
 
-const restoreLibraryEntry = (
+const restoreLibraryEntry = async (
   entry: BossLibraryEntry,
   missingKeys: Set<string>,
-): BossLibraryLoaded => {
+): Promise<BossLibraryLoaded> => {
+  if (entry.checkpoint) {
+    const blank = await readFile(path.join(bundledAssetsDirectory(), BLANK_CHARACTER_SHEET_ASSET_PATH));
+    entry = { ...entry, checkpoint: { ...entry.checkpoint,
+      multiplayer: await migrateEncounterCharacterSheets(entry.checkpoint.multiplayer, blank),
+    } };
+  }
   pendingRestoredCutscene = null;
   initialEncounterSnapshot = entry.initialState ? structuredClone(entry.initialState) : null;
   const checkpoint = entry.checkpoint ?? null;
@@ -6857,6 +6921,7 @@ const restoreLibraryEntry = (
       skillValues: resolveBossSkillValues(skillBase, rawSkillValues, skillOverrides),
       skillOverrides,
       damageReduction: clampInteger(storedBoss.damageReduction, 0, 999),
+      damageReductions: normalizeDamageReduction(storedBoss.damageReductions, Number(storedBoss.damageReduction)),
       attacks,
       selectedAttackId:
         selectedBossAttack(attacks, storedBoss.selectedAttackId)?.id ?? attacks[0].id,
@@ -6999,6 +7064,7 @@ const restoreLibraryEntry = (
           };
         })(),
         damageReduction: clampInteger(template.damageReduction, 0, 999),
+        damageReductions: normalizeDamageReduction(template.damageReductions, Number(template.damageReduction)),
         attacks: normalizeBossAttacks(template.attacks, template.bossId),
         selectedAttackId: (() => {
           const attacks = normalizeBossAttacks(template.attacks, template.bossId);
@@ -7086,9 +7152,11 @@ const restoreLibraryEntry = (
   // character/turn data; never initialize initiative or replay phase patches.
   broadcastBattleState();
   if (hostedSessionServer) {
-    hostedSessionServer.restoreEncounter(restoredEncounterCheckpoint?.multiplayer ?? {
+    const prepared = restoredEncounterCheckpoint?.multiplayer ?? {
       players: [], turns: encounterTurnState,
-    });
+    };
+    if (restoredEncounterCheckpoint) restoredEncounterCheckpoint.multiplayer = prepared;
+    hostedSessionServer.restoreEncounter(prepared);
   } else {
     playerHudState = [];
     broadcastPlayerHuds();
@@ -7150,7 +7218,7 @@ ipcMain.handle('encounter:reset', async (event) => {
   const baseline = encounterWaitingSnapshot(initial);
   const linkedId = linkedLibraryEntryId;
   rememberAppChange();
-  const loaded = restoreLibraryEntry(baseline, new Set());
+  const loaded = await restoreLibraryEntry(baseline, new Set());
   initialEncounterSnapshot = baseline;
   linkedLibraryEntryId = linkedId;
   masterWindow?.webContents.send('library:boss-loaded', loaded);
@@ -7178,7 +7246,7 @@ ipcMain.handle(
     }
 
     const snapshot = captureAppUndoSnapshot();
-    const loaded = restoreLibraryEntry(
+    const loaded = await restoreLibraryEntry(
       entry,
       new Set(missingFiles.map((file) => file.key)),
     );
@@ -8295,7 +8363,7 @@ const applyHealthMutation = (
   type: 'damage' | 'heal' | 'reset-health',
   bossId: string,
   amount = 0,
-  options: {
+  options: DamageContext & {
     critical?: boolean;
     minimumHealth?: number;
     sourceParticipantId?: string;
@@ -8304,6 +8372,11 @@ const applyHealthMutation = (
 ) => {
   const previousBoss = battleState.bosses.find((boss) => boss.id === bossId);
   if (!previousBoss) return;
+  if (type === 'damage') {
+    const statusReduction = deriveStatusAttributes({ attack: 0, rangedAttack: 0, skills: 0, meleeDefense: 0, rangedDefense: 0, damageReduction: 0, shield: 0 }, previousBoss.activeStatuses, encounterEffectsAudioState.general.automaticStatusEffects).values.damageReduction;
+    amount = reduceDamage(amount, normalizeDamageReduction(previousBoss.damageReductions, previousBoss.damageReduction), options, statusReduction);
+    if (amount === 0) return;
+  }
   const command =
     type === 'reset-health'
       ? ({ type: 'reset-health', bossId } as const)
@@ -8429,6 +8502,7 @@ ipcMain.handle(
 
     if (
       !request ||
+      !isDamageContext(request) ||
       typeof request.bossId !== 'string' ||
       (request.type !== 'damage' && request.type !== 'heal') ||
       !Number.isFinite(request.total) ||
@@ -8450,6 +8524,8 @@ ipcMain.handle(
     const boss = battleState.bosses.find((item) => item.id === request.bossId);
     if (!boss) return { ok: false, error: 'Chefão não encontrado.' };
 
+    const rdError = request.type === 'damage' ? damageContextError(normalizeDamageReduction(boss.damageReductions, boss.damageReduction), request) : null;
+    if (rdError) return { ok: false, error: rdError };
     const total = Math.min(1_000_000, Math.ceil(request.total));
     const effectiveAttributes = deriveStatusAttributes(
       {
@@ -8464,11 +8540,12 @@ ipcMain.handle(
       boss.activeStatuses,
       encounterEffectsAudioState.general.automaticStatusEffects,
     );
-    const { effectiveAmountPerHit } = calculateHealthSequence({
+    const { effectiveAmountPerHit, amounts } = calculateHealthSequence({
       type: request.type,
       total,
       hits: request.hits,
-      damageReduction: effectiveAttributes.values.damageReduction,
+      damageReduction: resolveDamageReduction(normalizeDamageReduction(boss.damageReductions, boss.damageReduction), request, effectiveAttributes.modifiers.damageReduction),
+      damageImmunity: hasDamageImmunity(normalizeDamageReduction(boss.damageReductions, boss.damageReduction), request),
       ignoreDamageReduction: request.ignoreDamageReduction,
     });
 
@@ -8480,7 +8557,7 @@ ipcMain.handle(
       );
     }
     rememberAppChange(snapshot);
-    applyHealthMutation(request.type, request.bossId, effectiveAmountPerHit);
+    applyHealthMutation(request.type, request.bossId, amounts[0], { ignoreDamageReduction: true });
 
     if (request.hits > 1) {
       const startedAt = Date.now();
@@ -8493,7 +8570,8 @@ ipcMain.handle(
           applyHealthMutation(
             request.type,
             request.bossId,
-            effectiveAmountPerHit,
+            amounts[nextHit],
+            { ignoreDamageReduction: true },
           );
           nextHit += 1;
           if (nextHit < request.hits) scheduleNextHit();
@@ -8645,7 +8723,7 @@ const beginBossStatusTurn = (bossId: string) => {
   ) return;
 
   rememberAppChange();
-  const advancedTurn = advanceBossTurn(battleState, bossId, randomInt);
+  const advancedTurn = advanceBossTurn(battleState, bossId, randomInt, encounterEffectsAudioState.general.automaticStatusEffects);
   battleState = clampSceneOverflowDamage(advancedTurn.state, previousBoss);
   broadcastBattleState(false, false);
   const nextBoss = battleState.bosses.find((boss) => boss.id === bossId);
@@ -8810,6 +8888,7 @@ ipcMain.on('battle:dispatch', (event, command: unknown) => {
       command.type,
       command.bossId,
       command.type === 'reset-health' ? 0 : command.amount,
+      command.type === 'damage' ? command : {},
     );
     return;
   }
@@ -9177,6 +9256,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  void closeReferenceBookBrowser().catch(() => undefined);
   allowAppClose = true;
   allowControlWindowClose = true;
   controlWindow?.setClosable(true);
@@ -9210,3 +9290,4 @@ app.on('activate', () => {
     createLauncherWindow();
   }
 });
+import { validSkillActivations } from './shared/skill-test-context';

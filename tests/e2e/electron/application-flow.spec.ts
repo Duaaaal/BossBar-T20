@@ -53,6 +53,8 @@ test('abre launcher, mestre, apresentação e painel usando perfil descartável'
     await launcher.getByRole('button', { name: 'Novo encontro' }).click();
     const master = await windowByTitle(application, 'Controle do Mestre - BossBar T20');
     const player = await windowByTitle(application, 'Apresentação do Chefão - BossBar T20');
+    expect(await player.evaluate(() => typeof window.bossAPI.setPlayerSkillEffect)).toBe('function');
+    expect((await player.evaluate(() => window.bossAPI.setPlayerSkillEffect('unavailable', { id: 'test', active: false }))).ok).toBe(false);
     const control = await windowByTitle(application, 'Painel Privado do Encontro - BossBar T20');
 
     await player.evaluate(() => {

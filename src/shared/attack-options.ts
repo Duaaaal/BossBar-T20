@@ -5,14 +5,14 @@ export const METRIC_RANGES: readonly string[] = ['Raio', 'Cone', 'Linha', 'Cilin
 const normalizeLabel = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/\s+/g, ' ');
 export const normalizeDamageType = (value: string): string | null => {
   const normalized = normalizeLabel(value);
-  const aliases: Record<string, string> = { cortante: 'Corte', perfurante: 'Perfuração', contundente: 'Impacto', eletrico: 'Eletricidade' };
+  const aliases: Record<string, string> = { cortante: 'Corte', perfurante: 'Perfuração', 'perf.': 'Perfuração', perf: 'Perfuração', 'cort.': 'Corte', 'cont.': 'Impacto', 'impac.': 'Impacto', contundente: 'Impacto', eletrico: 'Eletricidade' };
   return DAMAGE_TYPES.find((type) => normalizeLabel(type) === normalized) ?? aliases[normalized] ?? null;
 };
 export const normalizeAttackRange = (value: string): string | null => {
   const normalized = normalizeLabel(value).replace(/\s*(\d+)\s*m\b/g, '$1m');
   const exact = ATTACK_RANGES.find((range) => normalizeLabel(range).replace(/\s*(\d+)\s*m\b/g, '$1m') === normalized);
   if (exact) return exact;
-  const aliases: Record<string, string> = { 'corpo a corpo': 'Adjacente', curto: 'Curto (9m)', medio: 'Médio (30m)', longo: 'Longo (90m)', '9m': 'Curto (9m)', '30m': 'Médio (30m)', '90m': 'Longo (90m)', '1,5m': 'Adjacente', '1.5m': 'Adjacente' };
+  const aliases: Record<string, string> = { '-': 'Adjacente', '—': 'Adjacente', 'corpo a corpo': 'Adjacente', curto: 'Curto (9m)', medio: 'Médio (30m)', longo: 'Longo (90m)', '9m': 'Curto (9m)', '30m': 'Médio (30m)', '90m': 'Longo (90m)', '1,5m': 'Adjacente', '1.5m': 'Adjacente' };
   if (aliases[normalized]) return aliases[normalized];
   const metric = /^(raio|cone|linha|cilindro|esfera|quadrado|cubo)\s*(\d{1,4})m$/.exec(normalized);
   return metric && Number(metric[2]) > 0 ? `${METRIC_RANGES.find((range) => normalizeLabel(range) === metric[1])} ${Number(metric[2])}m` : null;

@@ -21,6 +21,8 @@ export const bossApiMethodsByRole = {
     'subscribeHostedSessionStartupProgress',
   ],
   master: [
+    'healEncounterTarget',
+    'getReferenceVariants', 'saveReferenceVariant', 'reviewReferenceVariant',
     'openAttackLibrary',
     'resetEncounter',
     'addEncounterSound',
@@ -88,6 +90,7 @@ export const bossApiMethodsByRole = {
     'undoLastChange',
   ],
   player: [
+    'setPlayerSkillEffect',
     'requestControlledPlayerAction',
     'rollResistance', 'setAutomaticResistance',
     'getPresentationMedia',

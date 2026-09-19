@@ -1,3 +1,6 @@
+import { PlayerSkillEffectsControl } from './player-skill-effects';
+import { sheetAttackTestExpression } from './shared/character-sheet-loadout';
+import { availableSkillSituations, skillForSituation, type SkillTestActivation } from './shared/skill-test-context';
 import {
   type CSSProperties,
   memo,
@@ -41,7 +44,9 @@ import type { ScenePlan, SceneTransitionEvent } from './shared/scene';
 import { cutsceneFade } from './shared/scene';
 import { PhaseEntrance, PhaseHudEntrance } from './PhaseEntrance';
 import { finishPhaseAudioHandoff, takePhaseAudioHandoff } from './phase-audio-handoff';
-import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback } from './gapless-audio-loop';
+import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback, normalizedMediaPosition } from './gapless-audio-loop';
+import { parseCombatAdjustment } from './shared/combat-adjustment';
+import { parseDamageFormula } from './shared/status';
 import { CutscenePlayer } from './CutscenePlayer';
 import { warmPresentationMedia, presentationMediaUrl, clearPresentationMedia } from './presentation-media-cache';
 import {
@@ -112,14 +117,16 @@ const announcePlayerNotice = (
 const healthPercent = (current: number, maximum: number) =>
   Math.max(0, Math.min(100, (current / maximum) * 100));
 
-function ResistanceButton({ id, label, skill, dc, compact = false }: import('./shared/resistance').ResistancePrompt & { compact?: boolean }) {
+function ResistanceButton({ id, label, skill, dc, compact = false }: import('./shared/resistance').ResistancePrompt & { compact?: boolean; summary?:import('./shared/character-sheet').CharacterSheetSummary|null }) {
   const [busy, setBusy] = useState(false);
-  return <button className="player-resistance-prompt" type="button" disabled={busy} title={`${label}: ${skill} CD ${dc}`} onClick={() => {
+  return <div className="player-resistance-controls"><button className="player-resistance-prompt" type="button" disabled={busy} title={`${label}: ${skill} CD ${dc}`} onClick={() => {
     setBusy(true);
     void window.bossAPI.rollResistance(id).then((result) => {
       if (!result.ok) announcePlayerNotice(result.error ?? 'Não foi possível fazer o teste.', 'rejected');
     }).catch(() => announcePlayerNotice('A conexão falhou. Tente novamente.', 'rejected')).finally(() => setBusy(false));
-  }}>{compact ? '' : `${label} · `}{skill} CD {dc} · {busy ? 'Aguarde' : 'Rolar'}</button>;
+  }}>{compact ? '' : `${label} · `}{skill} CD {dc} · {busy ? 'Aguarde' : 'Rolar'}</button>
+
+  </div>;
 }
 
 const healthMarkers = Array.from({ length: 99 }, (_, index) => index + 1);
@@ -911,6 +918,16 @@ const MusicPlayer = ({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioMountRef = useRef<HTMLSpanElement>(null);
   const adoptedRelease = useRef<(() => void) | null>(null);
+  const adoptedAudioRelease = useRef<(() => void) | null>(null);
+  const preparedNextTrack = useRef<{ id: string; url: string; audio: HTMLAudioElement } | null>(null);
+  const discardPreparedNextTrack = useCallback(() => {
+    const prepared = preparedNextTrack.current;
+    preparedNextTrack.current = null;
+    if (!prepared) return;
+    prepared.audio.pause();
+    prepared.audio.removeAttribute('src');
+    prepared.audio.load();
+  }, []);
   useEffect(() => {
     const audio = new Audio();
     audio.crossOrigin = 'anonymous';
@@ -1173,24 +1190,41 @@ const MusicPlayer = ({
       phaseGainRef.current = phaseGain;
       muteGainNodeRef.current = muteGain;
       adoptedRelease.current = incoming.release;
+      adoptedAudioRelease.current = incoming.releaseAudio;
       incoming.audio.loop = music?.loop ?? false;
       setOutputMuted(outputMuted);
       setOutputGain((music?.volume ?? 0.8) * clientPreferences.musicVolume);
       reportProgress();
       return;
     }
-    // A transferred graph is exclusively owned by its decoder. Dispose it
-    // before changing tracks, then create a normal graph for the new source.
-    if (adoptedRelease.current) {
-      releaseSfxDucking.current?.(); releaseSfxDucking.current = null;
-      adoptedRelease.current(); adoptedRelease.current = null;
-      audioContextRef.current = null; sourceNodeRef.current = null;
-      gainNodeRef.current = null; phaseGainRef.current = null; muteGainNodeRef.current = null;
+    const prepared = preparedNextTrack.current;
+    const preparedAudio = prepared?.id === currentTrack.id && prepared.url === currentTrack.url && !prepared.audio.error
+      ? prepared.audio : null;
+    if (preparedAudio) preparedNextTrack.current = null;
+    // Keep the already-running context and output gains when the transferred
+    // intro ends. Only its decoder/source belong to the cutscene owner.
+    if (adoptedRelease.current || preparedAudio) {
+      if (adoptedAudioRelease.current) adoptedAudioRelease.current();
+      else {
+        audio.pause(); audio.removeAttribute('src'); audio.load();
+        sourceNodeRef.current?.disconnect();
+      }
+      adoptedAudioRelease.current = null;
+      adoptedRelease.current = null;
       audio.remove();
-      audio = new Audio(); audio.crossOrigin = 'anonymous'; audio.className = 'music-player';
-      audioRef.current = audio; audioMountRef.current?.append(audio);
+      audio = preparedAudio ?? new Audio();
+      if (!preparedAudio) audio.crossOrigin = 'anonymous';
+      audio.className = 'music-player';
+      audioRef.current = audio;
+      audioMountRef.current?.append(audio);
+      const context = audioContextRef.current;
+      if (context && gainNodeRef.current) {
+        const source = context.createMediaElementSource(audio);
+        source.connect(gainNodeRef.current);
+        sourceNodeRef.current = source;
+      }
     }
-    audio.src = presentationMediaUrl(currentTrack.url);
+    if (!preparedAudio) audio.src = presentationMediaUrl(currentTrack.url);
     audio.loop = music?.loop ?? false;
     const restorePosition = () => {
       const time = music?.resumeTime ?? 0;
@@ -1201,17 +1235,41 @@ const MusicPlayer = ({
         audio.currentTime = duration > 0 ? music?.loop ? time % duration : Math.min(time, Math.max(0, duration - 0.01)) : time;
       }
     };
-    audio.addEventListener('loadedmetadata', restorePosition, { once: true });
+    if (preparedAudio && audio.readyState >= 1) restorePosition();
+    else audio.addEventListener('loadedmetadata', restorePosition, { once: true });
     setOutputMuted(outputMuted);
     if (music?.isPlaying || gainNodeRef.current) {
       setOutputGain((music?.volume ?? 0.8) * clientPreferences.musicVolume);
     }
-    audio.load();
+    if (!preparedAudio) audio.load();
     const disposeLoop = audioContextRef.current && sourceNodeRef.current && gainNodeRef.current
       ? installGaplessLoop(audio, audioContextRef.current, sourceNodeRef.current, gainNodeRef.current) : () => undefined;
     if (music?.isPlaying) void audio.play().catch((): void => {});
     return () => { disposeLoop(); audio.removeEventListener('loadedmetadata', restorePosition); };
   }, [currentTrack?.id, music?.externalPlayback, music?.playbackVersion, setOutputGain, setOutputMuted, stopDuck, stopFade]);
+
+  // Prepare one unbound decoder. Main still selects the next track; preparing
+  // it early avoids opening the media only after the current track has ended.
+  // This effect has no per-track cleanup: the transport effect above must be
+  // able to take the prepared element before we prepare its successor.
+  useEffect(() => {
+    const tracks = music?.tracks ?? [];
+    const index = tracks.findIndex((track) => track.id === currentTrack?.id);
+    const next = battle.battleStarted && !music?.externalPlayback && !music?.loop && !currentTrack?.loop && index >= 0 && tracks.length > 1
+      ? tracks[(index + 1) % tracks.length] : undefined;
+    const previous = preparedNextTrack.current;
+    if (next && previous?.id === next.id && previous.url === next.url) return;
+    discardPreparedNextTrack();
+    if (!next) return;
+    const audio = new Audio();
+    audio.crossOrigin = 'anonymous';
+    audio.preload = 'auto';
+    audio.src = presentationMediaUrl(next.url);
+    preparedNextTrack.current = { id: next.id, url: next.url, audio };
+    audio.load();
+  }, [battle.battleStarted, currentTrack?.id, currentTrack?.loop, music?.externalPlayback, music?.loop, music?.tracks, discardPreparedNextTrack]);
+
+  useEffect(() => discardPreparedNextTrack, [discardPreparedNextTrack]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -1254,12 +1312,7 @@ const MusicPlayer = ({
       const audio = audioRef.current;
       if (!audio || music?.externalPlayback || !Number.isFinite(time)) return;
       const maximum = currentTrack?.duration || audio.duration;
-      seekMediaPlayback(audio, Math.max(
-        0,
-        Number.isFinite(maximum) && maximum > 0
-          ? Math.min(time, maximum)
-          : time,
-      ));
+      seekMediaPlayback(audio, normalizedMediaPosition(time, maximum, audio.loop));
       reportProgress();
   };
   // Channels replay their latest event on subscribe. Resubscribing on every
@@ -1304,6 +1357,7 @@ const MusicPlayer = ({
     if (adoptedRelease.current) adoptedRelease.current();
     else void audioContextRef.current?.close();
     adoptedRelease.current = null;
+    adoptedAudioRelease.current = null;
     audioContextRef.current = null;
     gainNodeRef.current = null;
     muteGainNodeRef.current = null;
@@ -1650,6 +1704,7 @@ const EncounterEffectsPlayer = ({
 
 const formatRollResultDice = (result: EncounterRollResult) => {
   const rollMode = (result as { rollMode?: string }).rollMode;
+  if ((rollMode === 'best' || rollMode === 'worst') && result.rolls.length >= 2) return `${formatEncounterDiceRolls(result.expression, result.rolls)} · ${rollMode === 'best' ? 'melhor' : 'pior'} d20: ${rollMode === 'best' ? Math.max(...result.rolls.slice(0,2)) : Math.min(...result.rolls.slice(0,2))}`;
   if (rollMode === 'reroll' && result.rolls.length >= 2) {
     const originalRoll = Math.abs(result.rolls[0]);
     const replacementRoll = Math.abs(result.rolls[1]);
@@ -1943,7 +1998,7 @@ const PlayerHudCard = ({
       data-disconnected={(player.disconnected && !player.controlledByMaster) || undefined}
     >
       {(player.disconnected || player.controlledByMaster) && <small className="player-reconnection-label">{player.controlledByMaster ? 'Controlado pelo mestre' : 'Aguardando reconexão'}</small>}
-      {(player.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} />)}
+      {(player.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} summary={summary} />)}
       <button
         className={`party-player-portrait ${player.portraitUrl ? 'has-image' : ''}`}
         type="button"
@@ -2113,9 +2168,9 @@ const PlayerHudCard = ({
             {summary.attacks.length > 0
               ? summary.attacks.map((attack, index) => (
                 <span key={`${attack.name}:${index}`}>
-                  {attack.name || 'Ataque'}{' '}
+                  {attack.name || 'Ataque'}{attack.primary ? ' (principal)' : ''}{' '}
                   <b>
-                    {[attack.attackBonus, attack.damage, attack.critical]
+                    {[sheetAttackTestExpression(attack, summary), attack.damage, attack.critical, attack.secondaryWeapon ? `Segunda arma: ${attack.secondaryWeapon.name} · ${attack.secondaryWeapon.damage}` : '']
                       .filter(Boolean).join(' · ') || '—'}
                   </b>
                 </span>
@@ -2337,7 +2392,7 @@ const SelfRollResults = ({
   return selfHud ? createPortal(results, selfHud) : results;
 };
 
-type SelfCombatModal = 'skill' | 'attack' | 'action-point' | 'hero-point';
+type SelfCombatModal = 'skill' | 'attack' | 'healing' | 'action-point' | 'hero-point';
 type TestResourceChoice =
   | 'none'
   | 'action-intervention'
@@ -2401,6 +2456,8 @@ const SelfCombatControls = ({
   const [modal, setModal] = useState<SelfCombatModal | null>(null);
   const [skillId, setSkillId] = useState('');
   const [attackIndex, setAttackIndex] = useState(0);
+  const principalAttackIndex = summary?.attacks.findIndex((attack) => attack.primary) ?? -1;
+  useEffect(() => { if (principalAttackIndex >= 0) setAttackIndex(principalAttackIndex); }, [principalAttackIndex]);
   const [targetBossId, setTargetBossId] = useState('');
   const [damageFormula, setDamageFormula] = useState('');
   const [extraAttackModifier, setExtraAttackModifier] = useState('0');
@@ -2411,9 +2468,22 @@ const SelfCombatControls = ({
       ? 'ranged'
       : 'melee',
   );
+  const attackSkillId=(secondary=false)=>{
+    const attack=summary?.attacks[attackIndex];const weapon=secondary?attack?.secondaryWeapon:attack;
+    return (attackIndex===-1||weapon?.skill==='Luta'||!weapon?.skill&&attackType==='melee')?'190':'260';
+  };
+  const testingSkillId=modal==='attack'?attackSkillId():skillId;
+  const skillSituations=useMemo(()=>availableSkillSituations(summary?.skillContext,testingSkillId),[summary?.skillContext,testingSkillId]);
+  const secondSkillId=modal==='attack'&&summary?.attacks[attackIndex]?.secondaryWeapon?attackSkillId(true):'';
+  const secondarySituations=useMemo(()=>availableSkillSituations(summary?.skillContext,secondSkillId),[summary?.skillContext,secondSkillId]);
+  const selectedSkillEffects:SkillTestActivation[]=(self?.skillEffects||[]).filter(effect=>skillSituations.some(option=>option.id===effect.id));
+  const secondaryEffects:SkillTestActivation[]=(self?.skillEffects||[]).filter(effect=>secondarySituations.some(option=>option.id===effect.id)&&!(effect.duration.unit==='test'&&selectedSkillEffects.some(first=>first.id===effect.id)));
+  const skillPreview=summary&&selectedSkillEffects.every(e=>e.situation.trim())?skillForSituation(summary,testingSkillId,selectedSkillEffects).skill:undefined;
   const [busy, setBusy] = useState(false);
   const [linkToPreviousRoll, setLinkToPreviousRoll] = useState(false);
   const [stabilizeTargetId, setStabilizeTargetId] = useState('');
+  const [healingTarget, setHealingTarget] = useState('');
+  const [healingFormula, setHealingFormula] = useState('');
   const actionAttemptRef = useRef<CombatActionAttempt | null>(null);
   const previousRollResult = turn.rollResults.at(-1);
   const previousRollCorrelationId = previousRollResult
@@ -2454,6 +2524,7 @@ const SelfCombatControls = ({
     }
     const attack = summary?.attacks[attackIndex];
     if (attack?.damage) setDamageFormula(attack.damage);
+    if (attack?.skill) setAttackType(attack.skill === 'Luta' ? 'melee' : 'ranged');
   }, [attackIndex, summary, unarmedAttack]);
 
   useEffect(() => {
@@ -2523,6 +2594,7 @@ const SelfCombatControls = ({
 
   const submit = async () => {
     if (busy || sheetLocked) return;
+    if((modal==='skill'||modal==='attack')&&[...selectedSkillEffects,...secondaryEffects].some(e=>!e.situation.trim()||[...skillSituations,...secondarySituations].find(s=>s.id===e.id)?.options&&![...skillSituations,...secondarySituations].find(s=>s.id===e.id)!.options!.includes(e.value!))){announcePlayerNotice('Descreva a situação e escolha o valor dos efeitos ativados antes de rolar.');return;}
     const rollingInitiative =
       modal === 'skill' &&
       initiativePending &&
@@ -2537,6 +2609,7 @@ const SelfCombatControls = ({
       const result = await window.bossAPI.rollEncounterInitiative(
         controlledPlayerId ? `player:${controlledPlayerId}` : undefined,
         resource === 'hero-advantage',
+        undefined,
       );
       announcePlayerNotice(
         result.ok
@@ -2570,7 +2643,10 @@ const SelfCombatControls = ({
             ? { correlationId: previousRollCorrelationId }
             : {}),
         };
+    } else if (modal === 'healing') {
+      request = { kind: 'healing', targetParticipantId: healingTarget, formula: healingFormula, actionId: crypto.randomUUID() };
     } else if (modal === 'attack' && targetBossId) {
+      if (!parseCombatAdjustment(extraAttackModifier) || !parseCombatAdjustment(extraDamageModifier)) { announcePlayerNotice('Nos bônus de ataque e dano, use números e dados com + ou −, como 1d6 + 3 − 1d4.'); return; }
       const attempt = actionAttemptRef.current?.kind === 'attack'
         ? actionAttemptRef.current
         : { kind: 'attack' as const, id: crypto.randomUUID() };
@@ -2584,8 +2660,8 @@ const SelfCombatControls = ({
         attackType: attackIndex === -1 ? 'melee' : attackType,
         targetBossId,
         damageFormula,
-        extraAttackModifier: Number(extraAttackModifier || 0),
-        extraDamageModifier: Number(extraDamageModifier || 0),
+        extraAttackModifier: extraAttackModifier || '0',
+        extraDamageModifier: extraDamageModifier || '0',
         resource: combatResource(),
         actionId: attempt.id,
         ...(linkToPreviousRoll && previousRollCorrelationId
@@ -2677,7 +2753,8 @@ const SelfCombatControls = ({
 
   const hudControls = (
     <div className="self-combat-shortcuts" aria-label="Ações e recursos">
-      {!controlledPlayerId && (self.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} compact />)}
+      <PlayerSkillEffectsControl player={self} round={turn.round} disabled={sheetLocked||turn.startedAt===null}/>
+      {!controlledPlayerId && (self.pendingResistances ?? []).map((pending) => <ResistanceButton key={pending.id} {...pending} summary={summary} compact />)}
       <button
         className={initiativePending
           ? 'is-initiative-pending'
@@ -2714,6 +2791,7 @@ const SelfCombatControls = ({
       >
         ⚔
       </button>
+      <button type="button" aria-label="Realizar cura" data-app-tooltip="Cura manual · exige aprovação e ação padrão" disabled={sheetLocked || !active || !self.actions.standard || incapacitated} onClick={() => { setHealingTarget(`player:${self.id}`); setModal('healing'); }}>✚</button>
       {self.pendingDamage && (
         <button
           className={`is-pending-damage ${self.pendingDamage.critical ? 'is-critical' : ''}`}
@@ -2743,7 +2821,7 @@ const SelfCombatControls = ({
       >
         <header>
           <h2 id="player-combat-modal-title">
-            {modal === 'skill'
+            {modal === 'healing' ? 'Realizar cura' : modal === 'skill'
               ? 'Teste de perícia'
               : modal === 'attack'
                 ? 'Realizar ataque'
@@ -2755,6 +2833,11 @@ const SelfCombatControls = ({
             ×
           </button>
         </header>
+        {modal === 'healing' && <>
+          <label><span>Alvo da cura</span><select value={healingTarget} onChange={(event) => setHealingTarget(event.target.value)}>{turn.participants.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}</select></label>
+          <label><span>Cura em PV</span><input type="text" maxLength={120} value={healingFormula} onChange={(event) => setHealingFormula(event.target.value)} placeholder="Ex.: 2d8 + 5" /></label>
+          <p>A rolagem e a cura acontecem após aprovação do mestre e utilizam sua ação padrão. A cura recupera PV até o máximo do alvo.</p>
+        </>}
         {modal === 'skill' && (
           <div
             className={`player-skill-table ${
@@ -2764,7 +2847,7 @@ const SelfCombatControls = ({
           >
             {summary.skills.map((skill) => {
               const unavailable =
-                Boolean(skill.trainedOnly) && !skill.trained;
+                Boolean(skill.trainedOnly) && !skill.trained && !availableSkillSituations(summary.skillContext,skill.id).some((effect)=>effect.allowsUntrained);
               const canStabilize =
                 skill.id === cureSkillId &&
                 bleedingAllies.length > 0 &&
@@ -2814,6 +2897,11 @@ const SelfCombatControls = ({
             })}
           </div>
         )}
+        {(modal==='skill'||modal==='attack')&&skillSituations.length>0&&<fieldset className="player-skill-situations">
+          <legend>Efeitos ativos</legend><p>{selectedSkillEffects.length?skillSituations.filter(o=>selectedSkillEffects.some(e=>e.id===o.id)).map(o=>o.name).join(' · '):'Nenhum. Configure os efeitos pelo botão ✦ ao lado do HUD.'}</p>
+          {skillPreview&&<output>Teste: 1d20 + {skillPreview.total}{skillPreview.bonusDice?.length?' + '+skillPreview.bonusDice.join(' + '):''}</output>}
+          {secondaryEffects.length>0&&<small>Segunda arma: {secondarySituations.filter(o=>secondaryEffects.some(e=>e.id===o.id)).map(o=>o.name).join(' · ')}</small>}
+        </fieldset>}
         {modal === 'skill' && skillId === cureSkillId && bleedingAllies.length > 0 && (
           <fieldset className="player-stabilize-choice">
             <legend>Primeiros socorros</legend>
@@ -2851,6 +2939,8 @@ const SelfCombatControls = ({
                 {summary.attacks.map((attack, index) => (
                   <option value={index} key={`${attack.name}:${index}`}>
                     {attack.name || `Ataque ${index + 1}`}
+                    {attack.primary ? ' (principal)' : ''}
+                    {attack.secondaryWeapon ? ' — duas armas' : ''}
                   </option>
                 ))}
               </select>
@@ -2880,10 +2970,11 @@ const SelfCombatControls = ({
                 onChange={(event) => setDamageFormula(event.currentTarget.value)}
               />
             </label>
-            <label><span>Dados de ataque (arma + perícia)</span><input type="text" readOnly value={attackTestFormulaExpression(parseAttackTestFormula(attackIndex === -1 ? '1d20' : summary.attacks[attackIndex]?.attackBonus), summary.skills.find((skill) => skill.name.toLocaleLowerCase('pt-BR') === (attackType === 'melee' ? 'luta' : 'pontaria'))?.total ?? 0)} /></label>
+            <label><span>Dados do ataque</span><input type="text" readOnly value={attackTestFormulaExpression(parseAttackTestFormula(attackIndex === -1 ? '1d20' : summary.attacks[attackIndex]?.attackBonus, summary.attacks[attackIndex]?.attackBonusIncludesSkill), summary.attacks[attackIndex]?.attackBonusIncludesSkill ? 0 : summary.skills.find((skill) => skill.name.toLocaleLowerCase('pt-BR') === (attackType === 'melee' ? 'luta' : 'pontaria'))?.total ?? 0)} /></label>
+            {summary.attacks[attackIndex]?.secondaryWeapon && <p>Segunda arma: {summary.attacks[attackIndex].secondaryWeapon!.name} · {summary.attacks[attackIndex].secondaryWeapon!.skill} · dano {summary.attacks[attackIndex].secondaryWeapon!.damage}. Cada arma terá seu próprio teste e dano. Ajuste as penalidades de duas armas na ficha. O recurso opcional será aplicado ao primeiro teste.</p>}
             <div className="player-attack-extra-modifiers">
-              <label><span>Bônus adicional de ataque</span><input inputMode="numeric" type="text" value={extraAttackModifier} onChange={(event) => { if (/^-?\d{0,3}$/.test(event.target.value)) setExtraAttackModifier(event.target.value); }} /></label>
-              <label><span>Bônus adicional de dano</span><input inputMode="numeric" type="text" value={extraDamageModifier} onChange={(event) => { if (/^-?\d{0,3}$/.test(event.target.value)) setExtraDamageModifier(event.target.value); }} /></label>
+              <label><span>Bônus adicional de ataque</span><input type="text" maxLength={120} placeholder="Ex.: 1d6 + 3" value={extraAttackModifier} onChange={(event) => setExtraAttackModifier(event.target.value)} /></label>
+              <label><span>Bônus adicional de dano</span><input type="text" maxLength={120} placeholder="Ex.: 2d6 + 2 - 1d4" value={extraDamageModifier} onChange={(event) => setExtraDamageModifier(event.target.value)} /></label>
             </div>
             <fieldset className="player-combat-attack-type">
               <legend>Tipo do ataque</legend>
@@ -2892,6 +2983,7 @@ const SelfCombatControls = ({
                   type="radio"
                   name="player-attack-type"
                   checked={attackType === 'melee'}
+                  disabled={Boolean(summary.attacks[attackIndex]?.skill)}
                   onChange={() => setAttackType('melee')}
                 />
                 Corpo a corpo
@@ -2901,7 +2993,7 @@ const SelfCombatControls = ({
                   type="radio"
                   name="player-attack-type"
                   checked={attackType === 'ranged'}
-                  disabled={attackIndex === -1}
+                  disabled={attackIndex === -1 || Boolean(summary.attacks[attackIndex]?.skill)}
                   data-disabled-reason="Punhos são um ataque corpo a corpo"
                   onChange={() => setAttackType('ranged')}
                 />
@@ -2990,6 +3082,7 @@ const SelfCombatControls = ({
             type="button"
             disabled={
               busy ||
+              (modal === 'healing' && (!self.actions.standard || !healingTarget || !parseDamageFormula(healingFormula))) ||
               (modal === 'skill' && !skillId) ||
               (modal === 'attack' && (
                 !self.actions.standard ||
@@ -3000,7 +3093,7 @@ const SelfCombatControls = ({
             }
             onClick={() => void submit()}
           >
-            {modal === 'action-point'
+            {modal === 'action-point' || modal === 'healing'
               ? 'Solicitar ao mestre'
               : modal === 'hero-point'
                 ? 'Consumir ponto'
@@ -4000,9 +4093,13 @@ const PlayerApp = () => {
   );
 };
 
-const root = document.getElementById('root');
-if (!root) throw new Error('Elemento raiz não encontrado.');
-const playerRoot = createRoot(root);
-playerRoot.render(<PlayerApp />);
-
-export const unmountPlayer = () => playerRoot.unmount();
+let playerRoot: ReturnType<typeof createRoot> | undefined;
+export const mountPlayer = () => {
+  if (playerRoot) return;
+  const root = document.getElementById('root');
+  if (!root) throw new Error('Elemento raiz não encontrado.');
+  playerRoot = createRoot(root);
+  playerRoot.render(<PlayerApp />);
+};
+export const unmountPlayer = () => { playerRoot?.unmount(); playerRoot = undefined; };
+import './skill-situations.css';

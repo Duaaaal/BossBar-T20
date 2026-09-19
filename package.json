@@ -22,7 +22,7 @@
     "fixtures:media": "node scripts/generate-test-media.mjs",
     "build:web:test": "vite build --config vite.web.config.mts",
     "test:e2e:web": "npm run build:web:test && playwright test --config playwright.web.config.mts",
-    "test:e2e:electron": "npm run package && playwright test --config playwright.electron.config.mts",
+    "test:e2e:electron": "npm run package && node scripts/prepare-electron-e2e.mjs && playwright test --config playwright.electron.config.mts",
     "test:e2e": "npm run test:e2e:web && npm run test:e2e:electron",
     "smoke:tunnel": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/smoke-quick-tunnel.mjs",
     "typecheck": "tsc --noEmit",

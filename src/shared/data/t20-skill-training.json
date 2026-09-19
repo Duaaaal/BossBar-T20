@@ -1,0 +1,1668 @@
+{
+  "version": 1,
+  "classes": {
+    "Arcanista": {
+      "mandatory": [
+        [
+          "Misticismo"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Nobreza",
+        "Ofício",
+        "Percepção"
+      ],
+      "sourceId": "core",
+      "page": 37
+    },
+    "Bárbaro": {
+      "mandatory": [
+        [
+          "Fortitude"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Iniciativa",
+        "Intimidação",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Sobrevivência",
+        "Vontade"
+      ],
+      "sourceId": "core",
+      "page": 41
+    },
+    "Bardo": {
+      "mandatory": [
+        [
+          "Atuação"
+        ],
+        [
+          "Reflexos"
+        ]
+      ],
+      "count": 6,
+      "allowed": [
+        "Acrobacia",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Furtividade",
+        "Iniciativa",
+        "Intuição",
+        "Investigação",
+        "Jogatina",
+        "Ladinagem",
+        "Luta",
+        "Misticismo",
+        "Nobreza",
+        "Percepção",
+        "Pontaria",
+        "Vontade"
+      ],
+      "sourceId": "core",
+      "page": 44
+    },
+    "Bucaneiro": {
+      "mandatory": [
+        [
+          "Luta",
+          "Pontaria"
+        ],
+        [
+          "Reflexos"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Acrobacia",
+        "Atletismo",
+        "Atuação",
+        "Enganação",
+        "Fortitude",
+        "Furtividade",
+        "Iniciativa",
+        "Intimidação",
+        "Jogatina",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pilotagem",
+        "Pontaria"
+      ],
+      "sourceId": "core",
+      "page": 47
+    },
+    "Caçador": {
+      "mandatory": [
+        [
+          "Luta",
+          "Pontaria"
+        ],
+        [
+          "Sobrevivência"
+        ]
+      ],
+      "count": 6,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Cura",
+        "Fortitude",
+        "Furtividade",
+        "Iniciativa",
+        "Investigação",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Reflexos"
+      ],
+      "sourceId": "core",
+      "page": 50
+    },
+    "Cavaleiro": {
+      "mandatory": [
+        [
+          "Fortitude"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Diplomacia",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Nobreza",
+        "Percepção",
+        "Vontade"
+      ],
+      "sourceId": "core",
+      "page": 53
+    },
+    "Clérigo": {
+      "mandatory": [
+        [
+          "Religião"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Iniciativa",
+        "Intuição",
+        "Luta",
+        "Misticismo",
+        "Nobreza",
+        "Ofício",
+        "Percepção"
+      ],
+      "sourceId": "core",
+      "page": 57
+    },
+    "Druida": {
+      "mandatory": [
+        [
+          "Sobrevivência"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Conhecimento",
+        "Cura",
+        "Fortitude",
+        "Iniciativa",
+        "Intuição",
+        "Luta",
+        "Misticismo",
+        "Ofício",
+        "Percepção",
+        "Religião"
+      ],
+      "sourceId": "core",
+      "page": 61
+    },
+    "Guerreiro": {
+      "mandatory": [
+        [
+          "Luta",
+          "Pontaria"
+        ],
+        [
+          "Fortitude"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Reflexos"
+      ],
+      "sourceId": "core",
+      "page": 65
+    },
+    "Inventor": {
+      "mandatory": [
+        [
+          "Ofício"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Iniciativa",
+        "Investigação",
+        "Luta",
+        "Misticismo",
+        "Ofício",
+        "Pilotagem",
+        "Percepção",
+        "Pontaria"
+      ],
+      "sourceId": "core",
+      "page": 68
+    },
+    "Ladino": {
+      "mandatory": [
+        [
+          "Ladinagem"
+        ],
+        [
+          "Reflexos"
+        ]
+      ],
+      "count": 8,
+      "allowed": [
+        "Acrobacia",
+        "Atletismo",
+        "Atuação",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Furtividade",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Jogatina",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pilotagem",
+        "Pontaria"
+      ],
+      "sourceId": "core",
+      "page": 73
+    },
+    "Lutador": {
+      "mandatory": [
+        [
+          "Fortitude"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Acrobacia",
+        "Adestramento",
+        "Atletismo",
+        "Enganação",
+        "Furtividade",
+        "Iniciativa",
+        "Intimidação",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Reflexos"
+      ],
+      "sourceId": "core",
+      "page": 76
+    },
+    "Nobre": {
+      "mandatory": [
+        [
+          "Diplomacia",
+          "Intimidação"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Adestramento",
+        "Atuação",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Jogatina",
+        "Luta",
+        "Nobreza",
+        "Ofício",
+        "Percepção",
+        "Pontaria"
+      ],
+      "sourceId": "core",
+      "page": 79
+    },
+    "Paladino": {
+      "mandatory": [
+        [
+          "Luta"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intuição",
+        "Nobreza",
+        "Percepção",
+        "Religião"
+      ],
+      "sourceId": "core",
+      "page": 82
+    },
+    "Treinador": {
+      "mandatory": [
+        [
+          "Adestramento"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Atletismo",
+        "Cavalgar",
+        "Diplomacia",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Reflexos",
+        "Religião",
+        "Sobrevivência"
+      ],
+      "sourceId": "heroes",
+      "page": 16
+    },
+    "Atleta": {
+      "mandatory": [
+        [
+          "Atletismo"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Acrobacia",
+        "Adestramento",
+        "Cavalgar",
+        "Cura",
+        "Fortitude",
+        "Iniciativa",
+        "Intimidação",
+        "Ofício",
+        "Percepção",
+        "Pilotagem",
+        "Pontaria",
+        "Reflexos"
+      ],
+      "sourceId": "heroes",
+      "page": 24
+    },
+    "Burguês": {
+      "mandatory": [
+        [
+          "Diplomacia"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 6,
+      "allowed": [
+        "Adestramento",
+        "Atuação",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Jogatina",
+        "Luta",
+        "Nobreza",
+        "Ofício",
+        "Percepção",
+        "Pontaria"
+      ],
+      "sourceId": "heroes",
+      "page": 26
+    },
+    "Duelista": {
+      "mandatory": [
+        [
+          "Luta",
+          "Pontaria"
+        ],
+        [
+          "Reflexos"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Acrobacia",
+        "Atletismo",
+        "Atuação",
+        "Diplomacia",
+        "Fortitude",
+        "Iniciativa",
+        "Intimidação",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Pilotagem",
+        "Pontaria"
+      ],
+      "sourceId": "heroes",
+      "page": 28
+    },
+    "Ermitão": {
+      "mandatory": [
+        [
+          "Sobrevivência"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Conhecimento",
+        "Cura",
+        "Fortitude",
+        "Iniciativa",
+        "Intuição",
+        "Luta",
+        "Misticismo",
+        "Ofício",
+        "Percepção",
+        "Religião"
+      ],
+      "sourceId": "heroes",
+      "page": 29
+    },
+    "Inovador": {
+      "mandatory": [
+        [
+          "Luta",
+          "Pontaria"
+        ],
+        [
+          "Acrobacia"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Conhecimento",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Investigação",
+        "Luta",
+        "Ofício",
+        "Pontaria",
+        "Reflexos"
+      ],
+      "sourceId": "heroes",
+      "page": 31
+    },
+    "Machado de Pedra": {
+      "mandatory": [
+        [
+          "Fortitude"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Iniciativa",
+        "Intimidação",
+        "Ofício",
+        "Percepção",
+        "Pontaria",
+        "Sobrevivência",
+        "Vontade"
+      ],
+      "sourceId": "heroes",
+      "page": 33
+    },
+    "Magimarcialista": {
+      "mandatory": [
+        [
+          "Atuação"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 6,
+      "allowed": [
+        "Acrobacia",
+        "Atletismo",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Jogatina",
+        "Misticismo",
+        "Reflexos"
+      ],
+      "sourceId": "heroes",
+      "page": 34
+    },
+    "Necromante": {
+      "mandatory": [
+        [
+          "Misticismo"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Enganação",
+        "Fortitude",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Nobreza",
+        "Ofício",
+        "Percepção"
+      ],
+      "sourceId": "heroes",
+      "page": 35
+    },
+    "Santo": {
+      "mandatory": [
+        [
+          "Religião"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intuição",
+        "Luta",
+        "Ofício",
+        "Percepção"
+      ],
+      "sourceId": "heroes",
+      "page": 37
+    },
+    "Seteiro": {
+      "mandatory": [
+        [
+          "Pontaria"
+        ],
+        [
+          "Sobrevivência"
+        ]
+      ],
+      "count": 6,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Cura",
+        "Fortitude",
+        "Furtividade",
+        "Iniciativa",
+        "Investigação",
+        "Luta",
+        "Ofício",
+        "Percepção",
+        "Reflexos"
+      ],
+      "sourceId": "heroes",
+      "page": 39
+    },
+    "Usurpador": {
+      "mandatory": [
+        [
+          "Enganação"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Atuação",
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Furtividade",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Misticismo",
+        "Nobreza",
+        "Ofício",
+        "Percepção",
+        "Reflexos",
+        "Religião"
+      ],
+      "sourceId": "heroes",
+      "page": 40
+    },
+    "Ventanista": {
+      "mandatory": [
+        [
+          "Ladinagem"
+        ],
+        [
+          "Reflexos"
+        ]
+      ],
+      "count": 8,
+      "allowed": [
+        "Acrobacia",
+        "Atletismo",
+        "Atuação",
+        "Cavalgar",
+        "Conhecimento",
+        "Diplomacia",
+        "Enganação",
+        "Furtividade",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Jogatina",
+        "Nobreza",
+        "Ofício",
+        "Percepção",
+        "Pilotagem"
+      ],
+      "sourceId": "heroes",
+      "page": 44
+    },
+    "Frade": {
+      "mandatory": [
+        [
+          "Religião"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Adestramento",
+        "Atuação",
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Intuição",
+        "Investigação",
+        "Misticismo",
+        "Ofício",
+        "Percepção",
+        "Nobreza"
+      ],
+      "sourceId": "gods",
+      "page": 39
+    },
+    "Alquimista": {
+      "mandatory": [
+        [
+          "Ofício (alquimista)"
+        ],
+        [
+          "Vontade"
+        ]
+      ],
+      "count": 4,
+      "allowed": [
+        "Conhecimento",
+        "Cura",
+        "Diplomacia",
+        "Fortitude",
+        "Iniciativa",
+        "Investigação",
+        "Luta",
+        "Misticismo",
+        "Ofício",
+        "Pilotagem",
+        "Percepção",
+        "Pontaria"
+      ],
+      "sourceId": "heroes",
+      "page": 22
+    },
+    "Vassalo": {
+      "mandatory": [
+        [
+          "Fortitude"
+        ],
+        [
+          "Luta"
+        ]
+      ],
+      "count": 2,
+      "allowed": [
+        "Adestramento",
+        "Atletismo",
+        "Cavalgar",
+        "Diplomacia",
+        "Guerra",
+        "Iniciativa",
+        "Intimidação",
+        "Nobreza",
+        "Percepção",
+        "Vontade"
+      ],
+      "sourceId": "heroes",
+      "page": 41
+    }
+  },
+  "origins": {
+    "Acólito": {
+      "sourceId": "core",
+      "page": 85,
+      "choices": 2,
+      "allowed": [
+        "Cura",
+        "Religião",
+        "Vontade"
+      ]
+    },
+    "Amigo dos Animais": {
+      "sourceId": "core",
+      "page": 85,
+      "choices": 2,
+      "allowed": [
+        "Adestramento",
+        "Cavalgar"
+      ]
+    },
+    "Amnésico": {
+      "sourceId": "core",
+      "page": 86,
+      "review": "A origem Amnésico concede uma perícia escolhida pelo mestre. Registre-a em Fontes adicionais."
+    },
+    "Aristocrata": {
+      "sourceId": "core",
+      "page": 86,
+      "choices": 2,
+      "allowed": [
+        "Diplomacia",
+        "Enganação",
+        "Nobreza"
+      ]
+    },
+    "Artesão": {
+      "sourceId": "core",
+      "page": 86,
+      "choices": 2,
+      "allowed": [
+        "Ofício",
+        "Vontade"
+      ]
+    },
+    "Artista": {
+      "sourceId": "core",
+      "page": 86,
+      "choices": 2,
+      "allowed": [
+        "Atuação",
+        "Enganação"
+      ]
+    },
+    "Assistente de Laboratório": {
+      "sourceId": "core",
+      "page": 87,
+      "choices": 2,
+      "allowed": [
+        "Ofício (alquimista)",
+        "Misticismo"
+      ]
+    },
+    "Batedor": {
+      "sourceId": "core",
+      "page": 88,
+      "choices": 2,
+      "allowed": [
+        "Furtividade",
+        "Percepção",
+        "Sobrevivência"
+      ]
+    },
+    "Capanga": {
+      "sourceId": "core",
+      "page": 88,
+      "choices": 2,
+      "allowed": [
+        "Luta",
+        "Intimidação"
+      ]
+    },
+    "Charlatão": {
+      "sourceId": "core",
+      "page": 88,
+      "choices": 2,
+      "allowed": [
+        "Enganação",
+        "Jogatina"
+      ]
+    },
+    "Circense": {
+      "sourceId": "core",
+      "page": 89,
+      "choices": 2,
+      "allowed": [
+        "Acrobacia",
+        "Atuação",
+        "Reflexos"
+      ]
+    },
+    "Criminoso": {
+      "sourceId": "core",
+      "page": 89,
+      "choices": 2,
+      "allowed": [
+        "Enganação",
+        "Furtividade",
+        "Ladinagem"
+      ]
+    },
+    "Curandeiro": {
+      "sourceId": "core",
+      "page": 89,
+      "choices": 2,
+      "allowed": [
+        "Cura",
+        "Vontade"
+      ]
+    },
+    "Eremita": {
+      "sourceId": "core",
+      "page": 89,
+      "choices": 2,
+      "allowed": [
+        "Misticismo",
+        "Religião",
+        "Sobrevivência"
+      ]
+    },
+    "Escravo": {
+      "sourceId": "core",
+      "page": 89,
+      "choices": 2,
+      "allowed": [
+        "Atletismo",
+        "Fortitude",
+        "Furtividade"
+      ]
+    },
+    "Estudioso": {
+      "sourceId": "core",
+      "page": 90,
+      "choices": 2,
+      "allowed": [
+        "Conhecimento",
+        "Guerra",
+        "Misticismo"
+      ]
+    },
+    "Fazendeiro": {
+      "sourceId": "core",
+      "page": 90,
+      "choices": 2,
+      "allowed": [
+        "Adestramento",
+        "Cavalgar",
+        "Ofício (fazendeiro)",
+        "Sobrevivência"
+      ]
+    },
+    "Forasteiro": {
+      "sourceId": "core",
+      "page": 90,
+      "choices": 2,
+      "allowed": [
+        "Cavalgar",
+        "Pilotagem",
+        "Sobrevivência"
+      ]
+    },
+    "Gladiador": {
+      "sourceId": "core",
+      "page": 90,
+      "choices": 2,
+      "allowed": [
+        "Atuação",
+        "Luta"
+      ]
+    },
+    "Guarda": {
+      "sourceId": "core",
+      "page": 91,
+      "choices": 2,
+      "allowed": [
+        "Investigação",
+        "Luta",
+        "Percepção"
+      ]
+    },
+    "Herdeiro": {
+      "sourceId": "core",
+      "page": 91,
+      "choices": 2,
+      "allowed": [
+        "Misticismo",
+        "Nobreza",
+        "Ofício"
+      ]
+    },
+    "Herói Camponês": {
+      "sourceId": "core",
+      "page": 91,
+      "choices": 2,
+      "allowed": [
+        "Adestramento",
+        "Ofício"
+      ]
+    },
+    "Marujo": {
+      "sourceId": "core",
+      "page": 92,
+      "choices": 2,
+      "allowed": [
+        "Atletismo",
+        "Jogatina",
+        "Pilotagem"
+      ]
+    },
+    "Mateiro": {
+      "sourceId": "core",
+      "page": 92,
+      "choices": 2,
+      "allowed": [
+        "Atletismo",
+        "Furtividade",
+        "Sobrevivência"
+      ]
+    },
+    "Membro de Guilda": {
+      "sourceId": "core",
+      "page": 92,
+      "choices": 2,
+      "allowed": [
+        "Diplomacia",
+        "Enganação",
+        "Misticismo",
+        "Ofício"
+      ]
+    },
+    "Mercador": {
+      "sourceId": "core",
+      "page": 93,
+      "choices": 2,
+      "allowed": [
+        "Diplomacia",
+        "Intuição",
+        "Ofício"
+      ]
+    },
+    "Minerador": {
+      "sourceId": "core",
+      "page": 93,
+      "choices": 2,
+      "allowed": [
+        "Atletismo",
+        "Fortitude",
+        "Ofício (minerador)"
+      ]
+    },
+    "Nômade": {
+      "sourceId": "core",
+      "page": 93,
+      "choices": 2,
+      "allowed": [
+        "Cavalgar",
+        "Pilotagem",
+        "Sobrevivência"
+      ]
+    },
+    "Pivete": {
+      "sourceId": "core",
+      "page": 93,
+      "choices": 2,
+      "allowed": [
+        "Furtividade",
+        "Iniciativa",
+        "Ladinagem"
+      ]
+    },
+    "Refugiado": {
+      "sourceId": "core",
+      "page": 93,
+      "choices": 2,
+      "allowed": [
+        "Fortitude",
+        "Reflexos",
+        "Vontade"
+      ]
+    },
+    "Seguidor": {
+      "sourceId": "core",
+      "page": 94,
+      "choices": 2,
+      "allowed": [
+        "Adestramento",
+        "Ofício"
+      ]
+    },
+    "Selvagem": {
+      "sourceId": "core",
+      "page": 94,
+      "choices": 2,
+      "allowed": [
+        "Percepção",
+        "Reflexos",
+        "Sobrevivência"
+      ]
+    },
+    "Soldado": {
+      "sourceId": "core",
+      "page": 94,
+      "choices": 2,
+      "allowed": [
+        "Fortitude",
+        "Guerra",
+        "Luta",
+        "Pontaria"
+      ]
+    },
+    "Taverneiro": {
+      "sourceId": "core",
+      "page": 94,
+      "choices": 2,
+      "allowed": [
+        "Diplomacia",
+        "Jogatina",
+        "Ofício (cozinheiro)"
+      ]
+    },
+    "Trabalhador": {
+      "sourceId": "core",
+      "page": 95,
+      "choices": 2,
+      "allowed": [
+        "Atletismo",
+        "Fortitude"
+      ]
+    },
+    "Bacharel": {
+      "sourceId": "heroes",
+      "page": 46,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Boticário": {
+      "sourceId": "heroes",
+      "page": 47,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Caçador de Ratos": {
+      "sourceId": "heroes",
+      "page": 47,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cão de Briga": {
+      "sourceId": "heroes",
+      "page": 48,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Carcereiro": {
+      "sourceId": "heroes",
+      "page": 48,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Carpinteiro de Guilda": {
+      "sourceId": "heroes",
+      "page": 48,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Catador da Catástrofe": {
+      "sourceId": "heroes",
+      "page": 48,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Chef Hynne": {
+      "sourceId": "heroes",
+      "page": 48,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cirurgião-Barbeiro": {
+      "sourceId": "heroes",
+      "page": 49,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Citadino Abastado": {
+      "sourceId": "heroes",
+      "page": 49,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cocheiro": {
+      "sourceId": "heroes",
+      "page": 49,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Construtor": {
+      "sourceId": "heroes",
+      "page": 49,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Contrabandista": {
+      "sourceId": "heroes",
+      "page": 50,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Coureiro": {
+      "sourceId": "heroes",
+      "page": 50,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Escriba": {
+      "sourceId": "heroes",
+      "page": 50,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Espião": {
+      "sourceId": "heroes",
+      "page": 50,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Ferreiro Militar": {
+      "sourceId": "heroes",
+      "page": 51,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Freira": {
+      "sourceId": "heroes",
+      "page": 51,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Goradista": {
+      "sourceId": "heroes",
+      "page": 51,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Insciente": {
+      "sourceId": "heroes",
+      "page": 51,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Interrogador": {
+      "sourceId": "heroes",
+      "page": 51,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Ladrão de Túmulos": {
+      "sourceId": "heroes",
+      "page": 52,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Menestrel": {
+      "sourceId": "heroes",
+      "page": 52,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Mensageiro": {
+      "sourceId": "heroes",
+      "page": 52,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Náufrago": {
+      "sourceId": "heroes",
+      "page": 52,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Padeiro": {
+      "sourceId": "heroes",
+      "page": 52,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Pedinte": {
+      "sourceId": "heroes",
+      "page": 53,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Pescador": {
+      "sourceId": "heroes",
+      "page": 53,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Servo": {
+      "sourceId": "heroes",
+      "page": 53,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Suporte de Tropas": {
+      "sourceId": "heroes",
+      "page": 53,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Agricultor Sambur": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Amazona de Hippion": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Amoque Púrpura": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Anão de Armas": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Andarilho Ubaneri": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Aprendiz de Dragoeiro": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Aprendiz de Drogadora": {
+      "sourceId": "atlas",
+      "page": 470,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Aristocrata Dai’zenshi": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Armeiro Armado": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Aspirante a herói": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Assistente Forense": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Bandoleiro da Fortaleza": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Barão Arruinado": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Catador da Cidade Velha": {
+      "sourceId": "atlas",
+      "page": 471,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cativo das Fadas": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Competidor do Circuito": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cosmopolita": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Cria da Favela": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Criado pelas Voracis": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "De Outro Mundo": {
+      "sourceId": "atlas",
+      "page": 472,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Descendente colleniano": {
+      "sourceId": "atlas",
+      "page": 473,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Desertor da Supremacia": {
+      "sourceId": "atlas",
+      "page": 473,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Duplo Feérico": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Duyshidakk Infiltrado": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Emissário Ubaneri": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Escudeiro da Luz": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Escudeiro Solitário": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Estandarte Vivo": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Estudante da Academia": {
+      "sourceId": "atlas",
+      "page": 474,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Estudante do Colégio Real": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Explorador de Ruínas": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Filhote da Revoada": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Futura Lenda": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Ginete de Tumarkhân": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Grumete Pirata": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Guardião Glacial": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Iniciado dos Caça-Monstros": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Insurgente Tapistano": {
+      "sourceId": "atlas",
+      "page": 475,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Irmão sem Esporas": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Legionário": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Lenhador de Tollon": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Liricista de Lenórienn": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Membro do Principado": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Nitamuraniano": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Nobre Zakharoviano": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Nômade Sar-Allan": {
+      "sourceId": "atlas",
+      "page": 476,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Pescador Parrudo": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Plebeu Arcano": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Prisioneiro das Catacumbas": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Procurado: Vivo ou Morto": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Profeta do Akzath": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Querido Filho": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Rebelde Agitador": {
+      "sourceId": "atlas",
+      "page": 477,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Receptador das Nuvens": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Recruta Arcano": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Recruta da Fênix": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Sábio Matemático": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Selvagem Sanguinário": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Sucateiro de Batalhas": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Tamalu": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Tocado pela Dama Altiva": {
+      "sourceId": "atlas",
+      "page": 478,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Tocado pelo Indomável": {
+      "sourceId": "atlas",
+      "page": 479,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Tradicionalista Svalano": {
+      "sourceId": "atlas",
+      "page": 479,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Trapaceiro Ahleniense": {
+      "sourceId": "atlas",
+      "page": 479,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Turista da Academia": {
+      "sourceId": "atlas",
+      "page": 479,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    },
+    "Um com os Kami": {
+      "sourceId": "atlas",
+      "page": 479,
+      "review": "Registre os treinamentos concedidos por esta origem em Fontes adicionais. Consulte o benefício específico no livro."
+    }
+  }
+}

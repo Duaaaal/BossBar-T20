@@ -5,7 +5,7 @@ import { normalizeEncounterCheckpoint } from '../../../src/shared/encounter-chec
 const upload = async (page: Page, name: string) => {
   await page.getByRole('button', { name: 'Ficha', exact: true }).click();
   await page.locator('#web-player-sheet-input').setInputFiles({ name: `${name}.pdf`, mimeType: 'application/pdf', buffer: await createEditableCharacterSheet({ characterName: name, playerName: name }) });
-  await expect(page.locator('#web-player-sheet-status')).toContainText(`${name}.pdf`);
+  await expect(page.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText(name);
   await page.locator('#web-player-sheet-close').click();
 };
 

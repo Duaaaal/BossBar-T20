@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback } from '../src/gapless-audio-loop.ts';
+import { installGaplessLoop, mediaPlaybackTime, seekMediaPlayback, normalizedMediaPosition } from '../src/gapless-audio-loop.ts';
 
 test('o loop usa o relógio de áudio sem reiniciar por jitter do decoder e mantém seek explícito', async () => {
   const node = () => ({ connect(target) { return target; }, disconnect() {}, gain: {
@@ -22,10 +22,20 @@ test('o loop usa o relógio de áudio sem reiniciar por jitter do decoder e mant
     await new Promise((resolve) => setTimeout(resolve, 220));
     assert.equal(starts, 1, 'clock drift must not stop and recreate the audible buffer');
     assert.equal(mediaPlaybackTime(audio), 2);
+    for (let index = 0; index < 12; index++) {
+      audio.currentTime = 7; context.currentTime += 0.1;
+      audio.dispatchEvent(new Event('seeked'));
+    }
+    assert.equal(starts, 1, 'native decoder recovery must not repeat an audible fragment');
     seekMediaPlayback(audio, 7);
     assert.equal(starts, 2);
     assert.equal(mediaPlaybackTime(audio), 7);
     audio.paused = true; audio.dispatchEvent(new Event('pause'));
     assert.equal(mediaPlaybackTime(audio), 7);
   } finally { dispose(); }
+});
+test('reconexão em loop usa módulo e não fica presa na duração exata', () => {
+  assert.equal(normalizedMediaPosition(307, 100, true), 7);
+  assert.equal(normalizedMediaPosition(100, 100, true), 0);
+  assert.equal(normalizedMediaPosition(107, 100, false), 99.99);
 });

@@ -4,6 +4,8 @@ export type PhaseAudioHandoff = {
   context: AudioContext;
   source: MediaElementAudioSourceNode;
   gain: GainNode;
+  // Release the transferred decoder while keeping the output graph alive.
+  releaseAudio: () => void;
   release: () => void;
 };
 let handoff: (PhaseAudioHandoff & { trackId: string; timer: ReturnType<typeof setTimeout> }) | null = null;

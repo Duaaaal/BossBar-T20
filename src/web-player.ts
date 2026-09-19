@@ -1,4 +1,29 @@
+import { SheetAutoValidation, sheetReadyForAutomaticValidation } from './shared/sheet-auto-validation';
+import { SKILL_EFFECTS_FIELD, skillEffectIssues } from './shared/skill-mechanics';
+import { characterSkillRules, craftEditorFields } from './shared/skill-definitions';
+import { skillTraining, SKILL_TRAINING_FIELD } from './shared/skill-training';
+import { openSkillTrainingEditor } from './skill-training-editor';
+import { recalculateCharacterSkills, skillImportIssues } from './shared/character-skills';
+import { RESOURCE_AUTO_FIELD, recalculateCharacterResources } from './shared/character-resources';
+import { normalizeSheetNumber } from './shared/sheet-number';
+import { appendRuleText, calculationTooltip as attachCalculationTooltip } from './rule-presentation';
+import { sheetCalculationDescription, inventoryCalculationDescription } from './sheet-calculation-description';
+import { sheetEditorPopup } from './sheet-editor-popup';
+import { openMulticlassEditor } from './character-multiclass-editor';
+import { parseCharacterClasses, formatCharacterClasses, abbreviateCharacterClasses } from './shared/character-classes';
 import { ATTACK_RANGES, DAMAGE_TYPES, METRIC_RANGES, parseAttackRange } from './shared/attack-options';
+import { armorPenaltyTotal, equipmentDefenseTotal, baseSpellManaCost, SHEET_COIN_FIELDS, sheetDefenseTotal } from './shared/character-sheet-calculations';
+import { RD_FIELD, DAMAGE_ORIGINS, normalizeDamageReduction, damageReductionSummary } from './shared/damage-reduction';
+import { openDamageReductionEditor } from './damage-reduction-editor';
+import { openRulesCatalog } from './rules-catalog-dialog';
+import { characterOptionsInput } from './character-options-input';
+import { identityOptionKind } from './shared/character-options';
+import { characterAttributesEditor } from './character-attributes-editor';
+import { ATTRIBUTE_PLAN_FIELD } from './shared/character-attributes';
+import { T20_CATALOG, findSpell, sourceCitation, spellFieldDefaults } from './shared/rules-catalog';
+import { CHARACTER_SIZES, characterSize, synchronizeCharacterSize } from './shared/character-size';
+import { affectsInventoryLoad, sheetInventoryLoad } from './shared/character-sheet-inventory';
+import { attackSkillTotal, equipmentKeys, inferredArmorAttributeLimit, sheetAttackTestExpression } from './shared/character-sheet-loadout';
 import {
   createWebPlayerApi,
   type WebPlayerConnectionState,
@@ -12,11 +37,7 @@ import {
   type CharacterSheetSummary,
 } from './shared/character-sheet';
 import {
-  CHARACTER_SHEET_DRAFT_MAX_BYTES,
-  characterSheetDraftByteLength,
   characterSheetDraftStorageKey,
-  recoverCharacterSheetDraft,
-  serializeCharacterSheetDraft,
 } from './shared/character-sheet-draft';
 import {
   createPlayerNotesDocument,
@@ -181,12 +202,13 @@ let encounterSheetSummary: CharacterSheetSummary | null = null;
 let activeTurnParticipantId: string | null = null;
 let currentPortraitUrl: string | null = null;
 let pendingPortraitPreviewUrl: string | null = null;
+let pendingPortraitFile: File | null | undefined;
 let sheetEditorDocument: CharacterSheetEditorField[] = [];
 let sheetEditorIssues: CharacterSheetIssue[] = [];
+let sheetEditorCharacterId = '';
 let sheetEditorImportPending = false;
 let sheetEditorRemovedFields: CharacterSheetEditorField[] = [];
 let sheetEditorBaseDocument: CharacterSheetEditorField[] = [];
-let sheetEditorFileName = '';
 let sheetEditorUsername = '';
 let sheetEditorDirty = false;
 let sheetEditorClosing = false;
@@ -199,7 +221,7 @@ const sheetEditorCategoryDefinitions = [
     label: 'Personagem',
     sections: [
       'Identidade',
-      'Atributos e modificadores',
+      'Atributos',
       'Características',
       'Descrição',
       'Habilidades',
@@ -221,8 +243,8 @@ const sheetEditorCategoryForSection = (section: string) =>
   'personagem';
 
 const sheetEditorSectionOrder = new Map<string, number>(
-  sheetEditorCategoryDefinitions
-    .flatMap(({ sections }) => sections)
+  ['Identidade', 'Atributos', 'Pontos de vida e mana', 'Defesa', 'Armadura e escudo',
+    'Proficiências', 'Ataques', 'Perícias', 'Características', 'Itens', 'Habilidades', 'Magias', 'Descrição']
     .map((section, index) => [section, index]),
 );
 
@@ -263,7 +285,7 @@ const activeSheetEditorDraftKey = () => {
   const username = sheetEditorUsername.trim();
   const roomCode = currentRoomCode();
   return username && roomCode
-    ? characterSheetDraftStorageKey(roomCode, username)
+    ? `${characterSheetDraftStorageKey(roomCode, username)}:${sheetEditorCharacterId || 'legacy'}`
     : null;
 };
 
@@ -282,36 +304,6 @@ const clearSheetEditorDraft = () => {
   } catch {
     // The editor still works when browser storage is unavailable.
   }
-};
-
-const persistSheetEditorDraft = () => {
-  clearSheetEditorDraftTimer();
-  if (!sheetEditorDirty || !sheetEditorFileName || sheetEditorBaseDocument.length === 0) return;
-  const key = activeSheetEditorDraftKey();
-  if (!key) return;
-  try {
-    const serialized = serializeCharacterSheetDraft({
-      fileName: sheetEditorFileName,
-      baseFields: sheetEditorBaseDocument,
-      fields: sheetEditorDocument,
-      removedFields: sheetEditorRemovedFields,
-    });
-    if (characterSheetDraftByteLength(serialized) > CHARACTER_SHEET_DRAFT_MAX_BYTES) {
-      throw new Error('O rascunho ultrapassou o limite local de 512 KB.');
-    }
-    window.localStorage.setItem(key, serialized);
-  } catch (error) {
-    if (sheetEditorStatus) {
-      sheetEditorStatus.textContent = error instanceof Error
-        ? `${error.message} As alterações continuam abertas nesta tela.`
-        : 'Não foi possível proteger este rascunho no navegador.';
-    }
-  }
-};
-
-const scheduleSheetEditorDraft = () => {
-  clearSheetEditorDraftTimer();
-  sheetEditorDraftTimer = setTimeout(persistSheetEditorDraft, 250);
 };
 
 const syncPermanentEncounterValuesIntoSheetEditor = () => {
@@ -499,10 +491,10 @@ const {
   getAccountStatus,
   connect,
   dispose,
+  getCharacterSelection, selectCharacter, characterPortraitBlob, createCharacterSheet, rollCharacterAttribute, exportCharacterSheet, dismissSheetWarnings,
   uploadCharacterSheet,
   uploadCharacterPortrait,
   removeCharacterPortrait,
-  automaticallyFixCharacterSheet,
   removeCharacterSheet,
   discardCharacterSheetImport,
   getCharacterSheetEditor,
@@ -521,11 +513,11 @@ const {
   },
   onCharacterSheetChanged: (sheet) => {
     renderCharacterSheet(sheet);
+    void renderCharacterSlots();
     if (!sheetEditorDialog?.hasAttribute('hidden') && !sheetEditorDirty) {
       void getCharacterSheetEditor().then((result) => {
         if (!result.ok || !result.document) return;
         sheetEditorRemovedFields = [];
-        sheetEditorFileName = result.document.fileName;
         sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
         sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
         syncPermanentEncounterValuesIntoSheetEditor();
@@ -581,7 +573,7 @@ api.subscribePlayerHuds((players) => {
   // module is still initializing; render after all handlers exist.
   queueMicrotask(() => renderCharacterHud(getPlayerToolsState().sheet));
   currentPortraitUrl = self?.portraitUrl ?? null;
-  if (currentPortraitUrl) releasePendingPortraitPreview();
+  if (currentPortraitUrl && pendingPortraitFile === undefined) releasePendingPortraitPreview();
   if (characterPortraitImage instanceof HTMLImageElement) {
     if (currentPortraitUrl) characterPortraitImage.src = currentPortraitUrl;
     else characterPortraitImage.removeAttribute('src');
@@ -652,6 +644,7 @@ const mountPlayer = () => {
   playerMounted = true;
   void import('./player').then((module) => {
     unmountPlayer = module.unmountPlayer;
+    if (!sessionClosed) module.mountPlayer();
     if (sessionClosed) {
       unmountPlayer();
       unmountPlayer = null;
@@ -720,7 +713,7 @@ const hideCalculationTooltip = () => {
 const showCalculationTooltip = (target: HTMLElement) => {
   const calculation = target.dataset.calculation;
   if (!calculation || !calculationTooltip) return;
-  calculationTooltip.textContent = calculation;
+  calculationTooltip.replaceChildren(); appendRuleText(calculationTooltip, calculation);
   calculationTooltip.removeAttribute('hidden');
   const targetBounds = target.getBoundingClientRect();
   const tooltipBounds = calculationTooltip.getBoundingClientRect();
@@ -962,7 +955,7 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       car: 'CAR',
     } as const;
     characterAttributes.replaceChildren(detailSection(
-      'Modificadores de atributo',
+      'Atributos',
       (Object.keys(attributeLabels) as Array<keyof typeof attributeLabels>).map((attribute) => {
         const value = attributes[attribute];
         const displayed = value === null ? '—' : `${value >= 0 ? '+' : ''}${value}`;
@@ -975,9 +968,10 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   }
   if (characterMovement) {
     const strength = summary.attributes.for ?? 0;
+    const baseLoad = Math.max(0, strength >= 0 ? 10 + 2 * strength : 10 + strength);
     const loadFormula = strength >= 0
-      ? `10 + 2 × FOR ${strength} = ${summary.maxLoad ?? '—'}`
-      : `10 + FOR ${strength} = ${summary.maxLoad ?? '—'}`;
+      ? `10 + 2 × FOR ${strength} = ${baseLoad}`
+      : `10 + FOR ${strength} = ${baseLoad}`;
     characterMovement.replaceChildren(detailSection('Movimento e carga', [
       {
         label: 'Deslocamento',
@@ -992,7 +986,7 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
       {
         label: 'Carga',
         value: `${summary.currentLoad ?? '—'}/${summary.maxLoad ?? '—'} espaços`,
-        calculation: `Carga atual da ficha: ${summary.currentLoad ?? '—'} espaços. Limite: ${loadFormula} espaços.`,
+        calculation: `Carga atual da ficha: ${summary.currentLoad ?? '—'} espaços. Limite básico: ${loadFormula} espaços.${summary.maxLoad !== null && summary.maxLoad !== baseLoad ? ` Limite informado na ficha: ${summary.maxLoad} espaços; confira a regra que justifica a diferença.` : ''}`,
       },
     ]));
   }
@@ -1015,34 +1009,130 @@ const renderCharacterHud = (sheet: PlayerCharacterSheetStatus | null) => {
   if (characterAttacks) {
     characterAttacks.replaceChildren(detailSection('Ataques', attacks.length
       ? attacks.map((attack) => ({
-        label: attack.name || 'Ataque',
-        value: [attack.attackBonus, attack.damage, attack.critical, attack.damageType, attack.range]
+        label: `${attack.name || 'Ataque'}${attack.primary ? ' (principal)' : ''}`,
+        value: [summary ? sheetAttackTestExpression(attack, summary) : attack.attackBonus, attack.damage, attack.critical, attack.damageType, attack.range, attack.secondaryWeapon ? `Segunda arma: ${attack.secondaryWeapon.name} · ${attack.secondaryWeapon.damage}` : '']
           .filter(Boolean).join(' • ') || '—',
-        calculation: `Teste ${attack.attackBonus || '—'}; dano ${attack.damage || '—'}; crítico ${attack.critical || '20/x2'}; tipo ${attack.damageType || '—'}; alcance ${attack.range || '—'}.`,
+        calculation: `Teste ${summary ? sheetAttackTestExpression(attack, summary) : attack.attackBonus || '—'}; dano ${attack.damage || '—'}; crítico ${attack.critical || '20/x2'}; tipo ${attack.damageType || '—'}; alcance ${attack.range || '—'}.${attack.secondaryWeapon && summary ? ` Segunda arma: ${attack.secondaryWeapon.name}; teste ${sheetAttackTestExpression(attack.secondaryWeapon, summary)}; dano ${attack.secondaryWeapon.damage}.` : ''}`,
       }))
       : [{ label: 'Nenhum ataque informado', value: '—' }]));
   }
 };
 
+let characterSlotsRevision = 0;
+let characterSelectionBusy = false;
+const slotPortraitUrls = new Map<string, { revision: number | null; url: string }>();
+let requestedCharacterId: string | null = null;
+const renderCharacterSlots = async () => {
+  const container = document.getElementById('web-player-character-slots');
+  if (!container || sheetDialog?.hasAttribute('hidden')) return;
+  const revision = ++characterSlotsRevision;
+  try {
+    const selection = await getCharacterSelection();
+    if (revision !== characterSlotsRevision) return;
+
+    container.replaceChildren();
+    for (const [index, slot] of selection.characters.entries()) {
+      const tab = document.createElement('div'); tab.className = 'sheet-slot'; tab.setAttribute('role', 'presentation');
+      const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(slot.id === selection.activeCharacterId));
+      button.dataset.characterId = slot.id;
+      button.classList.toggle('is-selecting', slot.id === requestedCharacterId);
+      const picture = document.createElement('span'); picture.className = 'sheet-slot-portrait'; picture.textContent = String(index + 1);
+      const name = document.createElement('span'); name.textContent = slot.sheet.hasSheet ? slot.sheet.validation?.summary.characterName || 'Sem nome' : `Ficha ${index + 1} · Vazia`;
+      name.title = name.textContent;
+      button.append(picture, name); tab.append(button); container.append(tab);
+      if (slot.id === selection.activeCharacterId && slot.sheet.hasSheet && sheetRemoveButton) {
+        tab.append(sheetRemoveButton); sheetRemoveButton.removeAttribute('hidden');
+      }
+      const cachedPortrait = slotPortraitUrls.get(slot.id);
+      const showPortrait = (url: string) => { const image = document.createElement('img'); image.src = url; image.alt = ''; picture.replaceChildren(image); };
+      if (cachedPortrait && cachedPortrait.revision === slot.portrait.uploadedAt && slot.portrait.hasPortrait) showPortrait(cachedPortrait.url);
+      else {
+        if (cachedPortrait) { URL.revokeObjectURL(cachedPortrait.url); slotPortraitUrls.delete(slot.id); }
+        if (slot.portrait.hasPortrait) void characterPortraitBlob(slot.id).then((blob) => {
+          if (!blob || revision !== characterSlotsRevision) return;
+          const url = URL.createObjectURL(blob); slotPortraitUrls.set(slot.id, { revision: slot.portrait.uploadedAt, url }); showPortrait(url);
+        });
+      }
+      button.addEventListener('click', async () => {
+        if (!characterSelectionBusy && slot.id === selection.activeCharacterId) return;
+        requestedCharacterId = slot.id;
+        container.querySelectorAll<HTMLElement>('[role=tab]').forEach((item) => item.classList.toggle('is-selecting', item.dataset.characterId === requestedCharacterId));
+        if (characterSelectionBusy) return;
+        characterSelectionBusy = true;
+        try {
+          while (requestedCharacterId) {
+            const target = requestedCharacterId; requestedCharacterId = null;
+            const result = await selectCharacter(target);
+            renderCharacterSheet(getPlayerToolsState().sheet);
+            if (!result.ok || result.pendingApproval) {
+              requestedCharacterId = null;
+              await renderCharacterSlots();
+              if (sheetStatusElement) sheetStatusElement.textContent = result.pendingApproval ? 'Troca de personagem aguardando aprovação do mestre.' : result.error || 'Não foi possível trocar a ficha.';
+              return;
+            }
+            releasePendingPortraitPreview(); if (sheetInput instanceof HTMLInputElement) sheetInput.value = ''; renderPortraitEditor();
+            await renderCharacterSlots();
+          }
+        } catch (error) { if (sheetStatusElement) sheetStatusElement.textContent = error instanceof Error ? error.message : 'Erro inesperado ao trocar a ficha.'; }
+        finally { characterSelectionBusy = false; requestedCharacterId = null; container.querySelectorAll('.is-selecting').forEach((item) => item.classList.remove('is-selecting')); }
+      });
+    }
+    renderCharacterSheet(getPlayerToolsState().sheet);
+  } catch (error) { if (sheetStatusElement) sheetStatusElement.textContent = error instanceof Error ? error.message : 'Erro inesperado ao carregar as fichas.'; }
+};
+
+const clearSheetWarnings = async (issues: CharacterSheetIssue[], editing: boolean) => {
+  const ids = issues.filter(({ dismissible }) => dismissible).map(({ id }) => id);
+  if (!ids.length) return;
+  try {
+    const result = await dismissSheetWarnings(ids, editing ? sheetEditorDocument : undefined);
+    if (!result.ok) throw new Error(result.error || 'Não foi possível limpar os avisos.');
+    if (editing) { sheetEditorIssues = result.issues ?? []; renderSheetEditorFields(); }
+    else { await getCharacterSelection(true); renderCharacterSheet(getPlayerToolsState().sheet); }
+  } catch (error) {
+    const target = editing ? sheetEditorStatus : sheetStatusElement;
+    if (target) target.textContent = error instanceof Error ? error.message : 'Erro inesperado ao limpar os avisos.';
+  }
+};
+const appendClearWarningButton = (item: HTMLElement, issue: CharacterSheetIssue, editing: boolean) => {
+  if (!issue.dismissible) return;
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'sheet-warning-clear'; button.textContent = 'Limpar';
+  button.addEventListener('click', () => void clearSheetWarnings([issue], editing)); item.append(button);
+};
+
 const renderCharacterSheet = (sheet: PlayerCharacterSheetStatus | null) => {
   if (sheetStatusElement) {
-    sheetStatusElement.textContent = sheet?.hasSheet
-      ? `Ficha vinculada: ${sheet.fileName ?? 'ficha-t20.pdf'}`
-      : 'Nenhuma ficha vinculada a este usuário.';
+    sheetStatusElement.textContent = '';
   }
   if (sheetIssuesElement) {
     sheetIssuesElement.replaceChildren();
+    sheetIssuesElement.hidden = !(sheet?.validation?.issues.length);
     for (const issue of sheet?.validation?.issues ?? []) {
       const item = document.createElement('li');
       item.dataset.severity = issue.severity;
       const details = issue.expected === undefined
         ? ''
         : ` Esperado: ${issue.expected}; encontrado: ${issue.actual ?? 'vazio'}.`;
-      item.textContent = `${issue.message}${details}`;
+      appendRuleText(item, `${issue.location ? `${issue.location}: ` : ''}${issue.reason || issue.message}${details}${issue.correction ? ` ${issue.correction}` : ''}${issue.source ? ' ' + issue.source : ''}`);
+      const actions = document.createElement('div'); actions.className = 'sheet-issue-actions';
+      if (issue.field) {
+        const review = document.createElement('button');
+        review.type = 'button';
+        review.textContent = 'Revisar campo';
+        review.addEventListener('click', () => void openSheetEditor(issue.field ?? undefined));
+        actions.append(review);
+      }
+      appendClearWarningButton(actions, issue, false);
+      item.append(actions);
       sheetIssuesElement.append(item);
     }
   }
   const hasSheet = Boolean(sheet?.hasSheet);
+  document.getElementById('web-player-sheet-upload')?.toggleAttribute('hidden', hasSheet);
+  document.getElementById('web-player-sheet-create')?.toggleAttribute('hidden', hasSheet);
+  sheetOpenButton?.toggleAttribute('hidden', !hasSheet);
+  document.getElementById('web-player-sheet-export')?.toggleAttribute('hidden', !hasSheet || Boolean(sheet?.importPending));
   renderCharacterHud(sheet);
   prepareSheetPreview(sheet);
   sheetRemoveButton?.toggleAttribute('hidden', !hasSheet);
@@ -1130,6 +1220,7 @@ const renderNotesEditor = () => {
 };
 
 sheetButton?.addEventListener('click', () => {
+  queueMicrotask(() => void renderCharacterSlots());
   renderCharacterSheet(getPlayerToolsState().sheet);
   sheetDialog?.removeAttribute('hidden');
 });
@@ -1150,23 +1241,15 @@ portraitInput?.addEventListener('change', () => {
     return;
   }
   releasePendingPortraitPreview();
+  pendingPortraitFile = file;
   pendingPortraitPreviewUrl = URL.createObjectURL(file);
   renderPortraitEditor();
   if (portraitFileName) {
     portraitFileName.textContent = file.name;
     portraitFileName.setAttribute('title', file.name);
   }
-  portraitInput.disabled = true;
-  void uploadCharacterPortrait(file).then((result) => {
-    if (!result.ok) {
-      releasePendingPortraitPreview();
-      notifyPlayer(result.error ?? 'Não foi possível salvar o retrato.', 'rejected');
-    }
-    renderPortraitEditor();
-    portraitInput.value = '';
-  }).finally(() => {
-    portraitInput.disabled = false;
-  });
+  portraitInput.value = '';
+  markSheetEditorDirty();
 });
 
 portraitRemoveButton?.addEventListener('click', () => {
@@ -1176,17 +1259,8 @@ portraitRemoveButton?.addEventListener('click', () => {
 portraitRemoveCancel?.addEventListener('click', () => portraitRemoveDialog?.setAttribute('hidden', ''));
 portraitRemoveClose?.addEventListener('click', () => portraitRemoveCancel?.click());
 portraitRemoveConfirm?.addEventListener('click', () => {
-  portraitRemoveConfirm.setAttribute('disabled', '');
-  void removeCharacterPortrait().then((result) => {
-    if (result.ok) {
-      releasePendingPortraitPreview();
-      currentPortraitUrl = null;
-      portraitRemoveDialog?.setAttribute('hidden', '');
-    } else {
-      notifyPlayer(result.error ?? 'Não foi possível remover o retrato.', 'rejected');
-    }
-    renderPortraitEditor();
-  }).finally(() => portraitRemoveConfirm.removeAttribute('disabled'));
+  pendingPortraitFile = null; releasePendingPortraitPreview();
+  portraitRemoveDialog?.setAttribute('hidden', ''); renderPortraitEditor(); markSheetEditorDirty();
 });
 
 characterPortraitButton?.addEventListener('click', () => {
@@ -1199,10 +1273,11 @@ portraitLightboxClose?.addEventListener('click', () => {
   portraitLightbox?.setAttribute('hidden', '');
 });
 
+document.getElementById('web-player-sheet-upload')?.addEventListener('click', () => sheetInput?.click());
 sheetInput?.addEventListener('change', () => {
   if (!(sheetInput instanceof HTMLInputElement)) return;
   const file = sheetInput.files?.[0];
-  sheetSelectionRemoveButton?.toggleAttribute('hidden', !file);
+  sheetSelectionRemoveButton?.setAttribute('hidden', '');
   if (!file) return;
   renderCharacterSheet(getPlayerToolsState().sheet);
   if (file.size > MAX_CHARACTER_SHEET_BYTES) {
@@ -1215,6 +1290,7 @@ sheetInput?.addEventListener('change', () => {
   void uploadCharacterSheet(file).then((result) => {
     if (result.ok) clearSheetEditorDraft();
     renderCharacterSheet(result.ok ? result.sheet ?? null : getPlayerToolsState().sheet);
+    if (result.ok && !result.sheet?.importPending) void renderCharacterSlots();
     const hasErrors = result.sheet?.validation?.issues.some(
       ({ severity }) => severity === 'error',
     ) ?? !result.ok;
@@ -1246,13 +1322,15 @@ sheetSelectionRemoveButton?.addEventListener('click', () => {
 
 const spellEditorFields = [
   ['Nome', 'Nome', 160],
+  ['Circulo', 'Círculo', 1],
   ['Escola', 'Escola', 160],
   ['Execucao', 'Execução', 160],
   ['Alcance', 'Alcance', 160],
-  ['Area', 'Área', 160],
+  ['Area', 'Área / Alvo', 160],
   ['Duracao', 'Duração', 160],
   ['Resistencia', 'Resistência', 160],
-  ['Efeito', 'Efeito', 1_000],
+  ['Custo', 'Custo (PM)', 3],
+  ['Efeito', 'Efeito', 100_000],
 ] as const;
 
 const officeOptions = [
@@ -1290,21 +1368,36 @@ const editorField = (
 
 const attackEditorFields = (index: number): CharacterSheetEditorField[] => {
   const group = `Ataque ${index}`;
+  const prefix = `BossBar.Ataque.${index}`;
   return [
-    editorField(`Ataque ${index}`, 'Nome', 'Ataques', group),
-    editorField(`Bônus Atq ${index}`, 'Teste de ataque', 'Ataques', group, { kind: 'formula' }),
+    { ...editorField(`${prefix}.Principal`, 'Principal', 'Ataques', group), kind: 'checkbox', value: 'Off' },
+    { ...editorField(`${prefix}.DuasArmas`, 'Duas armas', 'Ataques', group), kind: 'checkbox', value: 'Off' },
+    editorField(`Ataque ${index}`, 'Arma', 'Ataques', group),
+    { ...editorField(`${prefix}.Pericia`, 'Perícia', 'Ataques', group), kind: 'choice', options: ['Luta', 'Pontaria'], value: 'Luta' },
+    editorField(`${prefix}.Base`, 'Teste de ataque: base', 'Ataques', group),
+    { ...editorField(`${prefix}.Ajuste`, 'Ajuste de ataque', 'Ataques', group, { kind: 'formula' }), value: '0' },
     editorField(`Dano ${index}`, 'Dano', 'Ataques', group, { kind: 'formula' }),
     editorField(`BossBar.Ataque.${index}.MargemCritico`, 'Margem de crítico', 'Ataques', group, {
       kind: 'integer', min: 2, max: 20,
     }),
     {
-      ...editorField(`BossBar.Ataque.${index}.MultiplicadorCritico`, 'Multiplicador de crítico', 'Ataques', group, {
+      ...editorField(`BossBar.Ataque.${index}.MultiplicadorCritico`, 'Multiplicador', 'Ataques', group, {
         kind: 'integer', min: 1, max: 20,
       }),
       value: '2',
     },
     editorField(`Tipo ${index}`, 'Tipo', 'Ataques', group),
+    editorField(`${prefix}.Origem`, 'Origem', 'Ataques', group),
+    editorField(`${prefix}.Segunda.Origem`, 'Origem', 'Ataques', group),
     editorField(`Alcance ${index}`, 'Alcance', 'Ataques', group),
+    ...['Nome', 'Pericia', 'Base', 'Ajuste', 'Dano', 'MargemCritico', 'MultiplicadorCritico', 'Tipo', 'Alcance'].map((key): CharacterSheetEditorField => ({
+      ...editorField(`${prefix}.Segunda.${key}`, ({ Nome: 'Arma', Pericia: 'Perícia', Base: 'Teste de ataque', Ajuste: 'Ajuste de ataque', Dano: 'Dano', MargemCritico: 'Margem de crítico', MultiplicadorCritico: 'Multiplicador', Tipo: 'Tipo', Alcance: 'Alcance' } as Record<string, string>)[key], 'Ataques', group),
+      ...(key === 'Pericia' ? { kind: 'choice', options: ['Luta', 'Pontaria'], value: 'Luta' } : {}),
+      ...(['Ajuste', 'Dano'].includes(key) ? { validation: { kind: 'formula' } } : {}),
+      ...(key === 'MargemCritico' ? { value: '20', validation: { kind: 'integer', min: 2, max: 20 } } : {}),
+      ...(key === 'MultiplicadorCritico' ? { value: '2', validation: { kind: 'integer', min: 1, max: 20 } } : {}),
+    })),
+    editorField(`BossBar.Ataque.${index}.Informacoes`, 'Informações adicionais', 'Ataques', group, { kind: 'text', maxLength: 100_000 }),
   ];
 };
 
@@ -1316,7 +1409,7 @@ const itemEditorFields = (index: number) => [
     }),
     value: '0',
   },
-  editorField(index <= 15 ? `PesoItem${index}` : `BossBar.Item.${index}.Peso`, 'Peso', 'Itens', `Item ${index}`, {
+  editorField(index <= 15 ? `PesoItem${index}` : `BossBar.Item.${index}.Peso`, 'Espaços', 'Itens', `Item ${index}`, {
     kind: 'decimal', min: 0, max: 1_000_000,
   }),
 ];
@@ -1326,13 +1419,18 @@ const equipmentEditorFields = (kind: 'Armadura' | 'Escudo', index: number) => {
   const group = `${kind} ${index}`;
   const prefix = `BossBar.${kind}.${index}`;
   return [
+    { ...editorField(`${prefix}.Equipado`, 'Equipado', section, group), kind: 'checkbox' as const, value: 'Off' },
     editorField(`${prefix}.Nome`, 'Nome', section, group),
+    editorField(`${prefix}.Informacoes`, 'Informações adicionais', section, group, { kind: 'text', maxLength: 100_000 }),
+    ...(kind === 'Armadura' ? [editorField(`${prefix}.LimiteAtributo`, 'Limite do atributo na Defesa', section, group, { kind: 'integer', min: 0, max: 99 }), editorField(`${prefix}.LimiteManual`, 'Limite manual', section, group)] : []),
     editorField(`${prefix}.Defesa`, 'Defesa', section, group, {
       kind: 'integer', min: 0, max: 999,
     }),
     editorField(`${prefix}.Penalidade`, 'Penalidade', section, group, {
       kind: 'integer', min: -99, max: 99,
     }),
+    editorField(`${prefix}.OutrosDefesa`, 'Outros: Defesa', section, group, { kind: 'integer', min: -999, max: 999 }),
+    editorField(`${prefix}.OutrosPenalidade`, 'Outros: Penalidade', section, group, { kind: 'integer', min: -99, max: 99 }),
   ];
 };
 
@@ -1384,43 +1482,110 @@ const addEquipmentEditorRow = (kind: 'Armadura' | 'Escudo') => {
   markSheetEditorDirty();
 };
 
-const parseEditorDecimal = (value: string) => {
-  const parsed = Number(value.trim().replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : 0;
+const inventoryFromEditor = () => {
+  const values = Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));
+  if (sheetEditorIssues.some(({ id }) => id === 'migration:load-units')) values['BossBar.Migration.LoadUnits'] = 'review';
+  const overflow = sheetEditorIssues.find(({ id }) => id === 'review:inventory');
+  if (overflow) values['BossBar.Import.InventarioRevisar'] = overflow.message;
+  return sheetInventoryLoad(values);
 };
-
-const recalculateSheetLoad = () => {
-  const groups = new Map<string, CharacterSheetEditorField[]>();
-  for (const field of sheetEditorDocument) {
-    if (!/^Item \d+$/.test(field.group ?? '')) continue;
-    const fields = groups.get(field.group ?? '') ?? [];
-    fields.push(field);
-    groups.set(field.group ?? '', fields);
+const refreshEquipmentLoadBadges = () => {
+  const load = inventoryFromEditor();
+  for (const input of sheetEditorFields?.querySelectorAll<HTMLInputElement>('[data-item-total]') ?? []) {
+    const item = load.items.find(({ index }) => index === Number(input.dataset.itemTotal));
+    input.value = !item ? '0' : Number.isFinite(item.quantity * item.spaces) ? String(Number((item.quantity * item.spaces).toFixed(3))) : '—';
   }
-  const total = [...groups.values()].reduce((sum, fields) => {
-    const quantity = parseEditorDecimal(
-      fields.find(({ label }) => label === 'Quantidade')?.value ?? '0',
-    );
-    const weight = parseEditorDecimal(
-      fields.find(({ label }) => label === 'Peso')?.value ?? '0',
-    );
-    return sum + Math.max(0, quantity) * Math.max(0, weight);
-  }, 0);
-  const formatted = String(Number(total.toFixed(3)));
+  for (const part of ['gross', 'equipped', 'total'] as const) {
+    const input = sheetEditorFields?.querySelector<HTMLInputElement>(`[data-load-part="${part}"]`); if (input) input.value = String(load[part] ?? '—');
+  }
+  for (const badge of sheetEditorFields?.querySelectorAll<HTMLElement>('.sheet-item-equipped') ?? []) {
+    const item = load.items.find(({ index }) => index === Number(badge.dataset.itemIndex));
+    badge.hidden = !item?.exempt;
+    badge.textContent = item?.exempt ? ' (Equipado)' : '';
+  }
+};
+const recalculateSheetLoad = () => {
+  const result = inventoryFromEditor();
+  refreshEquipmentLoadBadges();
+  if (result.total === null) {
+    if (sheetEditorStatus) sheetEditorStatus.textContent = `Carga preservada: ${result.reasons.join(' ')}`;
+    return;
+  }
+  const formatted = String(result.total);
   const loadField = sheetEditorDocument.find(({ name }) => name === 'CargaTotal');
   if (loadField) loadField.value = formatted;
   const loadInput = [...(sheetEditorFields?.querySelectorAll<HTMLElement>('[data-field-name]') ?? [])]
     .find(({ dataset }) => dataset.fieldName === 'CargaTotal')
-    ?.querySelector<HTMLInputElement>('input');
+    ?.querySelector<HTMLInputElement>('[data-load-part="total"]');
   if (loadInput) loadInput.value = formatted;
+};
+
+const refreshSkillTrainingReview = () => {
+  const values=Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));const training = skillTraining(values);
+  sheetEditorIssues = [...sheetEditorIssues.filter(({ id }) => !/^(training:|benefit:|skill-effect:|skill-import:|skills:imported-bonuses)/.test(id)), ...training.issues, ...skillEffectIssues(values), ...skillImportIssues(values)];
+  for (const group of sheetEditorFields?.querySelectorAll<HTMLElement>('[data-training-field]') ?? []) {
+    const trained = training.selected.some(skill => skill.trainedField === group.dataset.trainingField);
+    group.classList.toggle('is-trained-skill', trained);
+    const badge = group.querySelector<HTMLElement>('.sheet-skill-training-badge'); if (badge) badge.hidden = !trained;
+  }
+  const summary = sheetEditorFields?.querySelector('.skill-training-summary');
+  if (summary) summary.textContent = `${training.selected.length} / ${training.maximum} treinadas${training.sources.some(({ confirmed }) => !confirmed) ? ' · fontes a confirmar' : ''}`;
+};
+
+const clearRecalculatedSkillIssues = (names: string[]) => {
+  const solved = new Set(names);
+  const previousReviewFields=sheetEditorIssues.flatMap(issue=>issue.id.startsWith('skill-import:')&&issue.field?[issue.field]:[]);
+  sheetEditorIssues = sheetEditorIssues.filter((issue) => !(issue.id.startsWith('formula:') && issue.field && solved.has(issue.field)));
+  refreshSkillTrainingReview();
+  for (const name of new Set([...names,...previousReviewFields])) {
+    if (sheetEditorIssues.some((issue) => issue.field === name)) continue;
+    const wrapper = sheetEditorFields?.querySelector<HTMLElement>(`[data-field-name="${CSS.escape(name)}"]`);
+    wrapper?.classList.remove('has-import-error', 'has-import-warning'); wrapper?.querySelector('.sheet-field-error')?.remove();
+    const input = wrapper?.querySelector('input'); input?.removeAttribute('aria-invalid'); input?.setCustomValidity('');
+  }
+  renderSheetEditorReview();
+};
+
+const refreshAttributeDerivedValues = () => {
+  const values = Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));
+  const set = (key: string, value: string) => {
+    const field = sheetEditorDocument.find(({ name }) => name === key); if (field) field.value = value;
+    const input = sheetEditorFields?.querySelector<HTMLInputElement>(`[data-field-name="${CSS.escape(key)}"] input`);
+    if (input?.type === 'checkbox') input.checked = value === 'Yes';
+    else if (input) input.value = /^BossBar\.Ataque\.\d+\.(Segunda\.)?Base$/.test(key) && value !== '' && Number(value) >= 0 ? `+${Number(value)}` : value;
+    const select=sheetEditorFields?.querySelector<HTMLSelectElement>(`[data-field-name="${CSS.escape(key)}"] select`);if(select)select.value=value;
+    values[key] = value;
+  };
+  for (const field of sheetEditorDocument.filter(({ name }) => /^ModAtrib/.test(name))) {
+    const code = values[field.name.replace('ModAtrib', 'SeleAtrib')] || '';
+    const total = values['Mod' + code.slice(0, 1).toUpperCase() + code.slice(1).toLowerCase()];
+    if (total !== undefined && total.trim()) set(field.name, total);
+  }
+  const skillUpdates = recalculateCharacterSkills(values);
+  let addedCraft = false;
+  for (const rule of characterSkillRules(values).filter((r) => r.nameField && !sheetEditorDocument.some((f) => f.name === r.nameField))) { sheetEditorDocument.push(...craftEditorFields(rule, values)); addedCraft = true; }
+  for (const [key, value] of Object.entries(skillUpdates)) set(key, value);
+  if (addedCraft) renderSheetEditorFields();
+  clearRecalculatedSkillIssues(Object.keys(skillUpdates));
+  for (const field of sheetEditorDocument.filter(({ name }) => /^BossBar\.Ataque\.\d+\.(Segunda\.)?Base$/.test(name))) {
+    const match = /^BossBar\.Ataque\.(\d+)\.(Segunda\.)?Base$/.exec(field.name)!;
+    set(field.name, String(attackSkillTotal(values, Number(match[1]), Boolean(match[2])) ?? ''));
+  }
+  recalculateCharacterResources(values);
+  for (const key of [RESOURCE_AUTO_FIELD, 'PVs Totais', 'PVs Atuais', 'PMs Totais', 'PMs Atuais']) if (values[key] !== undefined) set(key, values[key]);
+  const defense = sheetDefenseTotal(values); if (Number.isFinite(defense)) set('CA', String(defense));
+  const dc = 10 + Number(values.ModAtribMagia || 0) + Math.floor(Number(values.Lv || 1) / 2) + Number(values['BossBar.CdOutros'] || 0);
+  if (Number.isFinite(dc)) set('TesteResist', String(dc));
+  markSheetEditorDirty();
 };
 
 const markSheetEditorDirty = () => {
   sheetEditorDirty = true;
-  document.getElementById('web-player-sheet-import-autofix')?.setAttribute('disabled', '');
-  scheduleSheetEditorDraft();
+  scheduleAutomaticSheetValidation();
+  document.getElementById('web-player-sheet-import-autofix')?.removeAttribute('disabled');
+
   if (sheetEditorStatus) {
-    sheetEditorStatus.textContent = 'Rascunho local.';
+    sheetEditorStatus.textContent = 'Alterações não salvas. Fechar descarta este rascunho.';
   }
 };
 
@@ -1440,9 +1605,11 @@ const addSpellEditorRow = () => {
     label,
     section: 'Magias',
     group: `Magia ${index}`,
-    kind: 'text' as const,
+    kind: fieldName === 'Circulo' ? 'choice' as const : 'text' as const,
     value: '',
-    validation: { kind: 'text' as const, maxLength },
+    ...(fieldName === 'Circulo' ? { options: ['', '1', '2', '3', '4', '5'] } : {}),
+    validation: fieldName === 'Circulo' ? { kind: 'integer' as const, min: 1, max: 5 }
+      : fieldName === 'Custo' ? { kind: 'integer' as const, min: 0, max: 999 } : { kind: 'text' as const, maxLength },
   })));
   renderSheetEditorFields();
   markSheetEditorDirty();
@@ -1456,16 +1623,16 @@ function releasePendingPortraitPreview() {
 
 function renderPortraitEditor() {
   const portrait = getPlayerToolsState().portrait;
-  const previewUrl = pendingPortraitPreviewUrl ?? currentPortraitUrl;
+  const previewUrl = pendingPortraitFile === null ? null : pendingPortraitPreviewUrl ?? currentPortraitUrl;
   if (portraitEditorPreview instanceof HTMLImageElement) {
     if (previewUrl) portraitEditorPreview.src = previewUrl;
     else portraitEditorPreview.removeAttribute('src');
     portraitEditorPreview.toggleAttribute('hidden', !previewUrl);
   }
   portraitEditorPlaceholder?.toggleAttribute('hidden', Boolean(previewUrl));
-  portraitRemoveButton?.toggleAttribute('hidden', !portrait?.hasPortrait);
+  portraitRemoveButton?.toggleAttribute('hidden', pendingPortraitFile === null || !(pendingPortraitFile || portrait?.hasPortrait));
   if (portraitFileName) {
-    const label = portrait?.fileName ?? 'Nenhum retrato';
+    const label = pendingPortraitFile === null ? 'Nenhum retrato' : pendingPortraitFile?.name ?? portrait?.fileName ?? 'Nenhum retrato';
     portraitFileName.textContent = label;
     portraitFileName.setAttribute('title', label);
   }
@@ -1502,17 +1669,130 @@ const renderSheetEditorFilters = () => {
   sheetEditorFilters.append(clear);
 };
 
+const focusSheetEditorField = (fieldName: string) => {
+  if([SKILL_EFFECTS_FIELD,SKILL_TRAINING_FIELD].includes(fieldName)||fieldName.startsWith('Mar Trei ')||/^BossBar\.Oficio\.\d+\.Treinada$/.test(fieldName)){openSkillTrainingEditor(sheetEditorDocument,applyTrainingDraft);return;}
+  activeSheetEditorCategories.clear();
+  if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
+  renderSheetEditorFilters();
+  renderSheetEditorFields();
+  const label = document.getElementById('web-player-sheet-editor')?.querySelector<HTMLElement>(`[data-field-name="${CSS.escape(fieldName)}"]`)
+    ?? sheetEditorFields?.querySelector<HTMLElement>(`[data-field-name="${CSS.escape(fieldName)}"]`);
+  scrollSheetFieldIntoView(label);
+  label?.querySelector<HTMLElement>('input:not([hidden]), select, textarea, button')?.focus({ preventScroll: true });
+};
+
+const scrollSheetFieldIntoView = (field: HTMLElement | null | undefined) => {
+  if (!field || !sheetEditorFields?.contains(field)) return;
+  const parent = sheetEditorFields.getBoundingClientRect(); const target = field.getBoundingClientRect();
+  sheetEditorFields.scrollTo({ top: sheetEditorFields.scrollTop + target.top - parent.top - Math.max(0, (parent.height - target.height) / 2), behavior: 'smooth' });
+};
+const appendReferenceComparison = (container: HTMLElement, issue: CharacterSheetIssue) => {
+  if (!issue.comparison) return;
+  const details = document.createElement('details'); details.className = 'sheet-reference-comparison';
+  const summary = document.createElement('summary'); summary.textContent = 'Comparar trechos da diferença'; details.append(summary);
+  for (const [caption, text] of [['Na ficha', issue.comparison.sheetExcerpt], [issue.source || 'Na referência', issue.comparison.referenceExcerpt]]) {
+    const quote = document.createElement('blockquote');
+    const label = document.createElement('span'); label.className = 'comparison-caption'; appendRuleText(label, caption);
+    quote.append(label, document.createTextNode(text)); details.append(quote);
+  }
+  const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Consultar texto completo do livro';
+  button.addEventListener('click', () => openRulesCatalog({ referenceId: issue.comparison!.referenceId }));
+  details.append(button); container.append(details);
+};
+const separateRowWarnings = (row: HTMLElement, target: HTMLElement, description: string) => {
+  const notices = [...row.querySelectorAll<HTMLElement>('.sheet-field-error')];
+  if (!notices.length) return;
+  const review = document.createElement('details'); review.className = 'sheet-spell-review sheet-row-review';
+  const summary = document.createElement('summary'); summary.textContent = `${notices.length} campo(s) para revisar ${description}`;
+  review.append(summary);
+  for (const notice of notices) {
+    const wrapper = notice.closest('.sheet-field-review'); if (wrapper && row.contains(wrapper)) wrapper.remove();
+    review.append(notice);
+  }
+  target.append(review);
+};
+
+const renderSheetEditorReview = () => {
+  const review = document.getElementById('web-player-sheet-editor-review');
+  if (!review) return;
+  review.replaceChildren();
+  review.hidden = sheetEditorIssues.length === 0;
+  if (review.hidden) return;
+  const summary = document.createElement('summary');
+  const errors = sheetEditorIssues.filter(({ severity }) => severity === 'error').length;
+  summary.textContent = `${errors} erro(s) e ${sheetEditorIssues.length - errors} aviso(s) para revisar`;
+  if (sheetEditorIssues.some(({ dismissible }) => dismissible)) {
+    const clearAll = document.createElement('button'); clearAll.type = 'button'; clearAll.className = 'sheet-warning-clear-all'; clearAll.textContent = 'Limpar todos';
+    clearAll.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); void clearSheetWarnings(sheetEditorIssues, true); });
+    summary.append(clearAll);
+  }
+  const list = document.createElement('ul');
+  for (const issue of sheetEditorIssues) {
+    const item = document.createElement('li');
+    item.dataset.severity = issue.severity;
+    const text = document.createElement('p');
+    appendRuleText(text, `${issue.location ? `${issue.location}: ` : ''}${issue.reason || issue.message || 'Houve um erro inesperado.'}${issue.expected === undefined ? '' : ` Esperado: ${issue.expected}; encontrado: ${issue.actual ?? 'vazio'}.`}${issue.correction ? ` ${issue.correction}` : ''}${issue.source ? ' ' + issue.source : ''}`);
+    item.append(text);
+    appendReferenceComparison(item, issue);
+    const actions = document.createElement('div'); actions.className = 'sheet-issue-actions';
+    if (issue.id === 'migration:load-units') {
+      const confirmation = sheetEditorDocument.find(({ name }) => name === 'BossBar.CargaRevisada');
+      if (confirmation) {
+        const label = document.createElement('label');
+        label.dataset.fieldName = confirmation.name;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox'; checkbox.checked = confirmation.value === 'Yes';
+        checkbox.addEventListener('change', () => {
+          confirmation.value = checkbox.checked ? 'Yes' : 'Off';
+          markSheetEditorDirty();
+        });
+        label.append(checkbox, document.createTextNode('Revisei o equipamento e confirmei a carga em espaços'));
+        item.append(label);
+      }
+    } else if (issue.field && sheetEditorDocument.some(({ name }) => name === issue.field)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Ir ao campo';
+      button.addEventListener('click', () => focusSheetEditorField(issue.field!));
+      actions.append(button);
+    }
+    appendClearWarningButton(actions, issue, true);
+    item.append(actions);
+    list.append(item);
+  }
+  review.append(summary, list);
+};
+
+const applyTrainingDraft = (updates: CharacterSheetEditorField[]) => {
+  // An automatic preview may have replaced the sheet array while the nested draft was open.
+  for(const update of updates){const field=sheetEditorDocument.find(f=>f.name===update.name);if(field)field.value=update.value;else sheetEditorDocument.push({...update});}
+  markSheetEditorDirty();renderSheetEditorFields();refreshAttributeDerivedValues();
+};
+
 const renderSheetEditorFields = () => {
   if (!sheetEditorFields) return;
+  refreshSkillTrainingReview();
   const automaticRepair = document.getElementById('web-player-sheet-import-autofix');
-  automaticRepair?.toggleAttribute('hidden', !sheetEditorImportPending || !sheetEditorIssues.some((issue) => issue.severity === 'error' && issue.autoFixable));
-  automaticRepair?.toggleAttribute('disabled', sheetEditorDirty);
-  automaticRepair?.setAttribute('data-disabled-reason', 'Conclua os ajustes manuais já iniciados');
+  automaticRepair?.removeAttribute('hidden');
+  automaticRepair?.toggleAttribute('disabled', sheetEditorClosing);
+  renderSheetEditorReview();
+  const issuesByField = new Map<string, typeof sheetEditorIssues>();
+  for (const issue of sheetEditorIssues) {
+    if (issue.field) issuesByField.set(issue.field, [...(issuesByField.get(issue.field) ?? []), issue]);
+  }
   const query = sheetEditorSearch instanceof HTMLInputElement
     ? sheetEditorSearch.value.trim().toLocaleLowerCase('pt-BR')
     : '';
   sheetEditorFields.replaceChildren();
+  const spellNames = document.createElement('datalist'); spellNames.id = 'sheet-spell-catalog-names';
+  for (const spell of T20_CATALOG.spells) spellNames.append(new Option(spell.name));
+  sheetEditorFields.append(spellNames);
   const filteredFields = sheetEditorDocument.filter((field) => {
+    if (field.name === RD_FIELD || field.name === SKILL_TRAINING_FIELD || field.name === SKILL_EFFECTS_FIELD) return false;
+    if (['BossBar.CdJustificativa', 'BossBar.Nimb.Equipamento', 'BossBar.Nimb.Equipamento2', 'BossBar.CargaRevisada'].includes(field.name)) return false;
+    if (['arm pesa', 'BossBar.LimiteAtributoDefesa'].includes(field.name) || /\.LimiteManual$|^Bônus Atq \d+$|\.(TesteTotal|DanoAlternativo)$/.test(field.name)) return false;
+    const secondary = /^(BossBar\.Ataque\.\d+)\.Segunda\./.exec(field.name);
+    if (secondary && sheetEditorDocument.find(({ name }) => name === `${secondary[1]}.DuasArmas`)?.value !== 'Yes') return false;
     const categoryMatches = activeSheetEditorCategories.size === 0 ||
       activeSheetEditorCategories.has(sheetEditorCategoryForSection(field.section));
     if (!categoryMatches) return false;
@@ -1531,15 +1811,27 @@ const renderSheetEditorFields = () => {
     field: CharacterSheetEditorField,
     input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
   ) => {
+    if ((field.name.startsWith('Mar Trei ') || /^BossBar\.Oficio\.\d+\.Treinada$/.test(field.name)) && input instanceof HTMLInputElement && input.checked) {
+      const values = Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));
+      const before = skillTraining(values); const after = skillTraining({ ...values, [field.name]: 'Yes' });
+      if (after.unmatched.length > before.unmatched.length || after.unmatched.some(({ trainedField }) => trainedField === field.name)) {
+        input.checked = false;
+        openSkillTrainingEditor(sheetEditorDocument, applyTrainingDraft, field.group);
+        return;
+      }
+    }
     sheetEditorIssues = sheetEditorIssues.filter((issue) => issue.field !== field.name);
     input.setCustomValidity('');
     input.removeAttribute('aria-invalid');
     const wrapper = input.closest<HTMLElement>('[data-field-name]');
-    wrapper?.classList.remove('has-import-error');
+    wrapper?.classList.remove('has-import-error', 'has-import-warning');
     wrapper?.querySelector('.sheet-field-error')?.remove();
+    const previousValue = field.value;
     field.value = field.kind === 'checkbox'
       ? (input as HTMLInputElement).checked ? 'Yes' : 'Off'
       : input.value;
+    markSheetEditorDirty();
+    renderSheetEditorReview();
     if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
       input.setCustomValidity('');
       const value = input.value.trim();
@@ -1582,20 +1874,78 @@ const renderSheetEditorFields = () => {
         return;
       }
     }
-    if (/^Item \d+$/.test(field.group ?? '')) recalculateSheetLoad();
-    markSheetEditorDirty();
+    const setDerived = (name: string, value: string) => {
+      const target = sheetEditorDocument.find((entry) => entry.name === name);
+      if (target) target.value = value;
+      const element = sheetEditorFields?.querySelector<HTMLInputElement | HTMLOutputElement | HTMLSelectElement>(`[data-field-name="${CSS.escape(name)}"] input, [data-field-name="${CSS.escape(name)}"] output, [data-field-name="${CSS.escape(name)}"] select`);
+      if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement) element.value = /\.Base$/.test(name) && value !== '' && Number(value) >= 0 ? `+${Number(value)}` : value;
+      else if (element) element.value = Number(value) ? `−${value}` : '0';
+    };
+    const exclusive = /^BossBar\.(Armadura|Escudo|Ataque)\.\d+\.(Equipado|Principal)$/.exec(field.name);
+    if (exclusive && field.value === 'Yes') {
+      for (const other of sheetEditorDocument) if (other !== field && new RegExp(`^BossBar\\.${exclusive[1]}\\.\\d+\\.${exclusive[2]}$`).test(other.name)) other.value = 'Off';
+    }
+    const armorRow = /^Armadura (\d+)$/.exec(field.group || '');
+    if (affectsInventoryLoad(field.name)) recalculateSheetLoad();
+    if (armorRow) {
+      const index = Number(armorRow[1]); const keys = equipmentKeys('Armadura', index);
+      if (field.name === keys.name) {
+        const inferred = inferredArmorAttributeLimit(field.value);
+        if (inferred !== null) setDerived(keys.limit, inferred);
+        setDerived(`BossBar.Armadura.${index}.LimiteManual`, 'Off');
+      } else if (field.name === keys.limit) setDerived(`BossBar.Armadura.${index}.LimiteManual`, 'Yes');
+    }
+    if (['Pa', 'Pe', 'B.Arm1', 'B.Esc2'].includes(field.name) || /^BossBar\.(Armadura|Escudo)\./.test(field.name)) {
+      const values = Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));
+      const penalty = armorPenaltyTotal(values);
+      if (Number.isFinite(penalty)) setDerived('BossBar.PenalidadeArmadura', String(penalty));
+      for (const [kind, total] of [['Armadura', 'B.Arm'], ['Escudo', 'B.Esc']] as const) setDerived(total, String(equipmentDefenseTotal(values, kind)));
+    }
+    const values = Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value]));
+    if ((field.name === 'RAÇA' || field.name === 'SeleTamanho') && previousValue !== field.value) {
+      synchronizeCharacterSize(values,field.name==='RAÇA');
+      for(const key of ['SeleTamanho','ModFurtTam','BossBar.ManobrasTamanho'])if(values[key]!==undefined)setDerived(key,values[key]);
+    }
+    const skillUpdates = recalculateCharacterSkills(values);
+    for (const [name, value] of Object.entries(skillUpdates)) setDerived(name, value);
+    clearRecalculatedSkillIssues(Object.keys(skillUpdates));
+    const selectedDefenseAttribute = values[`Mod${values.SeleAtribDefe?.slice(0, 1).toUpperCase()}${values.SeleAtribDefe?.slice(1).toLowerCase()}`];
+    if (selectedDefenseAttribute !== undefined) { values.ModAtribDefe = selectedDefenseAttribute; setDerived('ModAtribDefe', selectedDefenseAttribute); }
+    const totalDefense = sheetDefenseTotal(values);
+    if (Number.isFinite(totalDefense)) setDerived('CA', String(totalDefense));
+    for (const base of sheetEditorDocument) {
+      const match = /^BossBar\.Ataque\.(\d+)\.(Segunda\.)?Base$/.exec(base.name);
+      if (match) setDerived(base.name, attackSkillTotal(values, Number(match[1]), Boolean(match[2])));
+    }
+    if (exclusive || /\.DuasArmas$/.test(field.name)) renderSheetEditorFields();
+    const circle = /^(BossBar\.Magia\.\d+)\.Circulo$/.exec(field.name);
+    if (circle) {
+      const cost = baseSpellManaCost(field.value);
+      setDerived(`${circle[1]}.Custo`, cost === null ? '' : String(cost));
+    }
+    if (field.name === 'arm pesa') renderSheetEditorFields();
   };
 
   const createFieldInput = (field: CharacterSheetEditorField) => {
     let input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-    if (/^Tipo \d+$/.test(field.name)) {
+    if (/^BossBar\.Ataque\.\d+\.(Segunda\.)?Origem$/.test(field.name)) {
+      const select = document.createElement('select');
+      for (const [id, label] of DAMAGE_ORIGINS) select.add(new Option(label, id, false, id === (field.value || 'unknown')));
+      input = select;
+    } else if (field.name === 'SeleTamanho') {
+      const select = document.createElement('select');
+      const normalized = characterSize(field.value)?.name ?? field.value;
+      select.add(new Option(field.value && !characterSize(field.value) ? `${field.value} — revisar` : 'Selecione', !characterSize(field.value)?field.value:''));
+      for (const size of CHARACTER_SIZES) select.add(new Option(size.name, size.name, false, size.name === normalized));
+      input = select;
+    } else if (/^Tipo \d+$|\.Segunda\.Tipo$/.test(field.name)) {
       const select = document.createElement('select');
       for (const value of [...new Set([field.value, ...DAMAGE_TYPES])]) {
         const option = new Option(value || 'Selecione', value, false, value === field.value);
         select.append(option);
       }
       input = select;
-    } else if (field.name === 'Ofício 1' || field.name === 'Ofício_2') {
+    } else if (field.name === 'Ofício 1' || field.name === 'Ofício_2' || /^BossBar\.Oficio\.\d+\.Nome$/.test(field.name)) {
       const select = document.createElement('select');
       const options: string[] = ['', ...officeOptions];
       if (field.value && !options.includes(field.value)) options.push(field.value);
@@ -1623,10 +1973,10 @@ const renderSheetEditorFields = () => {
         'Descrição',
         'HabRaçasOrigem',
         'HabClassePoderes',
-      ].includes(field.name);
+      ].includes(field.name) || /^BossBar\.(?:Nimb|Habilidades)\.|\.(?:Efeito|Informacoes)$|^BossBar\.(?:Defesa|Cd)Justificativa$/.test(field.name);
       if (isLongText) {
         const textArea = document.createElement('textarea');
-        textArea.rows = 3;
+        textArea.rows = field.value ? 6 : 3;
         textArea.value = field.value;
         input = textArea;
       } else {
@@ -1657,16 +2007,57 @@ const renderSheetEditorFields = () => {
     if (input instanceof HTMLInputElement && field.validation?.kind === 'decimal') {
       input.inputMode = 'decimal';
     }
-    if (input instanceof HTMLInputElement && field.name === 'CargaTotal') {
+    if (input instanceof HTMLInputElement && field.name === 'BossBar.MoedaPersonalizada.Nome') input.placeholder = 'Moeda personalizada';
+    if (input instanceof HTMLInputElement && /\.LimiteAtributo$/.test(field.name)) input.placeholder = 'Sem limite';
+    if (input instanceof HTMLInputElement && (/^BossBar\.Ataque\.\d+\.(Segunda\.)?Base$/.test(field.name) || ['CA', 'B.Arm', 'B.Esc', 'ModFurtTam', 'BossBar.ManobrasTamanho', 'CargaTotal', 'TesteResist'].includes(field.name))) {
+      input.readOnly = true; input.setAttribute('aria-readonly', 'true');
+      input.title = 'Calculado a partir da perícia ou do equipamento selecionado.';
+      if (/\.Base$/.test(field.name) && field.value !== '' && Number(field.value) >= 0) input.value = `+${Number(field.value)}`;
+    }
+    if (input instanceof HTMLTextAreaElement && field.name === 'BossBar.Nimb.PaginasAdicionais') {
+      input.readOnly = true;
+      input.title = 'Informações adicionais. Registre alterações em Anotações da ficha.';
+    }
+    if (input instanceof HTMLInputElement && /^BossBar\.Magia\.\d+\.Custo$/.test(field.name)) {
+      input.readOnly = true; input.setAttribute('aria-readonly', 'true');
+      input.title = 'Custo-base em PM pelo círculo (Livro Básico, p. 170). Registre reduções e ajustes em Anotações para Magias.';
+    }
+    if (input instanceof HTMLInputElement && /^BossBar\.Magia\.\d+\.Nome$/.test(field.name)) {
+      input.setAttribute('list', 'sheet-spell-catalog-names');
+      input.addEventListener('change', () => {
+        const reference = findSpell(input.value); if (!reference) return;
+        const prefix = field.name.replace(/\.Nome$/, '');
+        for (const [suffix, value] of Object.entries(spellFieldDefaults(reference))) {
+          const target = sheetEditorDocument.find(({ name }) => name === `${prefix}.${suffix}`);
+          if (target && !target.value.trim()) target.value = value;
+        }
+        const circle = sheetEditorDocument.find(({ name }) => name === `${prefix}.Circulo`)?.value ?? '';
+        const cost = sheetEditorDocument.find(({ name }) => name === `${prefix}.Custo`);
+        if (cost) cost.value = String(baseSpellManaCost(circle) ?? '');
+        markSheetEditorDirty(); renderSheetEditorFields();
+      });
+    }
+    if (input instanceof HTMLInputElement && /^ModAtrib/.test(field.name) &&
+      sheetEditorDocument.some(({ name, value }) => name === field.name.replace('ModAtrib', 'SeleAtrib') && /^(FOR|DES|CON|INT|SAB|CAR)$/.test(value))) {
       input.readOnly = true;
       input.setAttribute('aria-readonly', 'true');
+      input.title = 'Derivado do atributo selecionado. Altere o atributo ou sua seleção e use Validar e corrigir cálculos.';
     }
-    const errors = sheetEditorIssues.filter((issue) => issue.severity === 'error' && issue.field === field.name);
+    const skillDerived = field.section === 'Perícias' && ['Total', 'Atributo', 'Treino', '1/2 do nível'].includes(field.label);
+    if (input instanceof HTMLInputElement && (skillDerived || field.name === 'ModAtribMagia')) { input.readOnly = true; input.setAttribute('aria-readonly', 'true'); }
+    const noTooltip = ['ModFurtTam', 'BossBar.ManobrasTamanho', 'ModAtribMagia'].includes(field.name) || (skillDerived && field.label !== 'Total');
+    if (noTooltip) { input.removeAttribute('title'); input.classList.add('no-calculation-tooltip'); }
+    else if ((input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) && (input.readOnly || ['PVs Totais', 'PMs Totais', 'CargaMax', 'Levantar'].includes(field.name))) attachCalculationTooltip(input, () => sheetCalculationDescription(field.name, sheetEditorDocument));
+    const errors = (issuesByField.get(field.name) ?? []).filter((issue) => issue.severity === 'error');
     if (errors.length) {
       input.setAttribute('aria-invalid', 'true');
       input.setCustomValidity(errors.map(({ message }) => message).join(' '));
     }
     input.addEventListener('input', () => scheduleFieldSave(field, input));
+    if (['integer', 'decimal', 'formula'].includes(field.validation?.kind ?? '')) input.addEventListener('blur', () => {
+      const normalized = normalizeSheetNumber(input.value);
+      if (normalized !== input.value) { input.value = normalized; scheduleFieldSave(field, input); }
+    });
     return input;
   };
 
@@ -1674,18 +2065,82 @@ const renderSheetEditorFields = () => {
     const label = document.createElement('label');
     label.dataset.fieldName = field.name;
     const name = document.createElement('span');
-    name.textContent = field.label;
+    name.textContent = field.section === 'Perícias' ? ({ 'Atributo-chave': 'Chave', '1/2 do nível': '½ nível' } as Record<string,string>)[field.label] || field.label : field.label;
+    name.title = field.label;
     const input = createFieldInput(field);
-    label.append(name, input);
-    const errors = sheetEditorIssues.filter((issue) => issue.severity === 'error' && issue.field === field.name);
-    if (errors.length) {
-      label.classList.add('has-import-error');
-      const explanation = document.createElement('small');
-      explanation.className = 'sheet-field-error';
-      explanation.textContent = errors.map(({ message, expected }) => `${message}${expected === undefined ? '' : ` Esperado: ${expected}.`}`).join(' ');
-      label.append(explanation);
+    if (input instanceof HTMLTextAreaElement) label.classList.add('is-long-text');
+    if (field.kind === 'checkbox') label.classList.add('is-checkbox');
+    const identityKind = identityOptionKind[field.name];
+    label.append(name, identityKind && input instanceof HTMLInputElement ? characterOptionsInput(input, identityKind, field.label, (name) => field.name === 'CLASSE' ? name + ' ' + (sheetEditorDocument.find(({ name }) => name === 'Lv')?.value || '1') : name) : input);
+    if (field.name === 'CLASSE') {
+      const header = document.createElement('span'); header.className = 'identity-class-title';
+      const multi = document.createElement('button'); multi.type = 'button'; multi.className = 'sheet-secondary-action'; multi.textContent = 'Multiclasse';
+      multi.setAttribute('aria-label', 'Multiclasse');
+      multi.addEventListener('click', (event) => { event.preventDefault(); openMulticlassEditor(sheetEditorDocument, () => { markSheetEditorDirty(); renderSheetEditorFields(); refreshAttributeDerivedValues(); }); });
+      name.replaceWith(header); header.append(name, multi);
+      const abbreviate = () => { input.value = abbreviateCharacterClasses(field.value); input.title = field.value; };
+      abbreviate(); input.addEventListener('focus', () => { input.value = field.value; });
+      input.addEventListener('blur', abbreviate);
+      input.addEventListener('change', () => {
+        const level = sheetEditorDocument.find(({ name }) => name === 'Lv')?.value || '1';
+        if (input.value && !input.value.includes('/') && !/\d+$/.test(input.value)) { input.value = formatCharacterClasses(parseCharacterClasses(input.value, Number(level))); scheduleFieldSave(field, input); }
+      });
     }
-    if (/^Alcance \d+$/.test(field.name)) {
+    if (['RAÇA', 'ORIGEM', 'CLASSE', 'Lv', 'SeleTamanho'].includes(field.name) || field.name.startsWith('BossBar.Habilidades.') || /^(?:Item\d+|BossBar\.(?:Item\.\d+\.(?:Nome|Quantidade)|Magia\.\d+\.Nome))$/.test(field.name)) input.addEventListener('input', () => {
+      queueMicrotask(() => {
+        const attributes = sheetEditorFields?.querySelector('.character-attributes-editor');
+        if (attributes) {
+          const editor = characterAttributesEditor(sheetEditorDocument, refreshAttributeDerivedValues, rollCharacterAttribute);
+          attributes.closest('.is-attributes')?.querySelector('.attribute-add-point')?.replaceWith(editor.querySelector('.attribute-add-point')!);
+          attributes.closest('.is-attributes')?.querySelector('.attribute-allocation-toolbar')?.replaceWith(editor.querySelector('.attribute-allocation-toolbar')!);
+          attributes.replaceWith(editor);
+        }
+        refreshAttributeDerivedValues();
+      });
+    });
+    if (field.name === 'SeleAtribMagia') input.addEventListener('input', refreshAttributeDerivedValues);
+    if (field.name === 'Lv') input.addEventListener('input', () => {
+      const classField = sheetEditorDocument.find(({ name }) => name === 'CLASSE');
+      if (!classField?.value || classField.value.includes('/')) return;
+      classField.value = formatCharacterClasses([{ name: parseCharacterClasses(classField.value)[0].name, level: Number(input.value) || 1 }]);
+      const classInput = sheetEditorFields?.querySelector<HTMLInputElement>('[data-field-name="CLASSE"] input'); if (classInput) classInput.value = classField.value;
+      refreshAttributeDerivedValues();
+    });
+    const help = field.name === 'arm pesa'
+      ? 'Marcado: soma todo o atributo à Defesa. Desmarcado: aplica o limite informado para armadura pesada.'
+      : field.name === 'BossBar.LimiteAtributoDefesa'
+        ? 'Máximo do atributo que entra na Defesa quando Atributo completo está desmarcado.'
+        : /^BossBar\.Ataque\.\d+\.TesteTotal$/.test(field.name)
+          ? 'O teste informado já inclui Luta ou Pontaria. Evita somar a perícia novamente.'
+          : /^BossBar\.Ataque\.\d+\.DanoAlternativo$/.test(field.name)
+            ? 'Dano da segunda extremidade de uma arma dupla. Deixe vazio para outras armas.'
+            : field.name === 'BossBar.Nimb.MagiasAdicionais'
+              ? 'Bônus de CD e suas origens, ajustes, referências e outras informações sobre suas magias.'
+              : '';
+    if (help) {
+      const explanation = document.createElement('small');
+      explanation.className = 'sheet-field-help';
+      explanation.textContent = help;
+      label.append(explanation);
+      input.title = help;
+    }
+    const fieldIssues = issuesByField.get(field.name) ?? [];
+    if (fieldIssues.length) {
+      label.classList.add(fieldIssues.some(({ severity }) => severity === 'error') ? 'has-import-error' : 'has-import-warning');
+      const explanation = document.createElement('div');
+      explanation.className = 'sheet-field-error';
+      explanation.dataset.severity = fieldIssues.some(({ severity }) => severity === 'error') ? 'error' : 'warning';
+      for (const issue of fieldIssues) {
+        const text = document.createElement('p'); appendRuleText(text, `${issue.reason || issue.message}${issue.expected === undefined ? '' : ` Esperado: ${issue.expected}.`}${issue.autoFixable ? ' Use Validar e corrigir cálculos para recalcular.' : ''}${issue.source ? ' ' + issue.source : ''}`);
+        explanation.append(text); appendReferenceComparison(explanation, issue);
+      }
+      {
+        const review = document.createElement('details'); review.className = 'sheet-field-review';
+        const summary = document.createElement('summary'); summary.textContent = `Revisar (${fieldIssues.length})`;
+        review.append(summary, explanation); label.append(review);
+      }
+    }
+    if (/^Alcance \d+$|\.Segunda\.Alcance$/.test(field.name)) {
       input.hidden = true;
       const select = document.createElement('select');
       select.setAttribute('aria-label', field.label);
@@ -1707,17 +2162,84 @@ const renderSheetEditorFields = () => {
     container.append(label);
   };
 
+  const appendFields = (container: HTMLElement, fields: CharacterSheetEditorField[]) => {
+    const paired = new Set<string>();
+    for (const field of fields) {
+      if (paired.has(field.name)) continue;
+      if (field.name === 'CA') {
+        const pair = document.createElement('div'); pair.className = 'sheet-field-pair'; appendField(pair, field);
+        const control = document.createElement('div'); control.className = 'sheet-rd-control'; control.dataset.fieldName = RD_FIELD;
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Redução de dano';
+        const rd = sheetEditorDocument.find(({ name }) => name === RD_FIELD);
+        button.addEventListener('click', async () => {
+          const updated = await openDamageReductionEditor(normalizeDamageReduction(rd?.value));
+          if (!updated || !rd) return;
+          rd.value = JSON.stringify(updated); sheetEditorIssues = sheetEditorIssues.filter(({ field }) => field !== RD_FIELD);
+          markSheetEditorDirty(); renderSheetEditorReview();
+          const summary = container.closest('.is-defense')?.querySelector('.sheet-rd-summary');
+          if (summary) summary.textContent = damageReductionSummary(updated);
+        });
+        control.append(button); pair.append(control); container.append(pair); continue;
+      }
+      const partnerName = field.name === 'SeleAtribMagia' ? 'ModAtribMagia' : field.name === 'SeleTamanho' ? 'ModFurtTam' : field.name === 'Desloc' ? 'BossBar.ManobrasTamanho'
+        : field.name === 'BossBar.CdOutros' ? 'TesteResist'
+          : /^BossBar\.Ataque\.\d+\.(Segunda\.)?Base$/.test(field.name) ? field.name.replace(/Base$/, 'Ajuste')
+          : /\.MargemCritico$/.test(field.name) ? field.name.replace(/MargemCritico$/, 'MultiplicadorCritico')
+          : /^BossBar\.Magia\.\d+\.Circulo$/.test(field.name) ? field.name.replace(/Circulo$/, 'Custo') : null;
+      const partner = fields.find(({ name }) => name === partnerName);
+      if (partner) {
+        if (field.name === 'SeleAtribMagia' || /\.(Base|MargemCritico|Circulo)$/.test(field.name)) {
+          const magicAttribute = field.name === 'SeleAtribMagia';
+          const critical = /\.MargemCritico$/.test(field.name);
+          const circle = /\.Circulo$/.test(field.name);
+          const captionText = magicAttribute ? 'Atributo-chave' : circle ? 'Círculo' : critical ? 'Crítico' : 'Teste de ataque';
+          const composite = document.createElement('div'); composite.className = 'sheet-attack-test';
+          if (critical) composite.classList.add('is-critical');
+          if (circle) composite.classList.add('is-spell-circle');
+          if (magicAttribute) composite.classList.add('is-magic-attribute');
+          composite.setAttribute('role', 'group'); composite.setAttribute('aria-label', captionText);
+          const caption = document.createElement('span'); caption.className = 'sheet-attack-test-caption'; caption.textContent = captionText;
+          const inputs = document.createElement('div'); inputs.className = 'sheet-attack-test-inputs';
+          appendField(inputs, field); appendField(inputs, partner);
+          if (magicAttribute) {
+            inputs.querySelector('select')?.setAttribute('aria-label', 'Atributo-chave de magia');
+            inputs.querySelector('input')?.setAttribute('aria-label', 'Valor do atributo-chave de magia, somente leitura');
+          } else if (circle) {
+            inputs.querySelector('select')?.setAttribute('aria-label', 'Círculo');
+            inputs.querySelector('input')?.setAttribute('aria-label', 'Custo-base (PM), somente leitura');
+          } else if (critical) {
+            const [margin, multiplier] = inputs.querySelectorAll('input');
+            margin?.setAttribute('aria-label', 'Margem de crítico');
+            multiplier?.setAttribute('aria-label', 'Multiplicador de crítico');
+            if (margin) margin.title = 'Margem de crítico (ex.: 19)';
+            if (multiplier) multiplier.title = 'Multiplicador de crítico (ex.: ×2)';
+          } else {
+            inputs.querySelector('input')?.setAttribute('aria-label', 'Base da perícia (somente leitura)');
+            const adjustment = inputs.querySelectorAll('input')[1];
+            adjustment?.setAttribute('aria-label', 'Ajuste do teste de ataque');
+            if (adjustment) adjustment.placeholder = '+1d6 + 3 + 2d2';
+          }
+          composite.append(caption, inputs); container.append(composite);
+        } else {
+          const pair = document.createElement('div'); pair.className = 'sheet-field-pair';
+          appendField(pair, field); appendField(pair, partner); container.append(pair);
+        }
+        paired.add(partner.name);
+      } else appendField(container, field);
+    }
+  };
   const orderedSections = [...sections].sort(([left], [right]) =>
     (sheetEditorSectionOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
     (sheetEditorSectionOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
   );
   for (const [sectionName, fields] of orderedSections) {
+    const headerFields = new Set<string>();
     const section = document.createElement('section');
     section.className = 'web-player-sheet-editor-section';
     section.dataset.category = sheetEditorCategoryForSection(sectionName);
     const sectionClass = new Map([
       ['Identidade', 'is-identity'],
-      ['Atributos e modificadores', 'is-attributes'],
+      ['Atributos', 'is-attributes'],
       ['Perícias', 'is-skills'],
       ['Defesa', 'is-defense'],
       ['Armadura e escudo', 'is-equipment'],
@@ -1726,11 +2248,15 @@ const renderSheetEditorFields = () => {
     if (sectionClass) section.classList.add(sectionClass);
     const heading = document.createElement('h2');
     heading.textContent = sectionName;
-    if (['Ataques', 'Magias', 'Itens', 'Armadura e escudo'].includes(sectionName)) {
+    if (['Ataques', 'Magias', 'Habilidades', 'Itens', 'Armadura e escudo'].includes(sectionName)) {
       const headingRow = document.createElement('div');
       headingRow.className = 'web-player-sheet-editor-section-heading';
       const controls = document.createElement('div');
       controls.className = 'web-player-sheet-editor-section-actions';
+      if (sectionName === 'Magias' || sectionName === 'Habilidades') {
+        const catalog = document.createElement('button'); catalog.type = 'button'; catalog.textContent = 'Consultar catálogo';
+        catalog.addEventListener('click', () => openRulesCatalog({ kind: sectionName === 'Magias' ? 'spell' : 'ability' })); controls.append(catalog);
+      }
       if (sectionName === 'Ataques') {
         const addAttack = document.createElement('button');
         addAttack.type = 'button';
@@ -1751,7 +2277,7 @@ const renderSheetEditorFields = () => {
         addItem.textContent = '+ Adicionar item';
         addItem.addEventListener('click', addItemEditorRow);
         controls.append(addItem);
-      } else {
+      } else if (sectionName === 'Armadura e escudo') {
         for (const kind of ['Armadura', 'Escudo'] as const) {
           const addEquipment = document.createElement('button');
           addEquipment.type = 'button';
@@ -1760,16 +2286,82 @@ const renderSheetEditorFields = () => {
           controls.append(addEquipment);
         }
       }
-      headingRow.append(heading, controls);
+      const headingContent = document.createElement('div');
+      headingContent.className = 'sheet-section-heading-content';
+      headingContent.append(heading);
+      if (sectionName === 'Armadura e escudo') {
+        const penalty = fields.find(({ name }) => name === 'BossBar.PenalidadeArmadura');
+        if (penalty) {
+          headerFields.add(penalty.name);
+          const display = document.createElement('div');
+          display.className = 'sheet-heading-values sheet-armor-penalty';
+          display.dataset.fieldName = penalty.name;
+          const caption = document.createElement('span'); caption.textContent = 'Penalidade total';
+          const value = document.createElement('output');
+          value.setAttribute('aria-label', 'Penalidade total');
+          value.value = Number(penalty.value) ? `−${penalty.value}` : '0';
+          display.title = 'Calculada com a armadura e o escudo equipados e seus ajustes.';
+          display.tabIndex = 0; attachCalculationTooltip(display, () => sheetCalculationDescription(penalty.name, sheetEditorDocument));
+          display.append(caption, value); headingContent.append(display);
+        }
+      }
+      if (sectionName === 'Itens') {
+        const currencies = document.createElement('div');
+        currencies.className = 'sheet-heading-values sheet-currencies';
+        for (const coin of SHEET_COIN_FIELDS) {
+          const field = fields.find(({ name }) => name === coin);
+          const customName = coin === 'BossBar.MoedaPersonalizada.Quantidade' ? fields.find(({ name }) => name === 'BossBar.MoedaPersonalizada.Nome') : undefined;
+          if (!field && !customName) continue;
+          const container = document.createElement('div'); container.className = 'sheet-currency';
+          if (customName) { container.classList.add('is-custom'); headerFields.add(customName.name); appendField(container, customName); }
+          if (field) { headerFields.add(field.name); appendField(container, field); }
+          currencies.append(container);
+        }
+        if (currencies.childElementCount) headingContent.append(currencies);
+        const loads = document.createElement('div'); loads.className = 'sheet-heading-values sheet-load-values';
+        for (const key of ['CargaTotal', 'CargaMax', 'Levantar']) {
+          const field = fields.find(({ name }) => name === key); if (!field) continue; headerFields.add(key);
+          if (key !== 'CargaTotal') { appendField(loads, field); continue; }
+          const group = document.createElement('div'); group.className = 'sheet-load-composite'; group.dataset.fieldName = key;
+          const caption = document.createElement('span'); caption.textContent = 'Carga atual';
+          const parts = document.createElement('div'); parts.className = 'sheet-load-parts';
+          for (const [part, text] of [['gross', 'Bruta'], ['equipped', 'Equipada'], ['total', 'Real']]) {
+            const label = document.createElement('label');
+            const input = document.createElement('input'); input.readOnly = true; input.dataset.loadPart = part;
+            input.setAttribute('aria-label', `Carga ${text.toLowerCase()}, somente leitura`);
+            attachCalculationTooltip(input, () => inventoryCalculationDescription(inventoryFromEditor())); label.append(input); parts.append(label);
+          }
+          group.append(caption, parts); loads.append(group);
+        }
+        headingContent.append(loads);
+      }
+      headingRow.append(headingContent, controls);
       section.append(headingRow);
     } else {
       section.append(heading);
     }
 
+    if (sectionName === 'Perícias') {
+      const training = skillTraining(Object.fromEntries(sheetEditorDocument.map(({ name, value }) => [name, value])));
+      const row = document.createElement('div'); row.className = 'sheet-skills-heading'; row.dataset.fieldName = SKILL_TRAINING_FIELD;
+      heading.replaceWith(row); row.append(heading);
+      const summary = document.createElement('span'); summary.className = 'skill-training-summary'; summary.textContent = `${training.selected.length} / ${training.maximum} treinadas${training.sources.some(({ confirmed }) => !confirmed) ? ' · fontes a confirmar' : ''}`;
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'sheet-training-button'; button.textContent = 'Fontes de treinamento'; button.setAttribute('aria-label', 'Fontes de treinamento');
+      button.addEventListener('click', () => openSkillTrainingEditor(sheetEditorDocument, applyTrainingDraft));
+      row.append(summary, button);
+    }
+    if (sectionName === 'Atributos') {
+      const editor = characterAttributesEditor(sheetEditorDocument, refreshAttributeDerivedValues, rollCharacterAttribute);
+      const titleRow = document.createElement('div'); titleRow.className = 'sheet-attributes-heading';
+      heading.replaceWith(titleRow); titleRow.append(heading, editor.querySelector('.attribute-allocation-toolbar')!, editor.querySelector('.attribute-add-point')!);
+      section.append(editor);
+      sheetEditorFields.append(section); continue;
+    }
     const body = document.createElement('div');
     body.className = 'web-player-sheet-editor-section-body';
     const groups = new Map<string, CharacterSheetEditorField[]>();
     for (const field of fields) {
+      if (headerFields.has(field.name)) continue;
       const groupName = field.group ?? '';
       const groupFields = groups.get(groupName) ?? [];
       groupFields.push(field);
@@ -1781,7 +2373,19 @@ const renderSheetEditorFields = () => {
       : groups;
     for (const [groupName, groupFields] of orderedGroups) {
       if (!groupName) {
-        groupFields.forEach((field) => appendField(body, field));
+        if (sectionName === 'Defesa') {
+          const scroll = document.createElement('div'); scroll.className = 'sheet-defense-scroll';
+          scroll.tabIndex = 0; scroll.setAttribute('aria-label', 'Valores de Defesa');
+          const row = document.createElement('div'); row.className = 'sheet-defense-row';
+          appendFields(row, groupFields.filter(({ name }) => name !== 'BossBar.DefesaJustificativa'));
+          scroll.append(row); body.append(scroll);
+          separateRowWarnings(row, body, 'na Defesa');
+          appendFields(body, groupFields.filter(({ name }) => name === 'BossBar.DefesaJustificativa'));
+          const summary = document.createElement('small'); summary.className = 'sheet-rd-summary';
+          summary.setAttribute('aria-live', 'polite');
+          summary.textContent = damageReductionSummary(normalizeDamageReduction(sheetEditorDocument.find(({ name }) => name === RD_FIELD)?.value));
+          body.append(summary);
+        } else appendFields(body, groupFields);
         continue;
       }
       const group = document.createElement('article');
@@ -1800,6 +2404,8 @@ const renderSheetEditorFields = () => {
       groupHeading.textContent = groupName;
       groupHeader.append(groupHeading);
       const groupIndex = Number(/(\d+)$/.exec(groupName)?.[1] ?? 0);
+      const selectionFields = groupFields.filter(({ name }) => /\.(Equipado|Principal|DuasArmas)$/.test(name));
+      for (const selection of selectionFields) appendField(groupHeader, selection);
       if (
         groupIndex > 0 &&
         (group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row'))
@@ -1808,7 +2414,7 @@ const renderSheetEditorFields = () => {
       }
       const removable = group.classList.contains('is-spell-row') ||
         (group.classList.contains('is-attack-row') && groupIndex > 2) ||
-        (group.classList.contains('is-item-row') && groupIndex > 3) ||
+        (group.classList.contains('is-item-row') && groupIndex > 2) ||
         ((group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row')) && groupIndex > 1);
       if (removable) {
         const removeRow = document.createElement('button');
@@ -1826,6 +2432,7 @@ const renderSheetEditorFields = () => {
           sheetEditorDocument = sheetEditorDocument.filter(
             (field) => field.group !== groupName || field.section !== sectionName,
           );
+          if (groupFields.some(({ name }) => affectsInventoryLoad(name))) recalculateSheetLoad();
           renderSheetEditorFields();
           markSheetEditorDirty();
         });
@@ -1835,7 +2442,7 @@ const renderSheetEditorFields = () => {
         ? groupFields.find(({ kind }) => kind === 'checkbox')
         : undefined;
       const officeField = sectionName === 'Perícias'
-        ? groupFields.find(({ name }) => name === 'Ofício 1' || name === 'Ofício_2')
+        ? groupFields.find(({ name }) => name === 'Ofício 1' || name === 'Ofício_2' || /^BossBar\.Oficio\.\d+\.Nome$/.test(name))
         : undefined;
       const groupHeaderControls = document.createElement('div');
       groupHeaderControls.className = 'web-player-sheet-editor-group-controls';
@@ -1847,34 +2454,95 @@ const renderSheetEditorFields = () => {
         groupHeaderControls.append(officeLabel);
       }
       if (trainedField) {
-        const trainedLabel = document.createElement('label');
-        trainedLabel.className = 'web-player-sheet-editor-trained';
-        trainedLabel.dataset.fieldName = trainedField.name;
-        const trainedInput = createFieldInput(trainedField);
-        const trainedText = document.createElement('span');
-        trainedText.textContent = 'Treinada';
-        trainedLabel.append(trainedInput, trainedText);
-        groupHeaderControls.append(trainedLabel);
+        const trained = /^(Yes|Sim|On|true|1)$/i.test(trainedField.value);
+        group.classList.toggle('is-trained-skill', trained);
+        group.dataset.trainingField = trainedField.name;
+        const badge = document.createElement('span'); badge.className = 'sheet-skill-training-badge';
+        badge.textContent = 'Treinada'; badge.hidden = !trained;
+        groupHeaderControls.append(badge);
       }
       if (groupHeaderControls.childElementCount > 0) groupHeader.append(groupHeaderControls);
       const groupFieldsContainer = document.createElement('div');
       groupFieldsContainer.className = 'web-player-sheet-editor-group-fields';
-      groupFields
-        .filter((field) => field !== trainedField && field !== officeField)
-        .forEach((field) => appendField(groupFieldsContainer, field));
+      const visibleFields = groupFields.filter((field) => field !== trainedField && field !== officeField && !selectionFields.includes(field));
+      if (group.classList.contains('is-attack-row')) {
+        const scroll = document.createElement('div'); scroll.className = 'sheet-weapon-scroll';
+        scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `Armas do ${groupName}`); scroll.tabIndex = 0;
+        const primary = document.createElement('div'); primary.className = 'sheet-weapon-row';
+        primary.setAttribute('role', 'group'); primary.setAttribute('aria-label', 'Primeira arma');
+        const orderWeaponFields = (fields: CharacterSheetEditorField[]) => {
+          const origin = fields.find(({ name }) => /\.Origem$/.test(name));
+          const ordered = fields.filter((field) => field !== origin);
+          if (origin) { origin.label = 'Origem'; ordered.splice(ordered.findIndex(({ name }) => /^Dano \d+$|\.Dano$/.test(name)) + 1, 0, origin); }
+          return ordered;
+        };
+        appendFields(primary, orderWeaponFields(visibleFields.filter(({ name }) => !/\.Segunda\.|\.Informacoes$/.test(name))));
+        scroll.append(primary);
+        const secondary = orderWeaponFields(visibleFields.filter(({ name }) => /\.Segunda\./.test(name)));
+        if (secondary.length) {
+          const row = document.createElement('div'); row.className = 'sheet-weapon-row is-secondary-weapon';
+          row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Segunda arma');
+          appendFields(row, secondary); scroll.append(row);
+        }
+        groupFieldsContainer.append(scroll);
+        separateRowWarnings(scroll, groupFieldsContainer, 'neste ataque');
+        appendFields(groupFieldsContainer, visibleFields.filter(({ name }) => /\.Informacoes$/.test(name)));
+      } else if (group.classList.contains('is-spell-row')) {
+        const scroll = document.createElement('div'); scroll.className = 'sheet-spell-scroll'; scroll.tabIndex = 0;
+        scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `Dados da ${groupName}`);
+        const row = document.createElement('div'); row.className = 'sheet-spell-row';
+        appendFields(row, visibleFields.filter(({ name }) => !/\.Efeito$/.test(name)));
+        scroll.append(row); groupFieldsContainer.append(scroll);
+        separateRowWarnings(row, groupFieldsContainer, 'nesta magia');
+        appendFields(groupFieldsContainer, visibleFields.filter(({ name }) => /\.Efeito$/.test(name)));
+        const currentName = groupFields.find(({ name }) => /\.Nome$/.test(name))?.value ?? '';
+        const reference = findSpell(currentName);
+        const referenceButton = document.createElement('button'); referenceButton.type = 'button'; referenceButton.className = 'sheet-catalog-reference';
+        referenceButton.textContent = 'Consultar magia';
+        if (reference) { const citation = document.createElement('span'); citation.className = 'sheet-catalog-reference'; appendRuleText(citation, sourceCitation(reference)); groupHeader.append(citation); }
+        referenceButton.addEventListener('click', () => openRulesCatalog({ kind: 'spell', query: currentName, referenceId: reference?.id }));
+        groupHeader.insertBefore(referenceButton, groupHeader.querySelector('.web-player-sheet-editor-remove-spell'));
+      } else if (group.classList.contains('is-armor-row') || group.classList.contains('is-shield-row')) {
+        const stats = visibleFields.filter(({ name }) => ['B.Arm1', 'B.Esc2', 'Pa', 'Pe'].includes(name) || /\.(LimiteAtributo|Defesa|Penalidade|OutrosDefesa|OutrosPenalidade)$/.test(name));
+        appendFields(groupFieldsContainer, visibleFields.filter((field) => !stats.includes(field)));
+        const scroll = document.createElement('div'); scroll.className = 'sheet-equipment-stats-scroll'; scroll.tabIndex = 0;
+        scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `Valores de ${groupName}`);
+        const row = document.createElement('div'); row.className = 'sheet-equipment-stats';
+        appendFields(row, stats); scroll.append(row); groupFieldsContainer.append(scroll);
+        separateRowWarnings(row, groupFieldsContainer, 'neste equipamento');
+      } else {
+        appendFields(groupFieldsContainer, visibleFields);
+        if (group.classList.contains('is-item-row')) {
+          const label = document.createElement('label'); const title = document.createElement('span'); title.textContent = 'Carga Total';
+          const total = document.createElement('input'); total.readOnly = true; total.dataset.itemTotal = String(groupIndex); total.setAttribute('aria-label', `Carga Total do Item ${groupIndex}`);
+          attachCalculationTooltip(total, () => {
+            const item = inventoryFromEditor().items.find(({ index }) => index === groupIndex);
+            return item ? `${item.name}: ${item.quantity} unidade(s) × ${Number.isFinite(item.spaces) ? item.spaces : '?'} espaço(s) = ${total.value}.\n${item.exempt} unidade(s) equipada(s); ${item.carried} unidade(s) contam na carga real.` : 'Item vazio: carga 0.';
+          }); label.append(title, total); groupFieldsContainer.append(label);
+        }
+      }
       group.append(groupHeader, groupFieldsContainer);
+      if (group.classList.contains('is-item-row')) {
+        const badge = document.createElement('small'); badge.className = 'sheet-item-equipped'; badge.dataset.itemIndex = String(groupIndex); badge.hidden = true; groupHeading.append(badge);
+      }
       body.append(group);
     }
     section.append(body);
     sheetEditorFields.append(section);
   }
-  recalculateSheetLoad();
+  refreshEquipmentLoadBadges();
 };
 
 sheetEditorSearch?.addEventListener('input', renderSheetEditorFields);
 renderSheetEditorFilters();
-const closeSheetEditor = async () => {
+const saveAndCloseSheetEditor = async () => {
+  automaticSheetValidation.cancel();
   if (sheetEditorClosing) return;
+  if(automaticSheetProposals.size){
+    const selected=await confirmExpectedSheetValues([...automaticSheetProposals.values()]);
+    for(const issue of selected){const field=sheetEditorDocument.find(f=>f.name===issue.field);if(field)field.value=issue.expected!;}
+    const selectedIds=new Set(selected.map(i=>i.id));sheetEditorIssues=sheetEditorIssues.filter(i=>!selectedIds.has(i.id));automaticSheetProposals.clear();
+  }
   const invalidInput = sheetEditorFields?.querySelector<
     HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
   >(':invalid');
@@ -1888,18 +2556,20 @@ const closeSheetEditor = async () => {
     activeSheetEditorCategories.clear();
     if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
     renderSheetEditorFields();
-    sheetEditorFields?.querySelector<HTMLElement>('.has-import-error')?.scrollIntoView({ block: 'center' });
+    scrollSheetFieldIntoView(sheetEditorFields?.querySelector<HTMLElement>('.has-import-error'));
     notifyPlayer('Corrija os campos destacados em vermelho antes de salvar.', 'rejected');
     return;
   }
   sheetEditorClosing = true;
   sheetEditorClose?.setAttribute('disabled', '');
+  document.getElementById('web-player-sheet-editor-save')?.setAttribute('disabled', '');
   if (sheetEditorStatus) {
     sheetEditorStatus.textContent = sheetEditorDirty
       ? 'Salvando ajustes…'
       : 'Fechando ficha…';
   }
   try {
+    await automaticSheetValidation.cancelAndWait();
     if (sheetEditorDirty || sheetEditorImportPending) {
       const result = await saveCharacterSheetEditor([
         ...sheetEditorDocument,
@@ -1911,14 +2581,13 @@ const closeSheetEditor = async () => {
           activeSheetEditorCategories.clear();
           if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
           renderSheetEditorFields();
-          sheetEditorFields?.querySelector<HTMLElement>('.has-import-error')?.scrollIntoView({ block: 'center' });
+          scrollSheetFieldIntoView(sheetEditorFields?.querySelector<HTMLElement>('.has-import-error'));
         }
         throw new Error(result.error ?? 'Não foi possível enviar as alterações da ficha.');
       }
       if (result.document) {
         sheetEditorImportPending = false;
         sheetEditorIssues = result.document.issues ?? [];
-        sheetEditorFileName = result.document.fileName;
         sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
         sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
       }
@@ -1927,6 +2596,11 @@ const closeSheetEditor = async () => {
       if (!result.ok) {
         throw new Error(result.error ?? 'Não foi possível fechar a edição da ficha.');
       }
+    }
+    if (pendingPortraitFile !== undefined) {
+      const portraitResult = pendingPortraitFile ? await uploadCharacterPortrait(pendingPortraitFile) : await removeCharacterPortrait();
+      if (!portraitResult.ok) throw new Error(portraitResult.error || 'A ficha foi enviada, mas não foi possível salvar o retrato. Tente salvar novamente.');
+      pendingPortraitFile = undefined; releasePendingPortraitPreview();
     }
     sheetEditorRemovedFields = [];
     sheetEditorDirty = false;
@@ -1942,39 +2616,133 @@ const closeSheetEditor = async () => {
   } finally {
     sheetEditorClosing = false;
     sheetEditorClose?.removeAttribute('disabled');
+    document.getElementById('web-player-sheet-editor-save')?.removeAttribute('disabled');
   }
 };
-sheetEditorClose?.addEventListener('click', () => void closeSheetEditor());
+const discardAndCloseSheetEditor = async () => {
+  if (sheetEditorClosing) return;
+  automaticSheetValidation.cancel();
+  sheetEditorClosing = true;
+  try {
+    await automaticSheetValidation.cancelAndWait();
+    const result = sheetEditorImportPending ? await discardCharacterSheetImport() : await setCharacterSheetEditorOpen(false);
+    if (!result.ok) throw new Error(result.error || 'Não foi possível encerrar a edição.');
+    sheetEditorDocument = cloneSheetEditorFields(sheetEditorBaseDocument);
+    sheetEditorRemovedFields = []; sheetEditorIssues = []; sheetEditorDirty = false; sheetEditorImportPending = false;
+    pendingPortraitFile = undefined; releasePendingPortraitPreview(); renderPortraitEditor();
+    clearSheetEditorDraft(); sheetEditorDialog?.setAttribute('hidden', '');
+    renderCharacterSheet(getPlayerToolsState().sheet);
+  } catch (error) { if (sheetEditorStatus) sheetEditorStatus.textContent = error instanceof Error ? error.message : 'Erro inesperado ao fechar a ficha.'; }
+  finally { sheetEditorClosing = false; }
+};
+sheetEditorClose?.addEventListener('click', () => void discardAndCloseSheetEditor());
+document.getElementById('web-player-sheet-editor-discard')?.addEventListener('click', () => void discardAndCloseSheetEditor());
+document.getElementById('web-player-sheet-editor-save')?.addEventListener('click', () => void saveAndCloseSheetEditor());
+const confirmExpectedSheetValues = (issues: CharacterSheetIssue[]) => new Promise<CharacterSheetIssue[]>((resolve) => {
+  const popup = sheetEditorPopup('Revisar valores esperados');
+  const help = document.createElement('p'); help.textContent = 'Estes valores vêm da referência do livro. PV e PM consideram apenas a progressão básica; poderes, raça e exceções podem justificar a ficha. Magias podem usar aprimoramentos ou ajustes da mesa. Selecione apenas as substituições que deseja aplicar ao rascunho.'; popup.body.append(help);
+  const chosen = new Set(issues);
+  for (const issue of issues) {
+    const row = document.createElement('label'); row.className = 'sheet-expected-proposal';
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = true;
+    check.addEventListener('change', () => { if (check.checked) chosen.add(issue); else chosen.delete(issue); });
+    const text = document.createElement('span'); const title = document.createElement('strong'); title.textContent = `${issue.location}: ${issue.actual || 'vazio'} → ${issue.expected}`;
+    const reason = document.createElement('small'); appendRuleText(reason, `${issue.reason || issue.message}${issue.source ? ' ' + issue.source : ''}`); text.append(title, reason); row.append(check, text); popup.body.append(row);
+  }
+  let accepted = false;
+  const keep = popup.actions.querySelector('button')!; keep.textContent = 'Manter valores atuais';
+  const apply = document.createElement('button'); apply.type = 'button'; apply.textContent = 'Aplicar valores selecionados'; apply.addEventListener('click', () => { accepted = true; popup.close(); }); popup.actions.append(apply);
+  popup.dialog.addEventListener('close', () => resolve(accepted ? [...chosen] : []), { once: true });
+});
+const automaticSheetProposals = new Map<string, CharacterSheetIssue>();
+const automaticSheetValidation = new SheetAutoValidation<CharacterSheetEditorField[]>({
+  validate: async (snapshot) => {
+    const result = await saveCharacterSheetEditor(snapshot, true);
+    if (!result.ok || !result.document) throw new Error(result.error || 'Erro inesperado na validação automática.');
+    return () => {
+      if (sheetEditorClosing || !sheetEditorImportPending || sheetEditorDialog?.hasAttribute('hidden')) return;
+      const blank = snapshot.some((f) => f.name === RESOURCE_AUTO_FIELD && f.value);
+      const original = new Map(snapshot.map((f) => [f.name, f]));
+      const corrected = cloneSheetEditorFields(result.document!.fields);
+      automaticSheetProposals.clear();
+      for (const field of corrected) {
+        const old = original.get(field.name);
+        const calculated=field.section==='Perícias'&&['Total','Atributo','Treino','1/2 do nível'].includes(field.label)||/^ModAtrib|^BossBar\.Ataque\.\d+\.(Segunda\.)?Base$|^BossBar\.Magia\.\d+\.Custo$/.test(field.name)||['CA','B.Arm','B.Esc','ModFurtTam','BossBar.ManobrasTamanho','CargaTotal','TesteResist'].includes(field.name);
+        if (!blank && !calculated && old?.value.trim() && old.value !== field.value && ![ATTRIBUTE_PLAN_FIELD, SKILL_TRAINING_FIELD, SKILL_EFFECTS_FIELD].includes(field.name) && !field.name.startsWith('Mar Trei ') && !/\.Treinada$/.test(field.name)) {
+          const issue: CharacterSheetIssue = { id: 'automatic-review:' + field.name, severity: 'warning', field: field.name, autoFixable: false, dismissible: false, actual: old.value, expected: field.value, message: `${field.label}: o cálculo propõe ${field.value}; o valor ${old.value} foi preservado. Revise a substituição em Validar e corrigir cálculos.` };
+          automaticSheetProposals.set(field.name, issue); field.value = old.value;
+        }
+      }
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>('[data-field-name]')?.dataset.fieldName : undefined;
+      const selection = document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'text' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : undefined;
+      sheetEditorDocument = corrected;
+      sheetEditorIssues = [...(result.document!.issues ?? []), ...automaticSheetProposals.values()];
+      sheetEditorDirty = true;
+      renderSheetEditorFields();
+      if (active) { const input = sheetEditorFields?.querySelector<HTMLInputElement>(`[data-field-name="${CSS.escape(active)}"] input, [data-field-name="${CSS.escape(active)}"] select`); input?.focus({ preventScroll: true }); if (input instanceof HTMLInputElement && input.type === 'text' && selection) input.setSelectionRange(selection[0], selection[1]); }
+      if (sheetEditorStatus) sheetEditorStatus.textContent = automaticSheetProposals.size ? 'Cálculos conferidos. Revise as substituições propostas antes de salvar.' : 'Cálculos atualizados automaticamente no rascunho. Salve quando terminar.';
+    };
+  },
+  error: (error) => { if (sheetEditorStatus) sheetEditorStatus.textContent = `${error instanceof Error ? error.message : 'Erro inesperado na validação automática.'} Use Validar e corrigir cálculos para tentar novamente.`; },
+});
+const scheduleAutomaticSheetValidation = () => {
+  if (!sheetEditorImportPending || sheetEditorClosing || sheetEditorDialog?.hasAttribute('hidden')) { automaticSheetValidation.cancel(); return; }
+  const snapshot = cloneSheetEditorFields([...sheetEditorDocument, ...sheetEditorRemovedFields]);
+  if (!sheetReadyForAutomaticValidation(Object.fromEntries(snapshot.map((f) => [f.name, f.value])))) { automaticSheetValidation.cancel(); return; }
+  automaticSheetValidation.schedule(snapshot, sheetEditorCharacterId + JSON.stringify(snapshot.map((f) => [f.name, f.value])));
+};
 document.getElementById('web-player-sheet-import-autofix')?.addEventListener('click', async () => {
-  if (!sheetEditorImportPending || sheetEditorDirty || sheetEditorClosing) return;
+  if (sheetEditorClosing) return;
+  automaticSheetValidation.cancel();
   sheetEditorClosing = true;
   sheetEditorClose?.setAttribute('disabled', '');
+  document.getElementById('web-player-sheet-import-autofix')?.setAttribute('disabled', '');
+  document.getElementById('web-player-sheet-editor-save')?.setAttribute('disabled', '');
+  if (sheetEditorFields) sheetEditorFields.inert = true;
   try {
-    const result = await automaticallyFixCharacterSheet();
-    if (!result.ok) throw new Error(result.error ?? 'Não foi possível corrigir os cálculos.');
-    renderCharacterSheet(result.sheet ?? null);
-    sheetEditorImportPending = result.sheet?.importPending === true;
-    if (!sheetEditorImportPending) {
-      await setCharacterSheetEditorOpen(false);
-      clearSheetEditorDraft();
-      sheetEditorDialog?.setAttribute('hidden', '');
-      notifyPlayer('Cálculos corrigidos. Ficha validada e importada.', 'info');
-    } else {
-      const editor = await getCharacterSheetEditor();
-      if (!editor.ok || !editor.document) throw new Error(editor.error ?? 'Não foi possível revisar a ficha corrigida.');
-      sheetEditorIssues = editor.document.issues ?? [];
-      sheetEditorDocument = cloneSheetEditorFields(editor.document.fields);
-      sheetEditorBaseDocument = cloneSheetEditorFields(editor.document.fields);
-      renderSheetEditorFields();
-      notifyPlayer('Cálculos corrigidos. Revise os campos ainda destacados em vermelho.', 'rejected');
+    await automaticSheetValidation.cancelAndWait();
+    let result = await saveCharacterSheetEditor([...sheetEditorDocument, ...sheetEditorRemovedFields], true);
+    if (!result.ok || !result.document) throw new Error(result.error ?? 'Houve um erro inesperado ao validar a ficha.');
+    for (const issue of automaticSheetProposals.values()) { const field = result.document.fields.find((f) => f.name === issue.field); if (field) field.value = issue.actual ?? field.value; }
+    const proposals = [...automaticSheetProposals.values(), ...(result.document.issues ?? [])].filter((issue) => issue.severity === 'warning' && !issue.autoFixable && issue.field && issue.expected !== undefined && result.document!.fields.some((field) => field.name === issue.field));
+    if (proposals.length) {
+      const selected = await confirmExpectedSheetValues(proposals);
+      const declined=proposals.filter(issue=>!selected.includes(issue));
+      if (selected.length) {
+        const updated = cloneSheetEditorFields(result.document.fields);
+        for (const issue of selected) updated.find(({ name }) => name === issue.field)!.value = issue.expected!;
+        result = await saveCharacterSheetEditor([...updated, ...sheetEditorRemovedFields], true);
+        if (!result.ok || !result.document) throw new Error(result.error ?? 'Não foi possível validar os valores escolhidos.');
+      }
+      for(const issue of declined){const field=result.document!.fields.find(f=>f.name===issue.field);if(field&&issue.actual!==undefined)field.value=issue.actual;}
     }
-  } catch (error) { notifyPlayer(error instanceof Error ? error.message : 'Falha ao corrigir a ficha.', 'rejected'); }
-  finally { sheetEditorClosing = false; sheetEditorClose?.removeAttribute('disabled'); }
+    const kept = [...automaticSheetProposals.values()].filter((issue) => result.document!.fields.some((f) => f.name === issue.field && f.value === issue.actual));
+    automaticSheetProposals.clear();
+    sheetEditorIssues = [...(result.document!.issues ?? []), ...kept];
+    sheetEditorDocument = cloneSheetEditorFields(result.document!.fields);
+    markSheetEditorDirty();
+    const remainingErrors = sheetEditorIssues.some(({ severity }) => severity === 'error');
+    const message = remainingErrors
+      ? 'Os cálculos identificados foram corrigidos no rascunho. Revise os erros destacados; faltam dados ou há valores que exigem sua decisão. Se não conseguir resolvê-los, recrie a ficha usando a ficha vazia de Nimb.'
+      : 'Validação concluída. Revise as alterações e os avisos antes de salvar.';
+    if (sheetEditorStatus) sheetEditorStatus.textContent = message;
+    notifyPlayer(message, remainingErrors ? 'rejected' : 'info');
+  } catch (error) {
+    const message = `${error instanceof Error ? error.message : 'Houve um erro inesperado ao corrigir a ficha.'} Revise os campos informados. Se o problema persistir, recrie a ficha usando a ficha vazia de Nimb.`;
+    if (sheetEditorStatus) sheetEditorStatus.textContent = message;
+    notifyPlayer(message, 'rejected');
+  } finally {
+    sheetEditorClosing = false;
+    sheetEditorClose?.removeAttribute('disabled');
+    if (sheetEditorFields) sheetEditorFields.inert = false;
+    document.getElementById('web-player-sheet-editor-save')?.removeAttribute('disabled');
+    renderSheetEditorFields();
+  }
 });
 document.getElementById('web-player-sheet-import-discard')?.addEventListener('click', () => {
   if (!sheetEditorImportPending || sheetEditorClosing) return;
   sheetEditorClosing = true;
-  void discardCharacterSheetImport().then((result) => {
+  void automaticSheetValidation.cancelAndWait().then(() => discardCharacterSheetImport()).then((result) => {
     if (!result.ok) { notifyPlayer(result.error ?? 'Não foi possível descartar a importação.', 'rejected'); return; }
     sheetEditorImportPending = false; sheetEditorIssues = []; sheetEditorDirty = false;
     clearSheetEditorDraft(); sheetEditorDialog?.setAttribute('hidden', '');
@@ -1982,11 +2750,13 @@ document.getElementById('web-player-sheet-import-discard')?.addEventListener('cl
   }).catch(() => notifyPlayer('Não foi possível descartar a importação.', 'rejected')).finally(() => { sheetEditorClosing = false; });
 });
 
-sheetOpenButton?.addEventListener('click', () => {
-  if (sheetOpenButton.hasAttribute('disabled')) return;
-  sheetOpenButton.setAttribute('disabled', '');
+const openSheetEditor = async (focusField?: string) => {
+  automaticSheetValidation.cancel(); automaticSheetProposals.clear();
+  if (sheetOpenButton?.hasAttribute('disabled')) return;
+  sheetOpenButton?.setAttribute('disabled', '');
   if (sheetStatusElement) sheetStatusElement.textContent = 'Abrindo editor da ficha…';
-  void getCharacterSheetEditor().then(async (result) => {
+  await automaticSheetValidation.cancelAndWait();
+  await getCharacterSheetEditor().then(async (result) => {
     if (!result.ok || !result.document) {
       throw new Error(result.error ?? 'Não foi possível abrir o editor da ficha.');
     }
@@ -2002,48 +2772,54 @@ sheetOpenButton?.addEventListener('click', () => {
     sheetEditorIssues = result.document.issues ?? [];
     document.getElementById('web-player-sheet-import-discard')?.toggleAttribute('hidden', !sheetEditorImportPending);
     if (sheetEditorIssues.some(({ severity }) => severity === 'error')) activeSheetEditorCategories.clear();
-    sheetEditorFileName = result.document.fileName;
     sheetEditorBaseDocument = cloneSheetEditorFields(result.document.fields);
-    const draftKey = activeSheetEditorDraftKey();
-    let recoveredDraft = null;
-    if (draftKey) {
-      try {
-        const serialized = window.localStorage.getItem(draftKey);
-        recoveredDraft = recoverCharacterSheetDraft({
-          serialized,
-          fileName: sheetEditorFileName,
-          baseFields: sheetEditorBaseDocument,
-        });
-        if (serialized && !recoveredDraft) window.localStorage.removeItem(draftKey);
-      } catch {
-        recoveredDraft = null;
-      }
-    }
-    sheetEditorRemovedFields = recoveredDraft
-      ? cloneSheetEditorFields(recoveredDraft.removedFields)
-      : [];
-    sheetEditorDocument = recoveredDraft
-      ? cloneSheetEditorFields(recoveredDraft.fields)
-      : cloneSheetEditorFields(result.document.fields);
-    sheetEditorDirty = Boolean(recoveredDraft);
+    sheetEditorCharacterId = result.document.characterId ?? '';
+    clearSheetEditorDraft();
+    sheetEditorRemovedFields = [];
+    sheetEditorDocument = cloneSheetEditorFields(result.document.fields);
+    sheetEditorDirty = false;
+    pendingPortraitFile = undefined; releasePendingPortraitPreview();
     if (sheetEditorSearch instanceof HTMLInputElement) sheetEditorSearch.value = '';
     sheetEditorDialog?.removeAttribute('hidden');
     syncPermanentEncounterValuesIntoSheetEditor();
     renderSheetEditorFields();
     renderPortraitEditor();
     if (sheetEditorStatus) {
-      sheetEditorStatus.textContent = recoveredDraft
-        ? `Rascunho local recuperado de ${new Date(recoveredDraft.savedAt).toLocaleString('pt-BR')}.`
-        : 'Ficha pronta para edição.';
+      sheetEditorStatus.textContent = 'Alterações só são enviadas ao clicar em Salvar e fechar.';
     }
     sheetDialog?.setAttribute('hidden', '');
+    scheduleAutomaticSheetValidation();
+    if (focusField) focusSheetEditorField(focusField);
   }).catch((error: unknown) => {
     if (sheetStatusElement) {
       sheetStatusElement.textContent = error instanceof Error
         ? error.message
-        : 'Não foi possível abrir o editor da ficha.';
+        : 'Houve um erro inesperado ao abrir o editor da ficha.';
     }
-  }).finally(() => renderCharacterSheet(getPlayerToolsState().sheet));
+  }).finally(() => {
+    sheetOpenButton?.removeAttribute('disabled');
+    renderCharacterSheet(getPlayerToolsState().sheet);
+  });
+};
+sheetOpenButton?.addEventListener('click', () => void openSheetEditor());
+document.getElementById('web-player-sheet-create')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
+  try {
+    const result = await createCharacterSheet();
+    if (!result.ok) throw new Error(result.error || 'Não foi possível criar a ficha.');
+    renderCharacterSheet(result.sheet ?? null); await openSheetEditor();
+  } catch (error) { if (sheetStatusElement) sheetStatusElement.textContent = error instanceof Error ? error.message : 'Erro inesperado ao criar a ficha.'; }
+  finally { button.disabled = false; }
+});
+document.getElementById('web-player-sheet-export')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
+  try {
+    const blob = await exportCharacterSheet(); const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url;
+    link.download = `${getPlayerToolsState().sheet?.validation?.summary.characterName || 'Sem nome'}.pdf`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) { if (sheetStatusElement) sheetStatusElement.textContent = error instanceof Error ? error.message : 'Erro inesperado ao exportar a ficha.'; }
+  finally { button.disabled = false; }
 });
 
 sheetRemoveButton?.addEventListener('click', () => {
@@ -2066,7 +2842,9 @@ sheetRemoveConfirmButton?.addEventListener('click', () => {
     renderCharacterSheet(result.sheet ?? null);
     clearSheetEditorDraft();
     sheetRemoveDialog?.setAttribute('hidden', '');
-    if (sheetStatusElement) sheetStatusElement.textContent = 'Ficha removida deste usuário.';
+    if (sheetInput instanceof HTMLInputElement) sheetInput.value = '';
+    void renderCharacterSlots();
+    if (sheetStatusElement) sheetStatusElement.textContent = 'Ficha removida desta aba.';
   }).finally(() => sheetRemoveConfirmButton.removeAttribute('disabled'));
 });
 
@@ -2142,15 +2920,7 @@ characterDetails?.addEventListener('scroll', hideCalculationTooltip, { passive: 
 window.addEventListener('resize', hideCalculationTooltip);
 
 sheetFixButton?.addEventListener('click', () => {
-  sheetFixButton.setAttribute('disabled', '');
-  void automaticallyFixCharacterSheet().then((result) => {
-    renderCharacterSheet(result.sheet ?? null);
-    if (sheetStatusElement) {
-      sheetStatusElement.textContent = result.ok
-        ? 'Os campos objetivamente corrigíveis foram atualizados.'
-        : result.error ?? 'Não foi possível corrigir a ficha.';
-    }
-  }).finally(() => sheetFixButton.removeAttribute('disabled'));
+  void openSheetEditor();
 });
 
 notesButton?.addEventListener('click', () => {
@@ -2589,7 +3359,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('beforeunload', () => {
-  if (sheetEditorDirty) persistSheetEditorDraft();
+
   if (hideStatusTimer) clearTimeout(hideStatusTimer);
   unmountPlayer?.();
   dispose();

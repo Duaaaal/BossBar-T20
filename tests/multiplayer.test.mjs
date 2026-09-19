@@ -33,6 +33,11 @@ import {
   tokensMatch,
 } from '../src/multiplayer/session-security.ts';
 import { PlayerProfileStore } from '../src/multiplayer/player-profile-store.ts';
+import { createNimbCharacterSheet } from './fixtures/character-sheet-nimb.ts';
+import { inspectCharacterSheetPdf } from '../src/multiplayer/character-sheet-pdf.ts';
+import { recalculateCharacterSkills,calculateCharacterSkills } from '../src/shared/character-skills.ts';
+import { createSkillCalculationContext,availableSkillSituations } from '../src/shared/skill-test-context.ts';
+import { emptySkillEffectsPlan,SKILL_EFFECTS_FIELD } from '../src/shared/skill-mechanics.ts';
 
 const initialMusic = {
   tracks: [],
@@ -333,6 +338,170 @@ test('impede dois clientes de usarem o mesmo nome na sala', () => {
   assert.equal(roster.presence().connectedPlayers, 1);
 });
 
+test('ataque principal com duas armas usa perícias autoritativas, uma ação e danos separados', async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const dice = []; const applied = []; const defenseTypes = [];
+  let rejectDamage = false;
+  const server = await MultiplayerSessionServer.start({
+    playerProfileStore: profileStore, initialSnapshot: publicSnapshot(), port: 0, networkMode: 'loopback',
+    combatRollDelayMs: 0, dramaticCombatRollDelayMs: 0, playerNaturalCombatRollDelayMs: 0,
+    randomInteger: (min, max) => Math.min(max - 1, Math.max(min, dice.shift() ?? 10)),
+    getBossDefense: (_id, type) => { defenseTypes.push(type); return 12; },
+    applyBossDamage: (_id, damage) => { if (rejectDamage) return { ok: false, appliedDamage: 0, error: 'Falha simulada' }; applied.push(damage); return { ok: true, appliedDamage: damage }; },
+  });
+  t.after(() => server.close('server-shutdown'));
+  const player = await connectPlayer(server, { clientId: 'dual-test-player', playerName: 'Dual' });
+  t.after(() => player.close()); await once(player, 'connect');
+  const validation = createValidCharacterSheetValidation({ characterName: 'Duelista', currentHealth: 50, maxHealth: 50, currentMana: 10, maxMana: 10, defense: 15, reflex: 5, initiative: 30 });
+  validation.summary.skills.push({ ...validation.summary.skills[0], id: '190', name: 'Luta', total: 6 }, { ...validation.summary.skills[0], id: '260', name: 'Pontaria', total: 3 });
+  const single = { name: 'Reserva', damage: '1d6', critical: '20/x2', attackBonus: '1d20', attackBonusIncludesSkill: false, skill: 'Luta', damageType: 'Corte', range: 'Adjacente' };
+  validation.summary.attacks = [single, { ...single, name: 'Espada principal', primary: true, attackBonus: '1d20 + 2', damage: '1d8+1', secondaryWeapon: { ...single, name: 'Adaga', skill: 'Pontaria', attackBonus: '1d20 - 1', damage: '1d4+2', critical: '19/x3' } }];
+  const profile = profileStore.profileByUsername('Dual');
+  await profileStore.saveSheet(profile.id, 'dual.pdf', new Uint8Array([37,80,68,70]), validation);
+  server.refreshCharacterSheet('dual-test-player', true);
+  server.publishBattleState({ ...publicSnapshot().battle, battleStarted: true, revision: 50 });
+  const send = (request) => new Promise((resolve) => player.emit('encounter:combat-action', request, resolve));
+  for (const participant of server.getTurnState().participants) {
+    if (participant.kind === 'boss') server.rollInitiativeAsHost(participant.id);
+    else await new Promise((resolve) => player.emit('encounter:roll-initiative', false, resolve));
+  }
+  assert.equal(server.advanceTurnAsHost().ok, true);
+  const self = server.getTurnState('dual-test-player').participants.find(({ isSelf }) => isSelf);
+  const nextTurn = () => { for (let i = 0; i < 10; i++) { server.advanceTurnAsHost(); if (server.getTurnState().activeParticipantId === self.id) break; } };
+  if (server.getTurnState().activeParticipantId !== self.id) nextTurn();
+  const attack = (id) => send({ kind: 'attack', attackType: 'ranged', targetBossId: initialBattleState.bosses[0].id, damageFormula: '999', resource: null, actionId: id });
+  dice.push(10, 19);
+  const result = await attack('dual-action-0001');
+  assert.equal(result.ok, true);
+  const rolls = server.getTurnState().rollResults.filter(({ actionId }) => actionId === 'dual-action-0001');
+  assert.deepEqual(rolls.map(({ label, total, critical }) => [label, total, critical]), [['Espada principal', 18, false], ['Adaga', 21, true]]);
+  assert.deepEqual(defenseTypes.slice(-2), ['melee', 'ranged']);
+  assert.equal(server.getPlayerHuds()[0].actions.standard, false);
+  assert.equal((await attack('dual-blocked-0001')).ok, false);
+  dice.push(4);
+  assert.equal((await send({ kind: 'damage', pendingDamageId: result.pendingDamageId })).ok, true);
+  const secondId = server.getPlayerHuds()[0].pendingDamage.id;
+  assert.notEqual(secondId, result.pendingDamageId);
+  rejectDamage = true; dice.push(2, 3, 4);
+  assert.equal((await send({ kind: 'damage', pendingDamageId: secondId })).ok, false);
+  assert.equal(server.getPlayerHuds()[0].actions.standard, false);
+  assert.equal(server.getPlayerHuds()[0].pendingDamage.id, secondId);
+  rejectDamage = false;
+  assert.equal((await send({ kind: 'damage', pendingDamageId: secondId })).ok, true);
+  assert.deepEqual(applied, [5, 11]);
+  assert.equal(server.getPlayerHuds()[0].pendingDamage, null);
+  nextTurn(); dice.push(1, 10);
+  const partial = await attack('dual-action-0002');
+  assert.equal(partial.ok, true);
+  assert.equal(server.getPlayerHuds()[0].pendingDamage.label, 'Adaga');
+  assert.equal((await send({ kind: 'damage', pendingDamageId: partial.pendingDamageId })).ok, true);
+  nextTurn(); dice.push(1, 1);
+  const missed = await attack('dual-action-0003');
+  assert.equal(missed.ok, true); assert.equal(missed.pendingDamageId, undefined);
+  assert.equal(server.getPlayerHuds()[0].actions.standard, false);
+  nextTurn();
+  const bonusAction = await send({ kind: 'attack', attackType: 'melee', targetBossId: initialBattleState.bosses[0].id, damageFormula: '999', resource: null, actionId: 'dice-bonus-0001', extraAttackModifier: '1d6+2', extraDamageModifier: '1d6+3-1d4' });
+  assert.equal(bonusAction.pendingApproval, true);
+  dice.push(20, 4, 19, 3);
+  const bonusApproved = await server.approveActionPointRequest(bonusAction.requestId);
+  assert.equal(bonusApproved.ok, true);
+  assert.deepEqual(server.getTurnState().rollResults.filter(({ actionId }) => actionId === 'dice-bonus-0001').map(({ total }) => total), [34, 26]);
+  assert.deepEqual(server.getTurnState().rollResults.filter(({ actionId }) => actionId === 'dice-bonus-0001').map(({ modifier }) => modifier), [10, 4], 'o modificador exibido não soma os dados extras novamente');
+  const checkpoint = server.captureEncounter();
+  assert.equal(checkpoint.pendingPlayerDamages[0].extraDamageFormula, '1d6+3-1d4');
+  dice.push(2, 3, 5, 2);
+  assert.equal((await send({ kind: 'damage', pendingDamageId: bonusApproved.pendingDamageId })).ok, true);
+  dice.push(1, 2, 3, 4, 1);
+  assert.equal((await send({ kind: 'damage', pendingDamageId: server.getPlayerHuds()[0].pendingDamage.id })).ok, true);
+  assert.deepEqual(applied.slice(-2), [12, 14], 'os dados extras não são multiplicados pelo crítico');
+});
+
+test('fontes aprovadas alimentam Iniciativa, duas armas e resistência com dados sem gastar PM',async(t)=>{
+  const store=await createTestPlayerProfileStore();const dice=[];
+  const server=await MultiplayerSessionServer.start({playerProfileStore:store,initialSnapshot:publicSnapshot(),port:0,networkMode:'loopback',combatRollDelayMs:0,dramaticCombatRollDelayMs:0,playerNaturalCombatRollDelayMs:0,randomInteger:(min,max)=>Math.min(max-1,Math.max(min,dice.shift()??10)),getBossDefense:()=>12,applyBossDamage:(_,damage)=>({ok:true,appliedDamage:damage})});
+  t.after(()=>server.close('server-shutdown'));
+  const player=await connectPlayer(server,{clientId:'skill-effects-runtime',playerName:'Fontes'});t.after(()=>player.close());await once(player,'connect');
+  const values={Lv:'1',CLASSE:'Guerreiro 1','RAÇA':'Anão',ORIGEM:'Agricultor Sambur',ModFor:'3',ModDes:'2',ModCon:'1',ModInt:'2',ModSab:'0',ModCar:'0','Mar Trei luta':'Yes','Mar Trei ponta':'Yes','Mar Trei ini':'Yes','Mar Trei refle':'Yes','BossBar.Magia.1.Nome':'Orientação',[SKILL_EFFECTS_FIELD]:JSON.stringify({...emptySkillEffectsPlan(),reviewed:true})};
+  recalculateCharacterSkills(values);
+  const validation=createValidCharacterSheetValidation({characterName:'Fontes',currentHealth:50,maxHealth:50,currentMana:20,maxMana:20,defense:15,reflex:4,initiative:4});
+  validation.summary.skills=[...calculateCharacterSkills(values).values()].map(s=>({id:s.rule.code,name:s.rule.name,total:s.total,trained:s.trained,trainedOnly:s.trainedOnly,attribute:s.attribute,bonusDice:s.dice,rollMode:s.roll,attributeValue:s.attributeValue,halfLevel:s.halfLevel,trainingBonus:s.training,otherBonus:s.other,armorPenalty:s.penalty,sizeModifier:s.size,calculation:''}));
+  validation.summary.skillContext=createSkillCalculationContext(values);
+  const sword={name:'Espada',damage:'1d6',critical:'20/x2',attackBonus:'1d20',attackBonusIncludesSkill:false,skill:'Luta',damageType:'Corte',range:'Adjacente'};
+  validation.summary.attacks=[{...sword,primary:true,secondaryWeapon:{...sword,name:'Adaga',skill:'Pontaria'}}];
+  const profile=store.profileByUsername('Fontes');await store.saveSheet(profile.id,'fontes.pdf',new Uint8Array([37,80,68,70]),validation);server.refreshCharacterSheet('skill-effects-runtime',true);
+  server.publishBattleState({...publicSnapshot().battle,battleStarted:true,revision:50});
+  const effects=id=>availableSkillSituations(validation.summary.skillContext,id).filter(o=>['Orientação','Benefício'].includes(o.name)).map(o=>({id:o.id,situation:'Efeito recebido e benefício da origem ainda disponível'}));
+  assert.equal(effects('160').length,2);
+  dice.push(4,17,3);const init=await new Promise(resolve=>player.emit('encounter:roll-initiative-with-effects',false,effects('160'),resolve));assert.equal(init.ok,true);
+  const self=server.getTurnState('skill-effects-runtime').participants.find(p=>p.isSelf);assert.equal(self.initiativeTotal,24);
+  for(const p of server.getTurnState().participants)if(p.kind==='boss')server.rollInitiativeAsHost(p.id);
+  server.advanceTurnAsHost();for(let i=0;i<10&&server.getTurnState().activeParticipantId!==self.id;i++)server.advanceTurnAsHost();
+  assert.equal(server.getTurnState().participants.find(p=>p.id===self.id).initiativeTotal,24,'publicação e início do turno preservam o dado adicional');
+  const send=request=>new Promise(resolve=>player.emit('encounter:combat-action',request,resolve));
+  const request={kind:'attack',attackType:'melee',targetBossId:initialBattleState.bosses[0].id,damageFormula:'999',resource:null,actionId:'skill-effects-attack',effects:{primary:effects('190'),secondary:effects('260')}};
+  const forged=await send({...request,actionId:'skill-effects-forged',effects:{primary:[{id:'inexistente',situation:'valor forjado'}]}});assert.equal(forged.ok,false);assert.equal(server.getPlayerHuds()[0].actions.standard,true);
+  dice.push(2,16,4,3,18,5);const attack=await send(request);assert.equal(attack.ok,true);
+  const rolls=server.getTurnState().rollResults.filter(r=>r.actionId===request.actionId);assert.deepEqual(rolls.map(r=>r.rolls),[[2,16,4],[3,18,5]]);assert.deepEqual(rolls.map(r=>r.total),[25,27]);
+  while(server.getPlayerHuds()[0].pendingDamage)await send({kind:'damage',pendingDamageId:server.getPlayerHuds()[0].pendingDamage.id});
+  server.applyAreaDamage({damage:20,reflexDc:20,successRule:'half',playerIds:[self.sourceId]});
+  const pending=server.getPlayerHuds()[0].pendingResistances[0];assert.ok(pending);
+  dice.push(5,15,2);const resistance=await new Promise(resolve=>player.emit('player:roll-resistance-with-effects',pending.id,effects('270'),resolve));assert.equal(resistance.ok,true);
+  assert.equal(server.getPlayerHuds()[0].currentHealth,40);assert.equal(server.getPlayerHuds()[0].currentMana,20);
+  const save=server.getTurnState().rollResults.findLast(r=>r.label==='Reflexos CD 20');assert.deepEqual(save.rolls,[5,15,2]);assert.equal(save.total,21);
+});
+
+test('efeitos do HUD usam fontes aprovadas, expiram por turno e próximo teste, e terminam com o combate',async(t)=>{
+ const store=await createTestPlayerProfileStore();const server=await MultiplayerSessionServer.start({playerProfileStore:store,initialSnapshot:publicSnapshot(),port:0,networkMode:'loopback',combatRollDelayMs:0,dramaticCombatRollDelayMs:0,playerNaturalCombatRollDelayMs:0,randomInteger:()=>10});t.after(()=>server.close('server-shutdown'));
+ const player=await connectPlayer(server,{clientId:'hud-effects-runtime',playerName:'Efeitos'});t.after(()=>player.close());await once(player,'connect');
+ const values={Lv:'1',CLASSE:'Guerreiro 1','RAÇA':'Anão',ModFor:'3',ModDes:'2',ModCon:'1',ModInt:'0',ModSab:'0',ModCar:'0','Mar Trei luta':'Yes',[SKILL_EFFECTS_FIELD]:JSON.stringify({...emptySkillEffectsPlan(),reviewed:true,extra:[{id:'teste',name:'Bênção do mestre',skill:'190',amount:5,dice:'',condition:'Com a bênção ativa',note:'Fonte aprovada pelo mestre',active:false}]})};recalculateCharacterSkills(values);
+ const validation=createValidCharacterSheetValidation({characterName:'Efeitos',currentHealth:50,maxHealth:50,currentMana:20,maxMana:20,defense:15,reflex:4,initiative:30});
+ validation.summary.skills=[...calculateCharacterSkills(values).values()].map(s=>({id:s.rule.code,name:s.rule.name,total:s.total,trained:s.trained,trainedOnly:s.trainedOnly,attribute:s.attribute,bonusDice:s.dice,rollMode:s.roll,attributeValue:s.attributeValue,halfLevel:s.halfLevel,trainingBonus:s.training,otherBonus:s.other,armorPenalty:s.penalty,sizeModifier:s.size,calculation:''}));validation.summary.skillContext=createSkillCalculationContext(values);
+ const profile=store.profileByUsername('Efeitos');await store.saveSheet(profile.id,'efeitos.pdf',new Uint8Array([37,80,68,70]),validation);server.refreshCharacterSheet('hud-effects-runtime',true);server.publishBattleState({...publicSnapshot().battle,battleStarted:true,revision:50});
+ for(const p of server.getTurnState().participants)if(p.kind==='boss')server.rollInitiativeAsHost(p.id);else await new Promise(resolve=>player.emit('encounter:roll-initiative',false,resolve));server.advanceTurnAsHost();
+ const self=server.getPlayerHuds()[0];const nextTurn=()=>{for(let i=0;i<10;i++){server.advanceTurnAsHost();if(server.getTurnState().activeParticipantId==='player:'+self.id)return;}throw new Error('Turno do jogador ausente');};if(server.getTurnState().activeParticipantId!=='player:'+self.id)nextTurn();
+ const set=change=>new Promise(resolve=>player.emit('player:set-skill-effect',change,resolve));const change={id:'master:teste',active:true,situation:'Bênção recebida',duration:{unit:'rounds',amount:1}};
+ assert.equal((await set({...change,id:'forjado'})).ok,false);assert.equal((await set({...change,duration:{unit:'rounds',amount:-5}})).ok,false);assert.equal((await set(change)).ok,true);
+ const expires=server.getPlayerHuds()[0].skillEffects[0].expiresRound;assert.equal((await set(change)).ok,true);assert.equal(server.getPlayerHuds()[0].skillEffects[0].expiresRound,expires,'retry idêntico não reinicia duração');
+ const roll=actionId=>new Promise(resolve=>player.emit('encounter:combat-action',{kind:'skill',skillId:'190',resource:null,actionId},resolve));assert.equal((await roll('hud-effect-roll-1')).ok,true);assert.equal(server.getTurnState().rollResults.findLast(r=>r.actionId==='hud-effect-roll-1').total,20);
+ nextTurn();assert.deepEqual(server.getPlayerHuds()[0].skillEffects,[]);assert.equal((await roll('hud-effect-roll-2')).ok,true);assert.equal(server.getTurnState().rollResults.findLast(r=>r.actionId==='hud-effect-roll-2').total,15);
+ nextTurn();assert.equal((await set({...change,duration:{unit:'test',amount:1}})).ok,true);assert.equal((await roll('hud-effect-roll-3')).ok,true);assert.deepEqual(server.getPlayerHuds()[0].skillEffects,[]);
+ assert.equal((await set({...change,duration:{unit:'scene',amount:1}})).ok,true);server.publishBattleState({...publicSnapshot().battle,battleStarted:false,revision:60});assert.deepEqual(server.getPlayerHuds()[0].skillEffects,[]);assert.equal(server.getPlayerHuds()[0].currentMana,20);
+});
+
+test('cura aprovada usa dados e ação padrão, RD/imunidade protegem jogadores e persistem no encontro', async (t) => {
+  const store = await createTestPlayerProfileStore(); const healedBosses = [];
+  const server = await MultiplayerSessionServer.start({ playerProfileStore: store, initialSnapshot: publicSnapshot(), port: 0, networkMode: 'loopback', combatRollDelayMs: 0,
+    randomInteger: (min, max) => Math.min(max - 1, Math.max(min, 4)), applyBossHealing: (id, amount) => { healedBosses.push([id, amount]); return { ok: true, applied: amount }; } });
+  t.after(() => server.close('server-shutdown'));
+  const socket = await connectPlayer(server, { clientId: 'heal-rd-client', playerName: 'Curador' }); t.after(() => socket.close()); await once(socket, 'connect');
+  const validation = createValidCharacterSheetValidation({ characterName: 'Curador', currentHealth: 30, maxHealth: 50, currentMana: 10, maxMana: 10, defense: 15, reflex: 1, initiative: 30, temporaryHealth: 2 });
+  validation.summary.damageReduction = { version: 1, entries: [{ id: 'fire', target: 'Fogo', amount: 0, immune: true, name: 'Imunidade', source: 'ability', bypass: [] }, { id: 'physical', target: 'physical', amount: 5, name: 'Casca', source: 'ability', bypass: [] }] };
+  await store.saveSheet(store.profileByUsername('Curador').id, 'curador.pdf', new Uint8Array([37,80,68,70]), validation); server.refreshCharacterSheet('heal-rd-client', true);
+  server.publishBattleState({ ...publicSnapshot().battle, battleStarted: true, revision: 50 });
+  const send = (request) => new Promise((resolve) => socket.emit('encounter:combat-action', request, resolve));
+  for (const p of server.getTurnState().participants) if (p.kind === 'boss') server.rollInitiativeAsHost(p.id); else await new Promise((resolve) => socket.emit('encounter:roll-initiative', false, resolve));
+  server.advanceTurnAsHost(); const self = server.getPlayerHuds()[0];
+  const nextTurn = () => { for (let i = 0; i < 10; i++) { server.advanceTurnAsHost(); if (server.getTurnState().activeParticipantId === `player:${self.id}`) break; } };
+  if (server.getTurnState().activeParticipantId !== `player:${self.id}`) nextTurn();
+  assert.equal((await server.applyDirectPlayerDamage({ playerIds: [self.id], damage: 50, hits: 3, damageType: 'Fogo' })).ok, true);
+  assert.equal(server.getPlayerHuds()[0].temporaryHealth, 1); assert.equal(server.getPlayerHuds()[0].currentHealth, 30);
+  await server.applyDirectPlayerDamage({ playerIds: [self.id], damage: 10, damageType: 'Corte' });
+  assert.equal(server.getPlayerHuds()[0].currentHealth, 26);
+  const request = { kind: 'healing', targetParticipantId: `player:${self.id}`, formula: '2d8+3', actionId: 'heal-test-0001' };
+  const pending = await send(request); assert.equal(pending.pendingApproval, true); assert.equal(server.getPlayerHuds()[0].currentHealth, 26); assert.equal(server.getPlayerHuds()[0].actions.standard, true);
+  assert.equal((await server.approveActionPointRequest(pending.requestId)).ok, true);
+  assert.equal(server.getPlayerHuds()[0].currentHealth, 37); assert.equal(server.getPlayerHuds()[0].actions.standard, false);
+  assert.equal((await server.approveActionPointRequest(pending.requestId)).ok, false);
+  assert.equal(server.healEncounterTarget({ ...request, formula: '999', actionId: 'master-heal-0001' }).ok, true); assert.equal(server.getPlayerHuds()[0].currentHealth, 50);
+  assert.equal(server.captureEncounter().players[0].state.damageReduction.entries[0].immune, true);
+  nextTurn(); const bossRequest = await send({ ...request, targetParticipantId: `boss:${initialBattleState.bosses[0].id}`, actionId: 'heal-boss-0001' });
+  server.rejectActionPointRequest(bossRequest.requestId); assert.equal(healedBosses.length, 0); assert.equal(server.getPlayerHuds()[0].actions.standard, true);
+  const again = await send({ ...request, targetParticipantId: `boss:${initialBattleState.bosses[0].id}`, actionId: 'heal-boss-0002' });
+  assert.equal((await server.approveActionPointRequest(again.requestId)).ok, true); assert.equal(healedBosses[0][1], 11);
+  nextTurn(); const changedTurn = await send({ ...request, actionId: 'heal-turn-0001' }); server.advanceTurnAsHost();
+  assert.equal((await server.approveActionPointRequest(changedTurn.requestId)).ok, false);
+});
+
 test('sinaliza problemas depois de duas sondagens de latência perdidas', () => {
   const roster = new SessionRoster('ABCDEFGH');
   roster.register({
@@ -587,6 +756,24 @@ test('hospeda uma sessão temporária, autentica, limita jogadores e mede ping',
   const closedNotice = once(first, 'session:closed');
   await server.close('host-ended-session');
   assert.deepEqual((await closedNotice)[0], { reason: 'host-ended-session' });
+});
+
+test('autocorreção de ficha vinculada exige revisão e aprovação, sem contornar o editor', async (t) => {
+  const profileStore = await createTestPlayerProfileStore();
+  const server = await MultiplayerSessionServer.start({ playerProfileStore: profileStore, initialSnapshot: publicSnapshot(), port: 0, networkMode: 'loopback' });
+  t.after(() => server.close('server-shutdown'));
+  const socket = await connectPlayer(server, { clientId: 'autofix-review-client', playerName: 'Revisão de ficha' });
+  t.after(() => socket.close());
+  await once(socket, 'connect');
+  const profile = profileStore.profileByUsername('Revisão de ficha');
+  const original = await createNimbCharacterSheet({ Texto13: '99' });
+  await profileStore.saveSheet(profile.id, 'revisar.pdf', original, (await inspectCharacterSheetPdf(original)).validation);
+  const response = await fetch(`${new URL(server.info.invite.localUrl).origin}/api/player/sheet/autofix`, {
+    method: 'POST', headers: { Authorization: `Bearer ${socket.auth.accountToken}`, 'X-BossBar-Room': server.credentials.roomCode, 'Content-Type': 'application/json' }, body: '{}',
+  });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /Ajustar ficha.*aprovação do mestre/);
+  assert.deepEqual((await profileStore.readSheet(profile.id)).bytes, original);
 });
 
 test('encerra a sala mesmo com uma requisição HTTP abandonada', { timeout: 5_000 }, async (t) => {
@@ -1224,20 +1411,16 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
   ]) {
     const profile = profileStore.profileByUsername(username);
     assert.ok(profile);
+    const validation = createValidCharacterSheetValidation({
+      characterName, currentHealth: 60, maxHealth: 60,
+      currentMana: 10, maxMana: 10, defense: 18, reflex: 7, initiative,
+    });
+    validation.summary.skills.push({ id: '190', name: 'Luta', total: 3, trained: false, trainedOnly: false });
     await profileStore.saveSheet(
       profile.id,
       `${username}.pdf`,
       new Uint8Array([0x25, 0x50, 0x44, 0x46]),
-      createValidCharacterSheetValidation({
-        characterName,
-        currentHealth: 60,
-        maxHealth: 60,
-        currentMana: 10,
-        maxMana: 10,
-        defense: 18,
-        reflex: 7,
-        initiative,
-      }),
+      validation,
     );
     server.refreshCharacterSheet(clientId, true);
   }
@@ -1371,7 +1554,7 @@ test('sincroniza privacidade dos HUDs e controla turnos de forma autoritativa', 
   const failedAttackApproval = await server.approveActionPointRequest(
     failedAttackRequest.requestId,
   );
-  assert.equal(failedAttackApproval.ok, true);
+  assert.equal(failedAttackApproval.ok, true, failedAttackApproval.error);
   assert.ok(failedAttackApproval.pendingDamageId);
   const failedDamageResolution = await new Promise((resolve) => {
     alice.emit('encounter:combat-action', {

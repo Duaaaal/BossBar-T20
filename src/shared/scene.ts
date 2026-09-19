@@ -1,3 +1,4 @@
+import { normalizeDamageReduction } from './damage-reduction.ts';
 import type { BossState } from './battle';
 import {
   normalizeBossSkillValues,
@@ -62,6 +63,7 @@ export type ScenePlaylistCommand =
   | { type: 'set-loop'; loop: boolean };
 
 export type SceneBossPatch = {
+  damageReductions?: import('./damage-reduction').DamageReductionProfile;
   bossName?: string;
   nextAction?: string;
   actionSeverity?: 'normal' | 'grave';
@@ -343,6 +345,7 @@ export const validateSceneRanges = (
 
 export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch => {
   const normalized: SceneBossPatch = {};
+  if (patch.damageReductions !== undefined || patch.damageReduction !== undefined) normalized.damageReductions = normalizeDamageReduction(patch.damageReductions, patch.damageReduction);
   const name = typeof patch.bossName === 'string' ? patch.bossName.trim().slice(0, 100) : '';
   if (name) normalized.bossName = name;
   const nextAction = typeof patch.nextAction === 'string'
@@ -356,7 +359,7 @@ export const normalizeSceneBossPatch = (patch: SceneBossPatch): SceneBossPatch =
     Exclude<
       keyof SceneBossPatch,
       'bossName' | 'nextAction' | 'actionSeverity' | 'skillValues' | 'skillOverrides' |
-      'attacks' | 'selectedAttackId'
+      'damageReductions' | 'attacks' | 'selectedAttackId'
     >,
     number,
     number,
@@ -429,6 +432,7 @@ export const applySceneBossPatch = (
     defense: normalized.defense ?? boss.defense,
     rangedDefense: normalized.rangedDefense ?? boss.rangedDefense,
     damageReduction: normalized.damageReduction ?? boss.damageReduction,
+    damageReductions: normalized.damageReductions ?? boss.damageReductions,
     shield: normalized.shield ?? boss.shield,
     skillValues: normalized.skillValues ?? boss.skillValues,
     skillOverrides: normalized.skillOverrides ?? boss.skillOverrides,

@@ -160,18 +160,18 @@
       <div class="web-player-dialog-card web-player-tools-card">
         <button class="web-player-dialog-close" id="web-player-sheet-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-dialog-title">Ficha do personagem</h1>
-        <div class="web-player-sheet-upload-row">
-          <div class="web-player-sheet-file-field">
-            <input id="web-player-sheet-input" type="file" accept="application/pdf,.pdf" />
-            <button class="web-player-sheet-remove-x" id="web-player-sheet-selection-remove" type="button" aria-label="Limpar arquivo escolhido" title="Limpar arquivo escolhido" hidden>&times;</button>
-          </div>
-          <a id="web-player-blank-sheet" href="/api/player/blank-sheet" download="Ficha_T20_v.2.0.pdf">Baixar ficha vazia</a>
+        <div id="web-player-character-slots" class="web-player-character-slots" role="tablist" aria-label="Fichas vinculadas"></div>
+        <button class="web-player-sheet-linked-remove" id="web-player-sheet-remove" type="button" aria-label="Remover ficha vinculada" title="Remover ficha vinculada" hidden>&times;</button>
+        <div class="web-player-sheet-command-row">
+          <button id="web-player-sheet-upload" type="button">Upload ficha</button>
+          <button id="web-player-sheet-open" type="button" hidden disabled>Abrir ficha</button>
+          <button id="web-player-sheet-create" type="button">Criar ficha vazia</button>
+          <button id="web-player-sheet-export" type="button" hidden>Exportar PDF editável</button>
+          <a id="web-player-blank-sheet" href="/api/player/blank-sheet" download="Ficha_Vazia_T20.pdf">Baixar ficha vazia</a>
         </div>
-        <button class="web-player-sheet-open" id="web-player-sheet-open" type="button" disabled>Abrir para ajustar</button>
-        <div class="web-player-sheet-linked-row">
-          <p class="web-player-sheet-status" id="web-player-sheet-status" role="status"></p>
-          <button class="web-player-sheet-linked-remove" id="web-player-sheet-remove" type="button" aria-label="Remover ficha vinculada" title="Remover ficha vinculada" hidden>&times;</button>
-        </div>
+        <input id="web-player-sheet-input" type="file" accept="application/pdf,.pdf" aria-label="Escolher arquivo da ficha" hidden />
+        <button id="web-player-sheet-selection-remove" type="button" aria-label="Limpar arquivo escolhido" hidden>&times;</button>
+        <p class="web-player-sheet-status" id="web-player-sheet-status" role="status"></p>
         <ul class="web-player-sheet-issues" id="web-player-sheet-issues"></ul>
         <div class="web-player-dialog-actions web-player-sheet-actions">
           <button id="web-player-sheet-fix" type="button" hidden>Corrigir automaticamente</button>
@@ -182,8 +182,7 @@
       <div class="web-player-dialog-card web-player-sheet-editor-card">
         <button class="web-player-dialog-close" id="web-player-sheet-editor-close" type="button" aria-label="Fechar">&times;</button>
         <h1 id="sheet-editor-title">Ajustar ficha</h1>
-        <button class="sheet-import-discard" id="web-player-sheet-import-discard" type="button" hidden>Descartar importação e manter a ficha anterior</button>
-        <button class="sheet-import-autofix" id="web-player-sheet-import-autofix" type="button" hidden>Corrigir cálculos automaticamente</button>
+        <details id="web-player-sheet-editor-review" class="sheet-editor-review" hidden></details>
         <div class="web-player-sheet-editor-toolbar">
           <div>
             <input id="web-player-sheet-editor-search" type="search" placeholder="Buscar campo da ficha" autocomplete="off" />
@@ -200,6 +199,14 @@
           </div>
         </div>
         <div class="web-player-sheet-editor-fields" id="web-player-sheet-editor-fields"></div>
+        <div class="sheet-editor-footer">
+          <p id="web-player-sheet-editor-status" role="status" aria-live="polite"></p>
+          <a href="/api/player/blank-sheet" download="Ficha_Vazia_T20.pdf">Ficha vazia de Nimb</a>
+          <button class="sheet-import-discard" id="web-player-sheet-import-discard" type="button" hidden>Descartar importação</button>
+          <button class="sheet-import-autofix" id="web-player-sheet-import-autofix" type="button">Validar e corrigir cálculos</button>
+          <button id="web-player-sheet-editor-discard" type="button">Fechar sem salvar</button>
+          <button id="web-player-sheet-editor-save" type="button">Salvar e fechar</button>
+        </div>
       </div>
     </section>
     <section class="web-player-dialog web-player-portrait-lightbox" id="web-player-portrait-lightbox" role="dialog" aria-modal="true" aria-label="Retrato ampliado" hidden>

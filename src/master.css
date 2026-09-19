@@ -607,3 +607,6 @@ button { font: inherit; cursor: pointer; }
 @media (max-width: 520px) {
   .scene-sound-options { grid-template-columns: 1fr; }
 }
+.master-healing-field { display: grid; gap: 8px; color: #dfc69b; }
+.master-healing-field input { padding: 10px; background: #100d0a; color: #eee3d1; border: 1px solid #806139; border-radius: 6px; font: inherit; }
+.hosted-heal-player { margin: 6px 0; background: #293924; border: 1px solid #71825a; color: #e4e9cf; border-radius: 5px; padding: 5px 9px; cursor: pointer; }

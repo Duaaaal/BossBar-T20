@@ -1,0 +1,12 @@
+.player-skill-situations { border:1px solid #685337; border-radius:8px; padding:10px; margin-top:10px; min-width:0; text-align:left; }
+.player-skill-situations legend,.player-skill-situations summary { color:#edc88b; font-weight:700; cursor:pointer; }
+.player-skill-situations > p { color:#baa991; font-size:11px; margin:0 0 8px; }
+.player-skill-situation { padding:7px; background:#211a14; border:1px solid #413529; border-radius:5px; margin-top:6px; }
+.player-skill-situation > label { display:flex; gap:7px; align-items:center; color:#eddec8; font-size:12px; }
+.player-skill-situation input[type=checkbox] { width:14px; height:14px; flex:none; accent-color:#c69b56; }
+.player-skill-situation > small { color:#bdae97; font-size:10px; display:block; }
+.player-skill-situation > div { display:flex; gap:6px; margin-top:6px; }
+.player-skill-situation > div input { min-width:0; flex:1; }
+.player-skill-situation > div input,.player-skill-situation select { background:#120f0c; color:#e9d3b1; border:1px solid #79603d; border-radius:4px; padding:5px; font-size:12px; }
+.player-skill-situations output { display:block; color:#a9d4b1; margin-top:8px; font-size:12px; }
+.player-resistance-controls { min-width:0; }

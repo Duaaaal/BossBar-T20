@@ -1,3 +1,4 @@
+import { DAMAGE_ORIGINS, type DamageOrigin } from './damage-reduction.ts';
 import { isStatusId, normalizeDamageFormula, type StatusId } from './status.ts';
 import { BOSS_SKILL_DEFINITIONS, type BossSkillId } from './boss-skills.ts';
 
@@ -31,6 +32,7 @@ export type BossAttack = {
   criticalThreat: number;
   criticalMultiplier: number;
   damageType: string;
+  damageOrigin?: DamageOrigin;
   range: string;
   tags?: string[];
   attackCount?: number;
@@ -90,6 +92,7 @@ export const normalizeBossAttack = (
       if (!effect || !isStatusId(effect.statusId) || effect.statusId === 'coringa' || !BOSS_SKILL_DEFINITIONS.some(([id]) => id === effect.resistanceSkill) || !Number.isFinite(effect.dc) || !Number.isFinite(effect.turns)) return [];
       return [{ statusId: effect.statusId, resistanceSkill: effect.resistanceSkill, dc: clampInteger(effect.dc, 0, 999), turns: clampInteger(effect.turns, 1, 999), damageFormula: normalizeDamageFormula(effect.damageFormula) ?? '0' }];
     }) : [],
+    ...(DAMAGE_ORIGINS.some(([id]) => id === candidate.damageOrigin) ? { damageOrigin: candidate.damageOrigin } : {}),
     damageType: typeof candidate.damageType === 'string'
       ? candidate.damageType.trim().slice(0, 40)
       : '',

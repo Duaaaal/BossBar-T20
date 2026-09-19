@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "file": "T20 - Livro Básico - Jogo do Ano.pdf",
+      "role": "base-absoluta",
+      "pages": 407,
+      "sha256": "ed5643be10f28399f05728830592692cd8db99561a50303327b31a479dc09ffd",
+      "bytes": 97938239,
+      "appliedRules": [
+        "atributos-diretos",
+        "pericias",
+        "carga-em-espacos",
+        "validacao-de-calculos",
+        "reducao-de-dano-por-fonte",
+        "tipos-e-origens-de-dano",
+        "tamanho-furtividade-manobras"
+      ],
+      "reviewStatus": "paginas pertinentes consultadas"
+    },
+    {
+      "file": "T20 - Guia de Deuses Menores.pdf",
+      "role": "referencia-suplementar",
+      "pages": 68,
+      "sha256": "7c3714f3dfd3ba53e9965d81277e859a889a24a7f91be26bd2fee7c40c62078f",
+      "bytes": 22736257,
+      "appliedRules": [],
+      "reviewStatus": "reservado para consulta; mecanicas nao automatizadas"
+    },
+    {
+      "file": "T20 - Heróis de Arton.pdf",
+      "role": "referencia-suplementar",
+      "pages": 332,
+      "sha256": "fa5006afb3f4a7c43390a99adb66f390a44a957f7b6f7114b9549e1ba4ad63e8",
+      "bytes": 60761233,
+      "appliedRules": [],
+      "reviewStatus": "reservado para consulta; mecanicas nao automatizadas"
+    },
+    {
+      "file": "T20 - Ameaças de Arton.pdf",
+      "role": "referencia-suplementar",
+      "pages": 436,
+      "sha256": "b6bddd690c8e9c1607d36dcf390b2c7f1a5b2328de5a31cf130b38a17b64d686",
+      "bytes": 65574145,
+      "appliedRules": [],
+      "reviewStatus": "reservado para consulta; mecanicas nao automatizadas"
+    },
+    {
+      "file": "T20 - Atlas de Arton.pdf",
+      "role": "referencia-suplementar",
+      "pages": 484,
+      "sha256": "828fcebbe78e58dbf016b37a666afa7ace484175fb9b970501f316ccf1d1f3ef",
+      "bytes": 94423845,
+      "appliedRules": [],
+      "reviewStatus": "reservado para consulta; mecanicas nao automatizadas"
+    },
+    {
+      "file": "T20 - Deuses de Arton.pdf",
+      "role": "referencia-suplementar",
+      "pages": 324,
+      "sha256": "ed7f7722e0ed21a3ab37eac861b861d34a53a21677439185d420a5ad669ade92",
+      "bytes": 100071445,
+      "appliedRules": [],
+      "reviewStatus": "reservado para consulta; mecanicas nao automatizadas"
+    }
+  ]
+}

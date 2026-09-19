@@ -33,7 +33,7 @@ test('auditoria visual: HUDs, ficha, perícias, combate, notas e preferências e
       await joinHostedSession(page, session.inviteUrl, `Visual ${index}`);
       await page.getByRole('button', { name: 'Ficha', exact: true }).click();
       await page.locator('#web-player-sheet-input').setInputFiles({ name: `personagem-${index}.pdf`, mimeType: 'application/pdf', buffer: await createEditableCharacterSheet({ characterName: index ? 'Companheiro da Aurora' : 'Guardião da Aurora', playerName: `Visual ${index}` }) });
-      await expect(page.locator('#web-player-sheet-status')).toContainText(`personagem-${index}.pdf`);
+      await expect(page.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText(index ? 'Companheiro da Aurora' : 'Guardião da Aurora');
       await page.locator('#web-player-sheet-close').click();
     }
     const page = pages[0];
@@ -65,6 +65,8 @@ test('auditoria visual: HUDs, ficha, perícias, combate, notas e preferências e
     await capture(page, info, 'sheet-upload');
     await page.locator('#web-player-sheet-open').click();
     await contained(page, '.web-player-sheet-editor-card');
+    await contained(page, '.sheet-editor-footer');
+    await contained(page, '#web-player-sheet-editor-status');
     await capture(page, info, 'sheet-editor');
     await page.locator('#web-player-sheet-editor-close').click();
     await expect(page.locator('.web-player-sheet-editor-card')).toBeHidden();

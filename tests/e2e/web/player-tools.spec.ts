@@ -1,3 +1,4 @@
+import { keepCustomizedSheetValues } from '../support/sheet-review';
 import { expect, test } from '@playwright/test';
 import path from 'node:path';
 import {
@@ -178,17 +179,19 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       mimeType: 'application/pdf',
       buffer: await createEditableCharacterSheet({ autoFixIssue: true }),
     });
-    await expect(firstPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
     const importEditor = firstPage.getByRole('dialog', { name: 'Ajustar ficha' });
     await expect(importEditor).toBeVisible();
+    await expect(importEditor.locator('[data-field-name="NOME DO PERSONAGEM"] input')).toHaveValue('Valora');
     const invalidDefense = importEditor.locator('[data-field-name="CA"] input');
     await expect(invalidDefense).toHaveAttribute('aria-invalid', 'true');
     expect(session.server.getPresence().players[0]?.hasCharacterSheet).toBe(false);
-    await invalidDefense.fill('10');
-    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await importEditor.getByRole('button', { name: 'Validar e corrigir cálculos', exact: true }).click();
+    await keepCustomizedSheetValues(firstPage);
+    await expect(invalidDefense).toHaveValue('10');
+    await firstPage.locator('#web-player-sheet-editor-save').click();
     await expect(importEditor).toBeHidden();
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
-    await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeVisible();
+    await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeHidden();
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
     await expect(firstPage.locator('#web-player-sheet-open')).toBeEnabled();
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(true);
@@ -225,18 +228,24 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await sheetFilters.getByRole('button', { name: 'Mostrar tudo' }).click();
     await expect(initialSheetEditor.locator('.web-player-sheet-editor-section h2')).toContainText([
       'Identidade',
-      'Atributos e modificadores',
-      'Características',
-      'Descrição',
-      'Habilidades',
+      'Atributos',
       'Pontos de vida e mana',
       'Defesa',
+      'Armadura e escudo',
+      'Proficiências',
       'Ataques',
+      'Perícias',
+      'Características',
+      'Itens',
+      'Habilidades',
+      'Magias',
+      'Descrição',
     ]);
     await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"]')).toContainText('PV temporário');
     await expect(initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input')).toHaveValue('0');
     const reflexSkillGroup = initialSheetEditor.locator('.web-player-sheet-editor-group').filter({ hasText: 'Reflexos' });
-    await expect(reflexSkillGroup.locator('.web-player-sheet-editor-group-heading [type="checkbox"]')).toHaveCount(1);
+    await expect(reflexSkillGroup).toHaveClass(/is-trained-skill/);
+    await expect(reflexSkillGroup.locator('.web-player-sheet-editor-group-heading [type="checkbox"]')).toHaveCount(0);
     await expect(reflexSkillGroup.locator('.web-player-sheet-editor-group-fields [type="checkbox"]')).toHaveCount(0);
     await expect(initialSheetEditor.locator('.web-player-sheet-editor-section.is-skills')).toHaveCount(1);
     await expect(initialSheetEditor.locator('.web-player-sheet-editor-office select')).toHaveCount(2);
@@ -254,18 +263,21 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       .toHaveValue('2');
     await attackRows.getByRole('button', { name: 'Remover Ataque 3' }).click();
     await expect(attackRows).toHaveCount(2);
-    await expect(itemRows).toHaveCount(3);
+    await expect(itemRows).toHaveCount(2);
     await initialSheetEditor.getByRole('button', { name: /Adicionar item/ }).click();
-    await expect(itemRows).toHaveCount(4);
-    await itemRows.getByRole('button', { name: 'Remover Item 4' }).click();
     await expect(itemRows).toHaveCount(3);
+    await itemRows.getByRole('button', { name: 'Remover Item 3' }).click();
+    await expect(itemRows).toHaveCount(2);
     const firstItemRow = itemRows.filter({ hasText: 'Item 1' });
+    await initialSheetEditor.locator('#web-player-sheet-editor-review').evaluate((element) => { (element as HTMLDetailsElement).open = true; });
+    await initialSheetEditor.locator('[data-field-name="BossBar.CargaRevisada"] input').check();
+    await firstItemRow.locator('[data-field-name="Item1"] input').fill('Equipamento de teste');
     await firstItemRow.locator('[data-field-name="BossBar.Item.1.Quantidade"] input').fill('2');
     await firstItemRow.locator('[data-field-name="PesoItem1"] input').fill('1,5');
-    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] input')).toHaveValue('3');
+    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] [data-load-part="total"]')).toHaveValue('3');
     await firstItemRow.locator('[data-field-name="BossBar.Item.1.Quantidade"] input').fill('0');
     await firstItemRow.locator('[data-field-name="PesoItem1"] input').fill('');
-    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] input')).toHaveValue('0');
+    await expect(initialSheetEditor.locator('[data-field-name="CargaTotal"] [data-load-part="total"]')).toHaveValue('0');
     const armorRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-armor-row');
     const shieldRows = initialSheetEditor.locator('.web-player-sheet-editor-group.is-shield-row');
     await expect(armorRows).toHaveCount(1);
@@ -282,7 +294,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(spellRows).toHaveCount(0);
     await expect(initialSheetEditor.locator('[data-field-name="JOGADOR"]')).toHaveCount(0);
     await initialSheetEditor.locator('[data-field-name="BossBar.PVs Temporarios"] input').fill('7');
-    await expect(firstPage.locator('#web-player-sheet-editor-status')).toHaveCount(0);
+    await expect(firstPage.locator('#web-player-sheet-editor-status')).toContainText('Alterações não salvas');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await expect.poll(() => firstPage.evaluate(async () =>
       (await window.bossAPI.getPlayerHuds()).find(({ isSelf }) => isSelf)
@@ -293,7 +305,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     )).toEqual([true, true, true]);
     expect(await firstPage.evaluate(() => window.bossAPI.usePlayerAction('free')))
       .toMatchObject({ ok: false, error: expect.stringContaining('Feche a ficha') });
-    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await firstPage.locator('#web-player-sheet-editor-save').click();
     await expect(initialSheetEditor).toBeHidden();
     await expect.poll(() => session.server.getPendingSheetChangeRequests().length)
       .toBe(1);
@@ -305,7 +317,10 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     expect(temporaryHealthRequest?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'BossBar.PVs Temporarios', after: '7' }),
     ]));
-    // The repaired import already normalized its empty inventory to zero.
+    // Only effective changes are submitted; the fixture and emptied item both weigh zero.
+    expect(temporaryHealthRequest?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'Item1', before: '', after: 'Equipamento de teste' }),
+    ]));
     expect(temporaryHealthRequest?.changes.some(({ field }) => field === 'CargaTotal')).toBe(false);
     expect(await firstPage.evaluate(() => window.bossAPI.usePlayerAction('free')))
       .toMatchObject({ ok: false, error: expect.stringContaining('Aguarde o mestre') });
@@ -370,7 +385,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       return Math.abs(dotsCenter - (actionsBounds.left + actionsBounds.width / 2));
     });
     expect(selfActionsAlignment).toBeLessThan(1);
-    await expect(firstPage.locator('#web-player-character-melee')).toHaveText('0');
+    await expect(firstPage.locator('#web-player-character-melee')).toHaveText('2');
     await expect(firstPage.locator('#web-player-character-ranged')).toHaveText('0');
     const sharedPortrait = observerPage.locator('.party-player-portrait img');
     await expect(sharedPortrait).toHaveCount(1);
@@ -384,7 +399,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(firstPage.locator('#web-player-character-class-level')).toContainText('Guerreiro');
     await expect(firstPage.locator('#web-player-character-class-level')).not.toContainText('Defesa:');
     await expect(firstPage.locator('#web-player-character-class-level')).not.toHaveAttribute('data-calculation');
-    await expect(firstPage.locator('#web-player-character-attributes')).toContainText('Modificadores de atributo');
+    await expect(firstPage.locator('#web-player-character-attributes')).toContainText('Atributos');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('FOR');
     await expect(firstPage.locator('#web-player-character-attributes')).toContainText('+2');
     const strengthRow = firstPage
@@ -400,7 +415,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(trainedSkill).toHaveClass(/is-trained/);
     await expect(trainedSkill).not.toContainText('• T');
     await trainedSkill.hover();
-    await expect(calculationTooltip).toContainText('(atributo)');
+    await expect(calculationTooltip).toContainText('(DES)');
     await expect(calculationTooltip).toContainText('(treino)');
     const sizeRow = firstPage
       .locator('#web-player-character-movement .web-player-character-detail-row')
@@ -428,7 +443,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
       .locator('#web-player-character-attacks .web-player-character-detail-row')
       .filter({ hasText: 'Espada longa' });
     await attackRow.hover();
-    await expect(calculationTooltip).toContainText('Teste +5');
+    await expect(calculationTooltip).toContainText('Teste 1d20 + 5 + 2');
     await expect(calculationTooltip).toContainText('dano 1d8+2');
 
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
@@ -443,7 +458,7 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await originField.fill('Marinheira');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
-    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await firstPage.locator('#web-player-sheet-editor-save').click();
     await expect(sheetEditor).toBeHidden();
     await expect.poll(() => session.server.getPendingSheetChangeRequests().length)
       .toBe(1);
@@ -460,12 +475,11 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(sheetEditor).toBeVisible();
     await expect(originField).toHaveValue('Marinheira');
     expect(sheetTicketRequests).toBe(1); // Reopening the internal editor reuses the cached preview permission.
-    await firstPage.locator('#web-player-sheet-editor-close').click();
+    await firstPage.locator('#web-player-sheet-editor-save').click();
     await firstPage.getByRole('button', { name: 'Ficha', exact: true }).click();
-    await firstPage.locator('#web-player-sheet-selection-remove').click();
     await expect(firstPage.locator('#web-player-sheet-selection-remove')).toBeHidden();
     await expect(firstPage.locator('#web-player-sheet-remove')).toBeVisible();
-    await expect(firstPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
+    await expect(firstPage.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText('Valora');
 
     await firstContext.close();
     const secondPage = await secondContext.newPage();
@@ -492,14 +506,14 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
     await expect(secondPage.locator('#web-player-character-hud')).toBeVisible();
     await expect(secondPage.locator('#web-player-character-name')).toHaveText('Valora');
     await secondPage.getByRole('button', { name: 'Ficha', exact: true }).click();
-    await expect(secondPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
+    await expect(secondPage.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText('Valora');
     await secondPage.locator('#web-player-sheet-remove').click();
     await expect(secondPage.getByRole('dialog', { name: 'Remover ficha?' })).toBeVisible();
     await secondPage.locator('#web-player-sheet-remove-cancel').click();
-    await expect(secondPage.locator('#web-player-sheet-status')).toContainText('ficha-valora.pdf');
+    await expect(secondPage.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText('Valora');
     await secondPage.locator('#web-player-sheet-remove').click();
     await secondPage.locator('#web-player-sheet-remove-confirm-button').click();
-    await expect(secondPage.locator('#web-player-sheet-status')).toHaveText('Ficha removida deste usuário.');
+    await expect(secondPage.locator('#web-player-sheet-status')).toBeEmpty();
     await expect(secondPage.locator('#web-player-sheet-open')).toBeDisabled();
     await expect(secondPage.locator('#web-player-character-hud')).toBeHidden();
     await expect.poll(() => session.server.getPresence().players[0]?.hasCharacterSheet).toBe(false);
@@ -511,8 +525,8 @@ test('persiste ficha, HUD privado e notas ricas em abas', async ({ browser }, te
   }
 });
 
-test('recupera localmente o rascunho da ficha após fechar o navegador', async ({ browser }, testInfo) => {
-  test.skip(testInfo.project.name !== 'chromium', 'Recuperação local validada no Chromium.');
+test('fechar o navegador descarta o rascunho sem enviar alterações ao mestre', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Descarte validado no Chromium.');
   const session = await startHostedTestSession();
   const context = await browser.newContext();
   try {
@@ -528,6 +542,7 @@ test('recupera localmente o rascunho da ficha após fechar o navegador', async (
     await page.locator('#web-player-sheet-open').click();
     const editor = page.getByRole('dialog', { name: 'Ajustar ficha' });
     await expect(editor).toBeVisible();
+    const originalOrigin = await editor.locator('[data-field-name="ORIGEM"] input').inputValue();
     await editor.locator('[data-field-name="ORIGEM"] input').fill('Sobrevivente');
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
 
@@ -537,12 +552,13 @@ test('recupera localmente o rascunho da ficha após fechar o navegador', async (
     await page.locator('#web-player-sheet-open').click();
     await expect(editor).toBeVisible();
     await expect(editor.locator('[data-field-name="ORIGEM"] input'))
-      .toHaveValue('Sobrevivente');
-    await expect(page.locator('#web-player-sheet-editor-status')).toHaveCount(0);
+      .toHaveValue(originalOrigin);
+    await expect(page.locator('#web-player-sheet-editor-status')).toBeVisible();
     expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
 
     await page.locator('#web-player-sheet-editor-close').click();
-    await expect.poll(() => session.server.getPendingSheetChangeRequests().length).toBe(1);
+    await expect(editor).toBeHidden();
+    expect(session.server.getPendingSheetChangeRequests()).toHaveLength(0);
     await expect.poll(() => page.evaluate(() =>
       Object.keys(localStorage).some((key) =>
         key.startsWith('bossbar.character-sheet-draft.v1:')),

@@ -89,11 +89,16 @@ import type {
 } from './scene';
 
 export type BossAPI = {
+  healEncounterTarget: (request: import('./player-combat').PlayerHealingRequest) => Promise<PlayerCombatActionResult>;
+  getReferenceVariants: () => Promise<import('./reference-variants').ReferenceVariantsResult>;
+  saveReferenceVariant: (draft: import('./reference-variants').ReferenceVariantDraft) => Promise<import('./reference-variants').ReferenceVariantsResult>;
+  reviewReferenceVariant: (id: string, approve: boolean) => Promise<import('./reference-variants').ReferenceVariantsResult>;
   openAttackLibrary: () => Promise<boolean>;
   setHostedPlayerControl: (playerId: string, controlled: boolean) => Promise<boolean>;
   requestControlledPlayerAction: (playerId: string, request: PlayerCombatActionRequest) => Promise<PlayerCombatActionResult>;
   closeAttackLibrary: () => void;
-  rollResistance: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  setPlayerSkillEffect: (playerId:string,change:import('./skill-effect-runtime').SkillEffectChange)=>Promise<{ok:boolean;error?:string}>;
+  rollResistance: (id: string,effects?:import('./skill-test-context').SkillTestActivation[]) => Promise<{ ok: boolean; error?: string }>;
   setAutomaticResistance: (enabled: boolean) => Promise<boolean>;
   getAttackLibrary: () => Promise<import('./boss-attacks').BossAttack[]>;
   saveLibraryAttack: (attack: import('./boss-attacks').BossAttack, remove?: boolean) => Promise<{ ok: boolean; attacks?: import('./boss-attacks').BossAttack[]; error?: string }>;
@@ -127,6 +132,7 @@ export type BossAPI = {
   rollEncounterInitiative: (
     participantId?: string | null,
     extremeAdvantage?: boolean,
+    effects?:import('./skill-test-context').SkillTestActivation[],
   ) => Promise<EncounterTurnActionResult>;
   rollEncounterFormula: (
     request: EncounterFormulaRollRequest,

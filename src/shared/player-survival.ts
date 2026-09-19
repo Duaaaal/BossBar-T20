@@ -1,10 +1,12 @@
-import { applyStatusRules } from './status-rules.ts';
+import { applyStatusRules, deriveStatusAttributes } from './status-rules.ts';
 import type { ActiveBossStatus, StatusId } from './status.ts';
+import { reduceDamage, type DamageContext, type DamageReductionProfile } from './damage-reduction.ts';
 
 export const BLEEDING_CONSTITUTION_DC = 15;
 export const FIRST_AID_CURE_DC = 15;
 
 type PlayerVitalState = Readonly<{
+  damageReduction?: DamageReductionProfile;
   currentHealth: number;
   maxHealth: number;
   temporaryHealth?: number;
@@ -48,6 +50,7 @@ export type PlayerVitalTransition<T extends PlayerVitalState> = Readonly<{
 export const applyPlayerDamage = <T extends PlayerVitalState>(
   state: T,
   damage: number,
+  context: DamageContext = {},
 ): PlayerVitalTransition<T> => {
   if (state.dead) {
     return {
@@ -57,7 +60,9 @@ export const applyPlayerDamage = <T extends PlayerVitalState>(
       died: false,
     };
   }
-  const applied = Math.max(0, Math.ceil(damage));
+  const statusReduction = deriveStatusAttributes({ attack: 0, rangedAttack: 0, skills: 0, meleeDefense: 0, rangedDefense: 0, damageReduction: 0, shield: 0 }, state.statuses).values.damageReduction;
+  const applied = reduceDamage(damage, state.damageReduction, context, statusReduction);
+  if (applied === 0) return { state, becameUnconscious: false, becameStable: false, died: false };
   const temporaryHealth = Math.max(0, Math.floor(state.temporaryHealth ?? 0));
   const absorbedByTemporaryHealth = Math.min(temporaryHealth, applied);
   const currentHealth = state.currentHealth - (applied - absorbedByTemporaryHealth);

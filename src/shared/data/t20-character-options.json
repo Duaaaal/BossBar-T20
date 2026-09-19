@@ -1,0 +1,2788 @@
+{
+  "version": 1,
+  "sources": "t20-local-2026-09-07",
+  "entries": [
+    {
+      "kind": "race",
+      "name": "Humano",
+      "sourceId": "core",
+      "page": 19,
+      "pdfPage": 25,
+      "id": "race:core:humano"
+    },
+    {
+      "kind": "race",
+      "name": "Anão",
+      "sourceId": "core",
+      "page": 20,
+      "pdfPage": 26,
+      "id": "race:core:anao"
+    },
+    {
+      "kind": "race",
+      "name": "Dahllan",
+      "sourceId": "core",
+      "page": 21,
+      "pdfPage": 27,
+      "id": "race:core:dahllan"
+    },
+    {
+      "kind": "race",
+      "name": "Elfo",
+      "sourceId": "core",
+      "page": 22,
+      "pdfPage": 28,
+      "id": "race:core:elfo"
+    },
+    {
+      "kind": "race",
+      "name": "Goblin",
+      "sourceId": "core",
+      "page": 23,
+      "pdfPage": 29,
+      "id": "race:core:goblin"
+    },
+    {
+      "kind": "race",
+      "name": "Lefou",
+      "sourceId": "core",
+      "page": 24,
+      "pdfPage": 30,
+      "id": "race:core:lefou"
+    },
+    {
+      "kind": "race",
+      "name": "Minotauro",
+      "sourceId": "core",
+      "page": 25,
+      "pdfPage": 31,
+      "id": "race:core:minotauro"
+    },
+    {
+      "kind": "race",
+      "name": "Qareen",
+      "sourceId": "core",
+      "page": 26,
+      "pdfPage": 32,
+      "id": "race:core:qareen"
+    },
+    {
+      "kind": "race",
+      "name": "Golem",
+      "sourceId": "core",
+      "page": 27,
+      "pdfPage": 33,
+      "id": "race:core:golem"
+    },
+    {
+      "kind": "race",
+      "name": "Hynne",
+      "sourceId": "core",
+      "page": 27,
+      "pdfPage": 33,
+      "id": "race:core:hynne"
+    },
+    {
+      "kind": "race",
+      "name": "Kliren",
+      "sourceId": "core",
+      "page": 28,
+      "pdfPage": 34,
+      "id": "race:core:kliren"
+    },
+    {
+      "kind": "race",
+      "name": "Medusa",
+      "sourceId": "core",
+      "page": 28,
+      "pdfPage": 34,
+      "id": "race:core:medusa"
+    },
+    {
+      "kind": "race",
+      "name": "Osteon",
+      "sourceId": "core",
+      "page": 29,
+      "pdfPage": 35,
+      "id": "race:core:osteon"
+    },
+    {
+      "kind": "race",
+      "name": "Sereia/Tritão",
+      "sourceId": "core",
+      "page": 29,
+      "pdfPage": 35,
+      "id": "race:core:sereiatritao"
+    },
+    {
+      "kind": "race",
+      "name": "Sílfide",
+      "sourceId": "core",
+      "page": 30,
+      "pdfPage": 36,
+      "id": "race:core:silfide"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel",
+      "sourceId": "core",
+      "page": 30,
+      "pdfPage": 36,
+      "id": "race:core:suraggel"
+    },
+    {
+      "kind": "race",
+      "name": "Trog",
+      "sourceId": "core",
+      "page": 31,
+      "pdfPage": 37,
+      "id": "race:core:trog"
+    },
+    {
+      "kind": "race",
+      "name": "Aggelus",
+      "sourceId": "core",
+      "page": 30,
+      "pdfPage": 36,
+      "id": "race:core:aggelus"
+    },
+    {
+      "kind": "race",
+      "name": "Sulfure",
+      "sourceId": "core",
+      "page": 30,
+      "pdfPage": 36,
+      "id": "race:core:sulfure"
+    },
+    {
+      "kind": "class",
+      "name": "Arcanista",
+      "sourceId": "core",
+      "page": 36,
+      "pdfPage": 42,
+      "id": "class:core:arcanista"
+    },
+    {
+      "kind": "class",
+      "name": "Bárbaro",
+      "sourceId": "core",
+      "page": 40,
+      "pdfPage": 46,
+      "id": "class:core:barbaro"
+    },
+    {
+      "kind": "class",
+      "name": "Bardo",
+      "sourceId": "core",
+      "page": 43,
+      "pdfPage": 49,
+      "id": "class:core:bardo"
+    },
+    {
+      "kind": "class",
+      "name": "Bucaneiro",
+      "sourceId": "core",
+      "page": 46,
+      "pdfPage": 52,
+      "id": "class:core:bucaneiro"
+    },
+    {
+      "kind": "class",
+      "name": "Caçador",
+      "sourceId": "core",
+      "page": 49,
+      "pdfPage": 55,
+      "id": "class:core:cacador"
+    },
+    {
+      "kind": "class",
+      "name": "Cavaleiro",
+      "sourceId": "core",
+      "page": 52,
+      "pdfPage": 58,
+      "id": "class:core:cavaleiro"
+    },
+    {
+      "kind": "class",
+      "name": "Clérigo",
+      "sourceId": "core",
+      "page": 56,
+      "pdfPage": 62,
+      "id": "class:core:clerigo"
+    },
+    {
+      "kind": "class",
+      "name": "Druida",
+      "sourceId": "core",
+      "page": 60,
+      "pdfPage": 66,
+      "id": "class:core:druida"
+    },
+    {
+      "kind": "class",
+      "name": "Guerreiro",
+      "sourceId": "core",
+      "page": 64,
+      "pdfPage": 70,
+      "id": "class:core:guerreiro"
+    },
+    {
+      "kind": "class",
+      "name": "Inventor",
+      "sourceId": "core",
+      "page": 67,
+      "pdfPage": 73,
+      "id": "class:core:inventor"
+    },
+    {
+      "kind": "class",
+      "name": "Ladino",
+      "sourceId": "core",
+      "page": 72,
+      "pdfPage": 78,
+      "id": "class:core:ladino"
+    },
+    {
+      "kind": "class",
+      "name": "Lutador",
+      "sourceId": "core",
+      "page": 75,
+      "pdfPage": 81,
+      "id": "class:core:lutador"
+    },
+    {
+      "kind": "class",
+      "name": "Nobre",
+      "sourceId": "core",
+      "page": 78,
+      "pdfPage": 84,
+      "id": "class:core:nobre"
+    },
+    {
+      "kind": "class",
+      "name": "Paladino",
+      "sourceId": "core",
+      "page": 81,
+      "pdfPage": 87,
+      "id": "class:core:paladino"
+    },
+    {
+      "kind": "origin",
+      "name": "Acólito",
+      "sourceId": "core",
+      "page": 85,
+      "pdfPage": 91,
+      "id": "origin:core:acolito"
+    },
+    {
+      "kind": "origin",
+      "name": "Amigo dos Animais",
+      "sourceId": "core",
+      "page": 85,
+      "pdfPage": 91,
+      "id": "origin:core:amigodosanimais"
+    },
+    {
+      "kind": "origin",
+      "name": "Amnésico",
+      "sourceId": "core",
+      "page": 86,
+      "pdfPage": 92,
+      "id": "origin:core:amnesico"
+    },
+    {
+      "kind": "origin",
+      "name": "Aristocrata",
+      "sourceId": "core",
+      "page": 86,
+      "pdfPage": 92,
+      "id": "origin:core:aristocrata"
+    },
+    {
+      "kind": "origin",
+      "name": "Artesão",
+      "sourceId": "core",
+      "page": 86,
+      "pdfPage": 92,
+      "id": "origin:core:artesao"
+    },
+    {
+      "kind": "origin",
+      "name": "Artista",
+      "sourceId": "core",
+      "page": 86,
+      "pdfPage": 92,
+      "id": "origin:core:artista"
+    },
+    {
+      "kind": "origin",
+      "name": "Assistente de Laboratório",
+      "sourceId": "core",
+      "page": 87,
+      "pdfPage": 93,
+      "id": "origin:core:assistentedelaboratorio"
+    },
+    {
+      "kind": "origin",
+      "name": "Batedor",
+      "sourceId": "core",
+      "page": 88,
+      "pdfPage": 94,
+      "id": "origin:core:batedor"
+    },
+    {
+      "kind": "origin",
+      "name": "Capanga",
+      "sourceId": "core",
+      "page": 88,
+      "pdfPage": 94,
+      "id": "origin:core:capanga"
+    },
+    {
+      "kind": "origin",
+      "name": "Charlatão",
+      "sourceId": "core",
+      "page": 88,
+      "pdfPage": 94,
+      "id": "origin:core:charlatao"
+    },
+    {
+      "kind": "origin",
+      "name": "Circense",
+      "sourceId": "core",
+      "page": 89,
+      "pdfPage": 95,
+      "id": "origin:core:circense"
+    },
+    {
+      "kind": "origin",
+      "name": "Criminoso",
+      "sourceId": "core",
+      "page": 89,
+      "pdfPage": 95,
+      "id": "origin:core:criminoso"
+    },
+    {
+      "kind": "origin",
+      "name": "Curandeiro",
+      "sourceId": "core",
+      "page": 89,
+      "pdfPage": 95,
+      "id": "origin:core:curandeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Eremita",
+      "sourceId": "core",
+      "page": 89,
+      "pdfPage": 95,
+      "id": "origin:core:eremita"
+    },
+    {
+      "kind": "origin",
+      "name": "Escravo",
+      "sourceId": "core",
+      "page": 89,
+      "pdfPage": 95,
+      "id": "origin:core:escravo"
+    },
+    {
+      "kind": "origin",
+      "name": "Estudioso",
+      "sourceId": "core",
+      "page": 90,
+      "pdfPage": 96,
+      "id": "origin:core:estudioso"
+    },
+    {
+      "kind": "origin",
+      "name": "Fazendeiro",
+      "sourceId": "core",
+      "page": 90,
+      "pdfPage": 96,
+      "id": "origin:core:fazendeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Forasteiro",
+      "sourceId": "core",
+      "page": 90,
+      "pdfPage": 96,
+      "id": "origin:core:forasteiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Gladiador",
+      "sourceId": "core",
+      "page": 90,
+      "pdfPage": 96,
+      "id": "origin:core:gladiador"
+    },
+    {
+      "kind": "origin",
+      "name": "Guarda",
+      "sourceId": "core",
+      "page": 91,
+      "pdfPage": 97,
+      "id": "origin:core:guarda"
+    },
+    {
+      "kind": "origin",
+      "name": "Herdeiro",
+      "sourceId": "core",
+      "page": 91,
+      "pdfPage": 97,
+      "id": "origin:core:herdeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Herói Camponês",
+      "sourceId": "core",
+      "page": 91,
+      "pdfPage": 97,
+      "id": "origin:core:heroicampones"
+    },
+    {
+      "kind": "origin",
+      "name": "Marujo",
+      "sourceId": "core",
+      "page": 92,
+      "pdfPage": 98,
+      "id": "origin:core:marujo"
+    },
+    {
+      "kind": "origin",
+      "name": "Mateiro",
+      "sourceId": "core",
+      "page": 92,
+      "pdfPage": 98,
+      "id": "origin:core:mateiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Membro de Guilda",
+      "sourceId": "core",
+      "page": 92,
+      "pdfPage": 98,
+      "id": "origin:core:membrodeguilda"
+    },
+    {
+      "kind": "origin",
+      "name": "Mercador",
+      "sourceId": "core",
+      "page": 93,
+      "pdfPage": 99,
+      "id": "origin:core:mercador"
+    },
+    {
+      "kind": "origin",
+      "name": "Minerador",
+      "sourceId": "core",
+      "page": 93,
+      "pdfPage": 99,
+      "id": "origin:core:minerador"
+    },
+    {
+      "kind": "origin",
+      "name": "Nômade",
+      "sourceId": "core",
+      "page": 93,
+      "pdfPage": 99,
+      "id": "origin:core:nomade"
+    },
+    {
+      "kind": "origin",
+      "name": "Pivete",
+      "sourceId": "core",
+      "page": 93,
+      "pdfPage": 99,
+      "id": "origin:core:pivete"
+    },
+    {
+      "kind": "origin",
+      "name": "Refugiado",
+      "sourceId": "core",
+      "page": 93,
+      "pdfPage": 99,
+      "id": "origin:core:refugiado"
+    },
+    {
+      "kind": "origin",
+      "name": "Seguidor",
+      "sourceId": "core",
+      "page": 94,
+      "pdfPage": 100,
+      "id": "origin:core:seguidor"
+    },
+    {
+      "kind": "origin",
+      "name": "Selvagem",
+      "sourceId": "core",
+      "page": 94,
+      "pdfPage": 100,
+      "id": "origin:core:selvagem"
+    },
+    {
+      "kind": "origin",
+      "name": "Soldado",
+      "sourceId": "core",
+      "page": 94,
+      "pdfPage": 100,
+      "id": "origin:core:soldado"
+    },
+    {
+      "kind": "origin",
+      "name": "Taverneiro",
+      "sourceId": "core",
+      "page": 94,
+      "pdfPage": 100,
+      "id": "origin:core:taverneiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Trabalhador",
+      "sourceId": "core",
+      "page": 95,
+      "pdfPage": 101,
+      "id": "origin:core:trabalhador"
+    },
+    {
+      "kind": "deity",
+      "name": "Aharadak",
+      "sourceId": "core",
+      "page": 96,
+      "pdfPage": 102,
+      "id": "deity:core:aharadak"
+    },
+    {
+      "kind": "deity",
+      "name": "Allihanna",
+      "sourceId": "core",
+      "page": 97,
+      "pdfPage": 103,
+      "id": "deity:core:allihanna"
+    },
+    {
+      "kind": "deity",
+      "name": "Arsenal",
+      "sourceId": "core",
+      "page": 98,
+      "pdfPage": 104,
+      "id": "deity:core:arsenal"
+    },
+    {
+      "kind": "deity",
+      "name": "Azgher",
+      "sourceId": "core",
+      "page": 98,
+      "pdfPage": 104,
+      "id": "deity:core:azgher"
+    },
+    {
+      "kind": "deity",
+      "name": "Hyninn",
+      "sourceId": "core",
+      "page": 98,
+      "pdfPage": 104,
+      "id": "deity:core:hyninn"
+    },
+    {
+      "kind": "deity",
+      "name": "Kallyadranoch",
+      "sourceId": "core",
+      "page": 99,
+      "pdfPage": 105,
+      "id": "deity:core:kallyadranoch"
+    },
+    {
+      "kind": "deity",
+      "name": "Khalmyr",
+      "sourceId": "core",
+      "page": 99,
+      "pdfPage": 105,
+      "id": "deity:core:khalmyr"
+    },
+    {
+      "kind": "deity",
+      "name": "Lena",
+      "sourceId": "core",
+      "page": 99,
+      "pdfPage": 105,
+      "id": "deity:core:lena"
+    },
+    {
+      "kind": "deity",
+      "name": "Lin-Wu",
+      "sourceId": "core",
+      "page": 100,
+      "pdfPage": 106,
+      "id": "deity:core:linwu"
+    },
+    {
+      "kind": "deity",
+      "name": "Marah",
+      "sourceId": "core",
+      "page": 101,
+      "pdfPage": 107,
+      "id": "deity:core:marah"
+    },
+    {
+      "kind": "deity",
+      "name": "Megalokk",
+      "sourceId": "core",
+      "page": 101,
+      "pdfPage": 107,
+      "id": "deity:core:megalokk"
+    },
+    {
+      "kind": "deity",
+      "name": "Nimb",
+      "sourceId": "core",
+      "page": 102,
+      "pdfPage": 108,
+      "id": "deity:core:nimb"
+    },
+    {
+      "kind": "deity",
+      "name": "Oceano",
+      "sourceId": "core",
+      "page": 102,
+      "pdfPage": 108,
+      "id": "deity:core:oceano"
+    },
+    {
+      "kind": "deity",
+      "name": "Sszzaas",
+      "sourceId": "core",
+      "page": 103,
+      "pdfPage": 109,
+      "id": "deity:core:sszzaas"
+    },
+    {
+      "kind": "deity",
+      "name": "Tanna-Toh",
+      "sourceId": "core",
+      "page": 103,
+      "pdfPage": 109,
+      "id": "deity:core:tannatoh"
+    },
+    {
+      "kind": "deity",
+      "name": "Tenebra",
+      "sourceId": "core",
+      "page": 104,
+      "pdfPage": 110,
+      "id": "deity:core:tenebra"
+    },
+    {
+      "kind": "deity",
+      "name": "Thwor",
+      "sourceId": "core",
+      "page": 104,
+      "pdfPage": 110,
+      "id": "deity:core:thwor"
+    },
+    {
+      "kind": "deity",
+      "name": "Thyatis",
+      "sourceId": "core",
+      "page": 104,
+      "pdfPage": 110,
+      "id": "deity:core:thyatis"
+    },
+    {
+      "kind": "deity",
+      "name": "Valkaria",
+      "sourceId": "core",
+      "page": 105,
+      "pdfPage": 111,
+      "id": "deity:core:valkaria"
+    },
+    {
+      "kind": "deity",
+      "name": "Wynna",
+      "sourceId": "core",
+      "page": 105,
+      "pdfPage": 111,
+      "id": "deity:core:wynna"
+    },
+    {
+      "kind": "race",
+      "name": "Duende",
+      "sourceId": "heroes",
+      "page": 8,
+      "pdfPage": 10,
+      "id": "race:heroes:duende"
+    },
+    {
+      "kind": "race",
+      "name": "Eiradaan",
+      "sourceId": "heroes",
+      "page": 12,
+      "pdfPage": 14,
+      "id": "race:heroes:eiradaan"
+    },
+    {
+      "kind": "race",
+      "name": "Galokk",
+      "sourceId": "heroes",
+      "page": 13,
+      "pdfPage": 15,
+      "id": "race:heroes:galokk"
+    },
+    {
+      "kind": "race",
+      "name": "Meio-Elfo",
+      "sourceId": "heroes",
+      "page": 14,
+      "pdfPage": 16,
+      "id": "race:heroes:meioelfo"
+    },
+    {
+      "kind": "race",
+      "name": "Sátiro",
+      "sourceId": "heroes",
+      "page": 15,
+      "pdfPage": 17,
+      "id": "race:heroes:satiro"
+    },
+    {
+      "kind": "class",
+      "name": "Treinador",
+      "sourceId": "heroes",
+      "page": 16,
+      "pdfPage": 18,
+      "id": "class:heroes:treinador"
+    },
+    {
+      "kind": "class",
+      "name": "Alquimista",
+      "sourceId": "heroes",
+      "page": 22,
+      "pdfPage": 24,
+      "id": "class:heroes:alquimista"
+    },
+    {
+      "kind": "class",
+      "name": "Atleta",
+      "sourceId": "heroes",
+      "page": 24,
+      "pdfPage": 26,
+      "id": "class:heroes:atleta"
+    },
+    {
+      "kind": "class",
+      "name": "Burguês",
+      "sourceId": "heroes",
+      "page": 25,
+      "pdfPage": 27,
+      "id": "class:heroes:burgues"
+    },
+    {
+      "kind": "class",
+      "name": "Duelista",
+      "sourceId": "heroes",
+      "page": 27,
+      "pdfPage": 29,
+      "id": "class:heroes:duelista"
+    },
+    {
+      "kind": "class",
+      "name": "Ermitão",
+      "sourceId": "heroes",
+      "page": 29,
+      "pdfPage": 31,
+      "id": "class:heroes:ermitao"
+    },
+    {
+      "kind": "class",
+      "name": "Inovador",
+      "sourceId": "heroes",
+      "page": 30,
+      "pdfPage": 32,
+      "id": "class:heroes:inovador"
+    },
+    {
+      "kind": "class",
+      "name": "Machado de Pedra",
+      "sourceId": "heroes",
+      "page": 32,
+      "pdfPage": 34,
+      "id": "class:heroes:machadodepedra"
+    },
+    {
+      "kind": "class",
+      "name": "Magimarcialista",
+      "sourceId": "heroes",
+      "page": 33,
+      "pdfPage": 35,
+      "id": "class:heroes:magimarcialista"
+    },
+    {
+      "kind": "class",
+      "name": "Necromante",
+      "sourceId": "heroes",
+      "page": 34,
+      "pdfPage": 36,
+      "id": "class:heroes:necromante"
+    },
+    {
+      "kind": "class",
+      "name": "Santo",
+      "sourceId": "heroes",
+      "page": 37,
+      "pdfPage": 39,
+      "id": "class:heroes:santo"
+    },
+    {
+      "kind": "class",
+      "name": "Seteiro",
+      "sourceId": "heroes",
+      "page": 38,
+      "pdfPage": 40,
+      "id": "class:heroes:seteiro"
+    },
+    {
+      "kind": "class",
+      "name": "Usurpador",
+      "sourceId": "heroes",
+      "page": 40,
+      "pdfPage": 42,
+      "id": "class:heroes:usurpador"
+    },
+    {
+      "kind": "class",
+      "name": "Vassalo",
+      "sourceId": "heroes",
+      "page": 41,
+      "pdfPage": 43,
+      "id": "class:heroes:vassalo"
+    },
+    {
+      "kind": "class",
+      "name": "Ventanista",
+      "sourceId": "heroes",
+      "page": 44,
+      "pdfPage": 46,
+      "id": "class:heroes:ventanista"
+    },
+    {
+      "kind": "class",
+      "name": "Frade",
+      "sourceId": "gods",
+      "page": 38,
+      "pdfPage": 40,
+      "id": "class:gods:frade"
+    },
+    {
+      "kind": "origin",
+      "name": "Bacharel",
+      "sourceId": "heroes",
+      "page": 46,
+      "pdfPage": 48,
+      "id": "origin:heroes:bacharel"
+    },
+    {
+      "kind": "origin",
+      "name": "Boticário",
+      "sourceId": "heroes",
+      "page": 47,
+      "pdfPage": 49,
+      "id": "origin:heroes:boticario"
+    },
+    {
+      "kind": "origin",
+      "name": "Caçador de Ratos",
+      "sourceId": "heroes",
+      "page": 47,
+      "pdfPage": 49,
+      "id": "origin:heroes:cacadorderatos"
+    },
+    {
+      "kind": "origin",
+      "name": "Cão de Briga",
+      "sourceId": "heroes",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "origin:heroes:caodebriga"
+    },
+    {
+      "kind": "origin",
+      "name": "Carcereiro",
+      "sourceId": "heroes",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "origin:heroes:carcereiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Carpinteiro de Guilda",
+      "sourceId": "heroes",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "origin:heroes:carpinteirodeguilda"
+    },
+    {
+      "kind": "origin",
+      "name": "Catador da Catástrofe",
+      "sourceId": "heroes",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "origin:heroes:catadordacatastrofe"
+    },
+    {
+      "kind": "origin",
+      "name": "Chef Hynne",
+      "sourceId": "heroes",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "origin:heroes:chefhynne"
+    },
+    {
+      "kind": "origin",
+      "name": "Cirurgião-Barbeiro",
+      "sourceId": "heroes",
+      "page": 49,
+      "pdfPage": 51,
+      "id": "origin:heroes:cirurgiaobarbeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Citadino Abastado",
+      "sourceId": "heroes",
+      "page": 49,
+      "pdfPage": 51,
+      "id": "origin:heroes:citadinoabastado"
+    },
+    {
+      "kind": "origin",
+      "name": "Cocheiro",
+      "sourceId": "heroes",
+      "page": 49,
+      "pdfPage": 51,
+      "id": "origin:heroes:cocheiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Construtor",
+      "sourceId": "heroes",
+      "page": 49,
+      "pdfPage": 51,
+      "id": "origin:heroes:construtor"
+    },
+    {
+      "kind": "origin",
+      "name": "Contrabandista",
+      "sourceId": "heroes",
+      "page": 50,
+      "pdfPage": 52,
+      "id": "origin:heroes:contrabandista"
+    },
+    {
+      "kind": "origin",
+      "name": "Coureiro",
+      "sourceId": "heroes",
+      "page": 50,
+      "pdfPage": 52,
+      "id": "origin:heroes:coureiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Escriba",
+      "sourceId": "heroes",
+      "page": 50,
+      "pdfPage": 52,
+      "id": "origin:heroes:escriba"
+    },
+    {
+      "kind": "origin",
+      "name": "Espião",
+      "sourceId": "heroes",
+      "page": 50,
+      "pdfPage": 52,
+      "id": "origin:heroes:espiao"
+    },
+    {
+      "kind": "origin",
+      "name": "Ferreiro Militar",
+      "sourceId": "heroes",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "origin:heroes:ferreiromilitar"
+    },
+    {
+      "kind": "origin",
+      "name": "Freira",
+      "sourceId": "heroes",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "origin:heroes:freira"
+    },
+    {
+      "kind": "origin",
+      "name": "Goradista",
+      "sourceId": "heroes",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "origin:heroes:goradista"
+    },
+    {
+      "kind": "origin",
+      "name": "Insciente",
+      "sourceId": "heroes",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "origin:heroes:insciente"
+    },
+    {
+      "kind": "origin",
+      "name": "Interrogador",
+      "sourceId": "heroes",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "origin:heroes:interrogador"
+    },
+    {
+      "kind": "origin",
+      "name": "Ladrão de Túmulos",
+      "sourceId": "heroes",
+      "page": 52,
+      "pdfPage": 54,
+      "id": "origin:heroes:ladraodetumulos"
+    },
+    {
+      "kind": "origin",
+      "name": "Menestrel",
+      "sourceId": "heroes",
+      "page": 52,
+      "pdfPage": 54,
+      "id": "origin:heroes:menestrel"
+    },
+    {
+      "kind": "origin",
+      "name": "Mensageiro",
+      "sourceId": "heroes",
+      "page": 52,
+      "pdfPage": 54,
+      "id": "origin:heroes:mensageiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Náufrago",
+      "sourceId": "heroes",
+      "page": 52,
+      "pdfPage": 54,
+      "id": "origin:heroes:naufrago"
+    },
+    {
+      "kind": "origin",
+      "name": "Padeiro",
+      "sourceId": "heroes",
+      "page": 52,
+      "pdfPage": 54,
+      "id": "origin:heroes:padeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Pedinte",
+      "sourceId": "heroes",
+      "page": 53,
+      "pdfPage": 55,
+      "id": "origin:heroes:pedinte"
+    },
+    {
+      "kind": "origin",
+      "name": "Pescador",
+      "sourceId": "heroes",
+      "page": 53,
+      "pdfPage": 55,
+      "id": "origin:heroes:pescador"
+    },
+    {
+      "kind": "origin",
+      "name": "Servo",
+      "sourceId": "heroes",
+      "page": 53,
+      "pdfPage": 55,
+      "id": "origin:heroes:servo"
+    },
+    {
+      "kind": "origin",
+      "name": "Suporte de Tropas",
+      "sourceId": "heroes",
+      "page": 53,
+      "pdfPage": 55,
+      "id": "origin:heroes:suportedetropas"
+    },
+    {
+      "kind": "origin",
+      "name": "Agricultor Sambur",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:agricultorsambur"
+    },
+    {
+      "kind": "origin",
+      "name": "Amazona de Hippion",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:amazonadehippion"
+    },
+    {
+      "kind": "origin",
+      "name": "Amoque Púrpura",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:amoquepurpura"
+    },
+    {
+      "kind": "origin",
+      "name": "Anão de Armas",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:anaodearmas"
+    },
+    {
+      "kind": "origin",
+      "name": "Andarilho Ubaneri",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:andarilhoubaneri"
+    },
+    {
+      "kind": "origin",
+      "name": "Aprendiz de Dragoeiro",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:aprendizdedragoeiro"
+    },
+    {
+      "kind": "origin",
+      "name": "Aprendiz de Drogadora",
+      "sourceId": "atlas",
+      "page": 470,
+      "pdfPage": 472,
+      "id": "origin:atlas:aprendizdedrogadora"
+    },
+    {
+      "kind": "origin",
+      "name": "Aristocrata Dai’zenshi",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:aristocratadaizenshi"
+    },
+    {
+      "kind": "origin",
+      "name": "Armeiro Armado",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:armeiroarmado"
+    },
+    {
+      "kind": "origin",
+      "name": "Aspirante a herói",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:aspiranteaheroi"
+    },
+    {
+      "kind": "origin",
+      "name": "Assistente Forense",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:assistenteforense"
+    },
+    {
+      "kind": "origin",
+      "name": "Bandoleiro da Fortaleza",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:bandoleirodafortaleza"
+    },
+    {
+      "kind": "origin",
+      "name": "Barão Arruinado",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:baraoarruinado"
+    },
+    {
+      "kind": "origin",
+      "name": "Catador da Cidade Velha",
+      "sourceId": "atlas",
+      "page": 471,
+      "pdfPage": 473,
+      "id": "origin:atlas:catadordacidadevelha"
+    },
+    {
+      "kind": "origin",
+      "name": "Cativo das Fadas",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:cativodasfadas"
+    },
+    {
+      "kind": "origin",
+      "name": "Competidor do Circuito",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:competidordocircuito"
+    },
+    {
+      "kind": "origin",
+      "name": "Cosmopolita",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:cosmopolita"
+    },
+    {
+      "kind": "origin",
+      "name": "Cria da Favela",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:criadafavela"
+    },
+    {
+      "kind": "origin",
+      "name": "Criado pelas Voracis",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:criadopelasvoracis"
+    },
+    {
+      "kind": "origin",
+      "name": "De Outro Mundo",
+      "sourceId": "atlas",
+      "page": 472,
+      "pdfPage": 474,
+      "id": "origin:atlas:deoutromundo"
+    },
+    {
+      "kind": "origin",
+      "name": "Descendente colleniano",
+      "sourceId": "atlas",
+      "page": 473,
+      "pdfPage": 475,
+      "id": "origin:atlas:descendentecolleniano"
+    },
+    {
+      "kind": "origin",
+      "name": "Desertor da Supremacia",
+      "sourceId": "atlas",
+      "page": 473,
+      "pdfPage": 475,
+      "id": "origin:atlas:desertordasupremacia"
+    },
+    {
+      "kind": "origin",
+      "name": "Duplo Feérico",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:duplofeerico"
+    },
+    {
+      "kind": "origin",
+      "name": "Duyshidakk Infiltrado",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:duyshidakkinfiltrado"
+    },
+    {
+      "kind": "origin",
+      "name": "Emissário Ubaneri",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:emissarioubaneri"
+    },
+    {
+      "kind": "origin",
+      "name": "Escudeiro da Luz",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:escudeirodaluz"
+    },
+    {
+      "kind": "origin",
+      "name": "Escudeiro Solitário",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:escudeirosolitario"
+    },
+    {
+      "kind": "origin",
+      "name": "Estandarte Vivo",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:estandartevivo"
+    },
+    {
+      "kind": "origin",
+      "name": "Estudante da Academia",
+      "sourceId": "atlas",
+      "page": 474,
+      "pdfPage": 476,
+      "id": "origin:atlas:estudantedaacademia"
+    },
+    {
+      "kind": "origin",
+      "name": "Estudante do Colégio Real",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:estudantedocolegioreal"
+    },
+    {
+      "kind": "origin",
+      "name": "Explorador de Ruínas",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:exploradorderuinas"
+    },
+    {
+      "kind": "origin",
+      "name": "Filhote da Revoada",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:filhotedarevoada"
+    },
+    {
+      "kind": "origin",
+      "name": "Futura Lenda",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:futuralenda"
+    },
+    {
+      "kind": "origin",
+      "name": "Ginete de Tumarkhân",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:ginetedetumarkhan"
+    },
+    {
+      "kind": "origin",
+      "name": "Grumete Pirata",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:grumetepirata"
+    },
+    {
+      "kind": "origin",
+      "name": "Guardião Glacial",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:guardiaoglacial"
+    },
+    {
+      "kind": "origin",
+      "name": "Iniciado dos Caça-Monstros",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:iniciadodoscacamonstros"
+    },
+    {
+      "kind": "origin",
+      "name": "Insurgente Tapistano",
+      "sourceId": "atlas",
+      "page": 475,
+      "pdfPage": 477,
+      "id": "origin:atlas:insurgentetapistano"
+    },
+    {
+      "kind": "origin",
+      "name": "Irmão sem Esporas",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:irmaosemesporas"
+    },
+    {
+      "kind": "origin",
+      "name": "Legionário",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:legionario"
+    },
+    {
+      "kind": "origin",
+      "name": "Lenhador de Tollon",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:lenhadordetollon"
+    },
+    {
+      "kind": "origin",
+      "name": "Liricista de Lenórienn",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:liricistadelenorienn"
+    },
+    {
+      "kind": "origin",
+      "name": "Membro do Principado",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:membrodoprincipado"
+    },
+    {
+      "kind": "origin",
+      "name": "Nitamuraniano",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:nitamuraniano"
+    },
+    {
+      "kind": "origin",
+      "name": "Nobre Zakharoviano",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:nobrezakharoviano"
+    },
+    {
+      "kind": "origin",
+      "name": "Nômade Sar-Allan",
+      "sourceId": "atlas",
+      "page": 476,
+      "pdfPage": 478,
+      "id": "origin:atlas:nomadesarallan"
+    },
+    {
+      "kind": "origin",
+      "name": "Pescador Parrudo",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:pescadorparrudo"
+    },
+    {
+      "kind": "origin",
+      "name": "Plebeu Arcano",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:plebeuarcano"
+    },
+    {
+      "kind": "origin",
+      "name": "Prisioneiro das Catacumbas",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:prisioneirodascatacumbas"
+    },
+    {
+      "kind": "origin",
+      "name": "Procurado: Vivo ou Morto",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:procuradovivooumorto"
+    },
+    {
+      "kind": "origin",
+      "name": "Profeta do Akzath",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:profetadoakzath"
+    },
+    {
+      "kind": "origin",
+      "name": "Querido Filho",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:queridofilho"
+    },
+    {
+      "kind": "origin",
+      "name": "Rebelde Agitador",
+      "sourceId": "atlas",
+      "page": 477,
+      "pdfPage": 479,
+      "id": "origin:atlas:rebeldeagitador"
+    },
+    {
+      "kind": "origin",
+      "name": "Receptador das Nuvens",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:receptadordasnuvens"
+    },
+    {
+      "kind": "origin",
+      "name": "Recruta Arcano",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:recrutaarcano"
+    },
+    {
+      "kind": "origin",
+      "name": "Recruta da Fênix",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:recrutadafenix"
+    },
+    {
+      "kind": "origin",
+      "name": "Sábio Matemático",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:sabiomatematico"
+    },
+    {
+      "kind": "origin",
+      "name": "Selvagem Sanguinário",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:selvagemsanguinario"
+    },
+    {
+      "kind": "origin",
+      "name": "Sucateiro de Batalhas",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:sucateirodebatalhas"
+    },
+    {
+      "kind": "origin",
+      "name": "Tamalu",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:tamalu"
+    },
+    {
+      "kind": "origin",
+      "name": "Tocado pela Dama Altiva",
+      "sourceId": "atlas",
+      "page": 478,
+      "pdfPage": 480,
+      "id": "origin:atlas:tocadopeladamaaltiva"
+    },
+    {
+      "kind": "origin",
+      "name": "Tocado pelo Indomável",
+      "sourceId": "atlas",
+      "page": 479,
+      "pdfPage": 481,
+      "id": "origin:atlas:tocadopeloindomavel"
+    },
+    {
+      "kind": "origin",
+      "name": "Tradicionalista Svalano",
+      "sourceId": "atlas",
+      "page": 479,
+      "pdfPage": 481,
+      "id": "origin:atlas:tradicionalistasvalano"
+    },
+    {
+      "kind": "origin",
+      "name": "Trapaceiro Ahleniense",
+      "sourceId": "atlas",
+      "page": 479,
+      "pdfPage": 481,
+      "id": "origin:atlas:trapaceiroahleniense"
+    },
+    {
+      "kind": "origin",
+      "name": "Turista da Academia",
+      "sourceId": "atlas",
+      "page": 479,
+      "pdfPage": 481,
+      "id": "origin:atlas:turistadaacademia"
+    },
+    {
+      "kind": "origin",
+      "name": "Um com os Kami",
+      "sourceId": "atlas",
+      "page": 479,
+      "pdfPage": 481,
+      "id": "origin:atlas:umcomoskami"
+    },
+    {
+      "kind": "race",
+      "name": "Bugbear",
+      "sourceId": "threats",
+      "page": 79,
+      "pdfPage": 81,
+      "id": "race:threats:bugbear"
+    },
+    {
+      "kind": "race",
+      "name": "Centauro",
+      "sourceId": "threats",
+      "page": 105,
+      "pdfPage": 107,
+      "id": "race:threats:centauro"
+    },
+    {
+      "kind": "race",
+      "name": "Ceratops",
+      "sourceId": "threats",
+      "page": 265,
+      "pdfPage": 267,
+      "id": "race:threats:ceratops"
+    },
+    {
+      "kind": "race",
+      "name": "Elfo-do-mar",
+      "sourceId": "threats",
+      "page": 316,
+      "pdfPage": 318,
+      "id": "race:threats:elfodomar"
+    },
+    {
+      "kind": "race",
+      "name": "Finntroll",
+      "sourceId": "threats",
+      "page": 339,
+      "pdfPage": 341,
+      "id": "race:threats:finntroll"
+    },
+    {
+      "kind": "race",
+      "name": "Gnoll",
+      "sourceId": "threats",
+      "page": 115,
+      "pdfPage": 117,
+      "id": "race:threats:gnoll"
+    },
+    {
+      "kind": "race",
+      "name": "Golem",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "id": "race:threats:golem"
+    },
+    {
+      "kind": "race",
+      "name": "Harpia",
+      "sourceId": "threats",
+      "page": 201,
+      "pdfPage": 203,
+      "id": "race:threats:harpia"
+    },
+    {
+      "kind": "race",
+      "name": "Hobgoblin",
+      "sourceId": "threats",
+      "page": 84,
+      "pdfPage": 86,
+      "id": "race:threats:hobgoblin"
+    },
+    {
+      "kind": "race",
+      "name": "Kallyanach",
+      "sourceId": "threats",
+      "page": 151,
+      "pdfPage": 153,
+      "id": "race:threats:kallyanach"
+    },
+    {
+      "kind": "race",
+      "name": "Kaijin",
+      "sourceId": "threats",
+      "page": 157,
+      "pdfPage": 159,
+      "id": "race:threats:kaijin"
+    },
+    {
+      "kind": "race",
+      "name": "Kappa",
+      "sourceId": "threats",
+      "page": 158,
+      "pdfPage": 160,
+      "id": "race:threats:kappa"
+    },
+    {
+      "kind": "race",
+      "name": "Kobolds",
+      "sourceId": "threats",
+      "page": 182,
+      "pdfPage": 184,
+      "id": "race:threats:kobolds"
+    },
+    {
+      "kind": "race",
+      "name": "Mashin",
+      "sourceId": "threats",
+      "page": 160,
+      "pdfPage": 162,
+      "id": "race:threats:mashin"
+    },
+    {
+      "kind": "race",
+      "name": "Meio-orc",
+      "sourceId": "threats",
+      "page": 31,
+      "pdfPage": 33,
+      "id": "race:threats:meioorc"
+    },
+    {
+      "kind": "race",
+      "name": "Minauro",
+      "sourceId": "threats",
+      "page": 175,
+      "pdfPage": 177,
+      "id": "race:threats:minauro"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau",
+      "sourceId": "threats",
+      "page": 303,
+      "pdfPage": 305,
+      "id": "race:threats:moreau"
+    },
+    {
+      "kind": "race",
+      "name": "Nagah",
+      "sourceId": "threats",
+      "page": 333,
+      "pdfPage": 335,
+      "id": "race:threats:nagah"
+    },
+    {
+      "kind": "race",
+      "name": "Nezumi",
+      "sourceId": "threats",
+      "page": 162,
+      "pdfPage": 164,
+      "id": "race:threats:nezumi"
+    },
+    {
+      "kind": "race",
+      "name": "Ogro",
+      "sourceId": "threats",
+      "page": 40,
+      "pdfPage": 42,
+      "id": "race:threats:ogro"
+    },
+    {
+      "kind": "race",
+      "name": "Orc",
+      "sourceId": "threats",
+      "page": 33,
+      "pdfPage": 35,
+      "id": "race:threats:orc"
+    },
+    {
+      "kind": "race",
+      "name": "Pteros",
+      "sourceId": "threats",
+      "page": 267,
+      "pdfPage": 269,
+      "id": "race:threats:pteros"
+    },
+    {
+      "kind": "race",
+      "name": "Soterrado",
+      "sourceId": "threats",
+      "page": 354,
+      "pdfPage": 356,
+      "id": "race:threats:soterrado"
+    },
+    {
+      "kind": "race",
+      "name": "Tabrachi",
+      "sourceId": "threats",
+      "page": 37,
+      "pdfPage": 39,
+      "id": "race:threats:tabrachi"
+    },
+    {
+      "kind": "race",
+      "name": "Tengu",
+      "sourceId": "threats",
+      "page": 164,
+      "pdfPage": 166,
+      "id": "race:threats:tengu"
+    },
+    {
+      "kind": "race",
+      "name": "Trog anão",
+      "sourceId": "threats",
+      "page": 39,
+      "pdfPage": 41,
+      "id": "race:threats:troganao"
+    },
+    {
+      "kind": "race",
+      "name": "Velocis",
+      "sourceId": "threats",
+      "page": 268,
+      "pdfPage": 270,
+      "id": "race:threats:velocis"
+    },
+    {
+      "kind": "race",
+      "name": "Voracis",
+      "sourceId": "threats",
+      "page": 270,
+      "pdfPage": 272,
+      "id": "race:threats:voracis"
+    },
+    {
+      "kind": "race",
+      "name": "Yidishan",
+      "sourceId": "threats",
+      "page": 300,
+      "pdfPage": 302,
+      "id": "race:threats:yidishan"
+    },
+    {
+      "kind": "deity",
+      "name": "A Espada-Deus",
+      "sourceId": "minor-gods",
+      "page": 5,
+      "pdfPage": 7,
+      "id": "deity:minor-gods:aespadadeus"
+    },
+    {
+      "kind": "deity",
+      "name": "Akok",
+      "sourceId": "minor-gods",
+      "page": 5,
+      "pdfPage": 7,
+      "id": "deity:minor-gods:akok"
+    },
+    {
+      "kind": "deity",
+      "name": "Altair",
+      "sourceId": "minor-gods",
+      "page": 6,
+      "pdfPage": 8,
+      "id": "deity:minor-gods:altair"
+    },
+    {
+      "kind": "deity",
+      "name": "Anilatir",
+      "sourceId": "minor-gods",
+      "page": 7,
+      "pdfPage": 9,
+      "id": "deity:minor-gods:anilatir"
+    },
+    {
+      "kind": "deity",
+      "name": "Apis",
+      "sourceId": "minor-gods",
+      "page": 8,
+      "pdfPage": 10,
+      "id": "deity:minor-gods:apis"
+    },
+    {
+      "kind": "deity",
+      "name": "Artaphan",
+      "sourceId": "minor-gods",
+      "page": 8,
+      "pdfPage": 10,
+      "id": "deity:minor-gods:artaphan"
+    },
+    {
+      "kind": "deity",
+      "name": "Ayllana",
+      "sourceId": "minor-gods",
+      "page": 9,
+      "pdfPage": 11,
+      "id": "deity:minor-gods:ayllana"
+    },
+    {
+      "kind": "deity",
+      "name": "Beluhga",
+      "sourceId": "minor-gods",
+      "page": 10,
+      "pdfPage": 12,
+      "id": "deity:minor-gods:beluhga"
+    },
+    {
+      "kind": "deity",
+      "name": "Benthos",
+      "sourceId": "minor-gods",
+      "page": 11,
+      "pdfPage": 13,
+      "id": "deity:minor-gods:benthos"
+    },
+    {
+      "kind": "deity",
+      "name": "Betsumial",
+      "sourceId": "minor-gods",
+      "page": 11,
+      "pdfPage": 13,
+      "id": "deity:minor-gods:betsumial"
+    },
+    {
+      "kind": "deity",
+      "name": "Blinar",
+      "sourceId": "minor-gods",
+      "page": 12,
+      "pdfPage": 14,
+      "id": "deity:minor-gods:blinar"
+    },
+    {
+      "kind": "deity",
+      "name": "Caerdellach",
+      "sourceId": "minor-gods",
+      "page": 13,
+      "pdfPage": 15,
+      "id": "deity:minor-gods:caerdellach"
+    },
+    {
+      "kind": "deity",
+      "name": "Canastra",
+      "sourceId": "minor-gods",
+      "page": 13,
+      "pdfPage": 15,
+      "id": "deity:minor-gods:canastra"
+    },
+    {
+      "kind": "deity",
+      "name": "Canora",
+      "sourceId": "minor-gods",
+      "page": 14,
+      "pdfPage": 16,
+      "id": "deity:minor-gods:canora"
+    },
+    {
+      "kind": "deity",
+      "name": "Cette",
+      "sourceId": "minor-gods",
+      "page": 14,
+      "pdfPage": 16,
+      "id": "deity:minor-gods:cette"
+    },
+    {
+      "kind": "deity",
+      "name": "Champarr",
+      "sourceId": "minor-gods",
+      "page": 15,
+      "pdfPage": 17,
+      "id": "deity:minor-gods:champarr"
+    },
+    {
+      "kind": "deity",
+      "name": "Dahriol",
+      "sourceId": "minor-gods",
+      "page": 16,
+      "pdfPage": 18,
+      "id": "deity:minor-gods:dahriol"
+    },
+    {
+      "kind": "deity",
+      "name": "Drumak",
+      "sourceId": "minor-gods",
+      "page": 16,
+      "pdfPage": 18,
+      "id": "deity:minor-gods:drumak"
+    },
+    {
+      "kind": "deity",
+      "name": "Dunsark",
+      "sourceId": "minor-gods",
+      "page": 17,
+      "pdfPage": 19,
+      "id": "deity:minor-gods:dunsark"
+    },
+    {
+      "kind": "deity",
+      "name": "Elrophin",
+      "sourceId": "minor-gods",
+      "page": 18,
+      "pdfPage": 20,
+      "id": "deity:minor-gods:elrophin"
+    },
+    {
+      "kind": "deity",
+      "name": "Escamandra",
+      "sourceId": "minor-gods",
+      "page": 19,
+      "pdfPage": 21,
+      "id": "deity:minor-gods:escamandra"
+    },
+    {
+      "kind": "deity",
+      "name": "Esmeralda",
+      "sourceId": "minor-gods",
+      "page": 19,
+      "pdfPage": 21,
+      "id": "deity:minor-gods:esmeralda"
+    },
+    {
+      "kind": "deity",
+      "name": "Garanaam",
+      "sourceId": "minor-gods",
+      "page": 20,
+      "pdfPage": 22,
+      "id": "deity:minor-gods:garanaam"
+    },
+    {
+      "kind": "deity",
+      "name": "Garth",
+      "sourceId": "minor-gods",
+      "page": 20,
+      "pdfPage": 22,
+      "id": "deity:minor-gods:garth"
+    },
+    {
+      "kind": "deity",
+      "name": "Goharom",
+      "sourceId": "minor-gods",
+      "page": 21,
+      "pdfPage": 23,
+      "id": "deity:minor-gods:goharom"
+    },
+    {
+      "kind": "deity",
+      "name": "Granto",
+      "sourceId": "minor-gods",
+      "page": 22,
+      "pdfPage": 24,
+      "id": "deity:minor-gods:granto"
+    },
+    {
+      "kind": "deity",
+      "name": "Gratissa",
+      "sourceId": "minor-gods",
+      "page": 23,
+      "pdfPage": 25,
+      "id": "deity:minor-gods:gratissa"
+    },
+    {
+      "kind": "deity",
+      "name": "Hippion",
+      "sourceId": "minor-gods",
+      "page": 24,
+      "pdfPage": 26,
+      "id": "deity:minor-gods:hippion"
+    },
+    {
+      "kind": "deity",
+      "name": "Hurlaagh",
+      "sourceId": "minor-gods",
+      "page": 25,
+      "pdfPage": 27,
+      "id": "deity:minor-gods:hurlaagh"
+    },
+    {
+      "kind": "deity",
+      "name": "Hydora",
+      "sourceId": "minor-gods",
+      "page": 26,
+      "pdfPage": 28,
+      "id": "deity:minor-gods:hydora"
+    },
+    {
+      "kind": "deity",
+      "name": "Inghlblhpholstgt",
+      "sourceId": "minor-gods",
+      "page": 27,
+      "pdfPage": 29,
+      "id": "deity:minor-gods:inghlblhpholstgt"
+    },
+    {
+      "kind": "deity",
+      "name": "Irione",
+      "sourceId": "minor-gods",
+      "page": 28,
+      "pdfPage": 30,
+      "id": "deity:minor-gods:irione"
+    },
+    {
+      "kind": "deity",
+      "name": "Jandra",
+      "sourceId": "minor-gods",
+      "page": 29,
+      "pdfPage": 31,
+      "id": "deity:minor-gods:jandra"
+    },
+    {
+      "kind": "deity",
+      "name": "Klangor",
+      "sourceId": "minor-gods",
+      "page": 29,
+      "pdfPage": 31,
+      "id": "deity:minor-gods:klangor"
+    },
+    {
+      "kind": "deity",
+      "name": "Kurur Lianth",
+      "sourceId": "minor-gods",
+      "page": 30,
+      "pdfPage": 32,
+      "id": "deity:minor-gods:kururlianth"
+    },
+    {
+      "kind": "deity",
+      "name": "Laan",
+      "sourceId": "minor-gods",
+      "page": 31,
+      "pdfPage": 33,
+      "id": "deity:minor-gods:laan"
+    },
+    {
+      "kind": "deity",
+      "name": "Lamashtu",
+      "sourceId": "minor-gods",
+      "page": 32,
+      "pdfPage": 34,
+      "id": "deity:minor-gods:lamashtu"
+    },
+    {
+      "kind": "deity",
+      "name": "Lupan",
+      "sourceId": "minor-gods",
+      "page": 33,
+      "pdfPage": 35,
+      "id": "deity:minor-gods:lupan"
+    },
+    {
+      "kind": "deity",
+      "name": "Luvithy",
+      "sourceId": "minor-gods",
+      "page": 33,
+      "pdfPage": 35,
+      "id": "deity:minor-gods:luvithy"
+    },
+    {
+      "kind": "deity",
+      "name": "Marina",
+      "sourceId": "minor-gods",
+      "page": 34,
+      "pdfPage": 36,
+      "id": "deity:minor-gods:marina"
+    },
+    {
+      "kind": "deity",
+      "name": "Mzzileyn",
+      "sourceId": "minor-gods",
+      "page": 34,
+      "pdfPage": 36,
+      "id": "deity:minor-gods:mzzileyn"
+    },
+    {
+      "kind": "deity",
+      "name": "Nerelim",
+      "sourceId": "minor-gods",
+      "page": 35,
+      "pdfPage": 37,
+      "id": "deity:minor-gods:nerelim"
+    },
+    {
+      "kind": "deity",
+      "name": "Neruíte",
+      "sourceId": "minor-gods",
+      "page": 36,
+      "pdfPage": 38,
+      "id": "deity:minor-gods:neruite"
+    },
+    {
+      "kind": "deity",
+      "name": "O Deus Cristal de Urielka",
+      "sourceId": "minor-gods",
+      "page": 37,
+      "pdfPage": 39,
+      "id": "deity:minor-gods:odeuscristaldeurielka"
+    },
+    {
+      "kind": "deity",
+      "name": "O Deus das Cidades",
+      "sourceId": "minor-gods",
+      "page": 37,
+      "pdfPage": 39,
+      "id": "deity:minor-gods:odeusdascidades"
+    },
+    {
+      "kind": "deity",
+      "name": "O Deus do Medo",
+      "sourceId": "minor-gods",
+      "page": 38,
+      "pdfPage": 40,
+      "id": "deity:minor-gods:odeusdomedo"
+    },
+    {
+      "kind": "deity",
+      "name": "Piscigeros",
+      "sourceId": "minor-gods",
+      "page": 39,
+      "pdfPage": 41,
+      "id": "deity:minor-gods:piscigeros"
+    },
+    {
+      "kind": "deity",
+      "name": "Rhond",
+      "sourceId": "minor-gods",
+      "page": 39,
+      "pdfPage": 41,
+      "id": "deity:minor-gods:rhond"
+    },
+    {
+      "kind": "deity",
+      "name": "Sartan",
+      "sourceId": "minor-gods",
+      "page": 41,
+      "pdfPage": 43,
+      "id": "deity:minor-gods:sartan"
+    },
+    {
+      "kind": "deity",
+      "name": "Sckhar",
+      "sourceId": "minor-gods",
+      "page": 42,
+      "pdfPage": 44,
+      "id": "deity:minor-gods:sckhar"
+    },
+    {
+      "kind": "deity",
+      "name": "Sunnary",
+      "sourceId": "minor-gods",
+      "page": 43,
+      "pdfPage": 45,
+      "id": "deity:minor-gods:sunnary"
+    },
+    {
+      "kind": "deity",
+      "name": "Tamagrah",
+      "sourceId": "minor-gods",
+      "page": 44,
+      "pdfPage": 46,
+      "id": "deity:minor-gods:tamagrah"
+    },
+    {
+      "kind": "deity",
+      "name": "Teldiskan",
+      "sourceId": "minor-gods",
+      "page": 44,
+      "pdfPage": 46,
+      "id": "deity:minor-gods:teldiskan"
+    },
+    {
+      "kind": "deity",
+      "name": "Tessalus",
+      "sourceId": "minor-gods",
+      "page": 46,
+      "pdfPage": 48,
+      "id": "deity:minor-gods:tessalus"
+    },
+    {
+      "kind": "deity",
+      "name": "Toris",
+      "sourceId": "minor-gods",
+      "page": 46,
+      "pdfPage": 48,
+      "id": "deity:minor-gods:toris"
+    },
+    {
+      "kind": "deity",
+      "name": "Tukala",
+      "sourceId": "minor-gods",
+      "page": 47,
+      "pdfPage": 49,
+      "id": "deity:minor-gods:tukala"
+    },
+    {
+      "kind": "deity",
+      "name": "Ur",
+      "sourceId": "minor-gods",
+      "page": 48,
+      "pdfPage": 50,
+      "id": "deity:minor-gods:ur"
+    },
+    {
+      "kind": "deity",
+      "name": "Yasshara",
+      "sourceId": "minor-gods",
+      "page": 49,
+      "pdfPage": 51,
+      "id": "deity:minor-gods:yasshara"
+    },
+    {
+      "kind": "deity",
+      "name": "Zadbblein",
+      "sourceId": "minor-gods",
+      "page": 50,
+      "pdfPage": 52,
+      "id": "deity:minor-gods:zadbblein"
+    },
+    {
+      "kind": "deity",
+      "name": "Zakharov",
+      "sourceId": "minor-gods",
+      "page": 51,
+      "pdfPage": 53,
+      "id": "deity:minor-gods:zakharov"
+    },
+    {
+      "kind": "deity",
+      "name": "Gwendolynn",
+      "sourceId": "gods",
+      "page": 231,
+      "pdfPage": 233,
+      "id": "deity:gods:gwendolynn"
+    },
+    {
+      "kind": "deity",
+      "name": "Mauziell",
+      "sourceId": "gods",
+      "page": 231,
+      "pdfPage": 233,
+      "id": "deity:gods:mauziell"
+    },
+    {
+      "kind": "deity",
+      "name": "Tibar",
+      "sourceId": "gods",
+      "page": 233,
+      "pdfPage": 235,
+      "id": "deity:gods:tibar"
+    },
+    {
+      "kind": "deity",
+      "name": "Glórienn",
+      "sourceId": "gods",
+      "page": 238,
+      "pdfPage": 240,
+      "id": "deity:gods:glorienn"
+    },
+    {
+      "kind": "deity",
+      "name": "Keenn",
+      "sourceId": "gods",
+      "page": 240,
+      "pdfPage": 242,
+      "id": "deity:gods:keenn"
+    },
+    {
+      "kind": "deity",
+      "name": "Ragnar",
+      "sourceId": "gods",
+      "page": 241,
+      "pdfPage": 243,
+      "id": "deity:gods:ragnar"
+    },
+    {
+      "kind": "deity",
+      "name": "Tauron",
+      "sourceId": "gods",
+      "page": 242,
+      "pdfPage": 244,
+      "id": "deity:gods:tauron"
+    },
+    {
+      "kind": "deity",
+      "name": "Tilliann",
+      "sourceId": "gods",
+      "page": 243,
+      "pdfPage": 245,
+      "id": "deity:gods:tilliann"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Al-Gazara",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelalgazara"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Arbória",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelarboria"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Chacina",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelchacina"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Deathok",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggeldeathok"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Drashantyr",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggeldrashantyr"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Kundali",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelkundali"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Magika",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelmagika"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Nivenciuén",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelnivenciuen"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Odisseia",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelodisseia"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Ordine",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelordine"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Pelágia",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelpelagia"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Pyra",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelpyra"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Ramknal",
+      "sourceId": "gods",
+      "page": 36,
+      "pdfPage": 38,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelramknal"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Serena",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelserena"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Skerry",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelskerry"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Solaris",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelsolaris"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Sombria",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelsombria"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Sora",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelsora"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Terápolis",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelterapolis"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Venomia",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelvenomia"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Vitalia",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelvitalia"
+    },
+    {
+      "kind": "race",
+      "name": "Suraggel — Werra",
+      "sourceId": "gods",
+      "page": 37,
+      "pdfPage": 39,
+      "note": "Herança planar opcional",
+      "id": "race:gods:suraggelwerra"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Coruja",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreaucoruja"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Hiena",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreauhiena"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Raposa",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreauraposa"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Serpente",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreauserpente"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Búfalo",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreaubufalo"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Coelho",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreaucoelho"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Crocodilo",
+      "sourceId": "threats",
+      "page": 304,
+      "pdfPage": 306,
+      "id": "race:threats:moreaucrocodilo"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Gato",
+      "sourceId": "threats",
+      "page": 305,
+      "pdfPage": 307,
+      "id": "race:threats:moreaugato"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Leão",
+      "sourceId": "threats",
+      "page": 305,
+      "pdfPage": 307,
+      "id": "race:threats:moreauleao"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Lobo",
+      "sourceId": "threats",
+      "page": 305,
+      "pdfPage": 307,
+      "id": "race:threats:moreaulobo"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Morcego",
+      "sourceId": "threats",
+      "page": 305,
+      "pdfPage": 307,
+      "id": "race:threats:moreaumorcego"
+    },
+    {
+      "kind": "race",
+      "name": "Moreau — Urso",
+      "sourceId": "threats",
+      "page": 305,
+      "pdfPage": 307,
+      "id": "race:threats:moreauurso"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Barro",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golembarro"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Bronze",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golembronze"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Carne",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golemcarne"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Espelhos",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golemespelhos"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Ferro",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golemferro"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Gelo Eterno",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golemgeloeterno"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Pedra",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golempedra"
+    },
+    {
+      "kind": "race",
+      "name": "Golem — Sucata",
+      "sourceId": "threats",
+      "page": 134,
+      "pdfPage": 136,
+      "note": "Chassi opcional; energia e tamanho são escolhas separadas",
+      "id": "race:threats:golemsucata"
+    }
+  ]
+}

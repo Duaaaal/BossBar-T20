@@ -249,6 +249,7 @@ test('cria Punhos canônicos pela ficha e ajusta o dado conforme o tamanho', () 
   assert.deepEqual(createUnarmedAttack(summary), {
     source: { kind: 'unarmed' },
     name: 'Punhos',
+    damageOrigin: 'mundane',
     attackBonus: 8,
     damageFormula: '1d3 + 3',
     criticalThreat: 20,
@@ -344,7 +345,7 @@ test('considera igualdade com a CD como sucesso no teste de Reflexos', () => {
     success: true,
     natural: null,
   });
-  assert.equal(impact.damage.applied, 6);
+  assert.equal(impact.damage.applied, 5);
 });
 
 test('20 natural sempre passa e 1 natural sempre falha', () => {
@@ -370,13 +371,13 @@ test('20 natural sempre passa e 1 natural sempre falha', () => {
   assert.equal(trivialDc.damage.applied, 11);
 });
 
-test('arredonda para cima a metade de dano em um sucesso', () => {
+test('arredonda para baixo a metade do dano conforme Livro Básico p. 226', () => {
   const impact = resolveAreaDamage(playerState(), areaDamage({ damage: 15 }), 10, 3);
 
   assert.equal(impact.check.success, true);
   assert.equal(impact.damage.requested, 15);
-  assert.equal(impact.damage.applied, 8);
-  assert.equal(impact.damage.healthAfter, 32);
+  assert.equal(impact.damage.applied, 7);
+  assert.equal(impact.damage.healthAfter, 33);
 });
 
 test('aplica zero de dano quando a regra do sucesso Ã© evitar o dano', () => {

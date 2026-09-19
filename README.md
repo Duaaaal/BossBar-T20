@@ -5,7 +5,7 @@
 
   **Uma apresentação audiovisual de encontros de RPG, controlada pelo mestre e transmitida aos jogadores.**
 
-  ![Versão](https://img.shields.io/badge/versão-2.0.0--beta.2-8d1f2d)
+  ![Versão](https://img.shields.io/badge/versão-2.0.0--beta.4-8d1f2d)
   ![Plataforma](https://img.shields.io/badge/plataforma-Windows-326ca8)
   ![Electron](https://img.shields.io/badge/Electron-43-47848f)
   ![Uso](https://img.shields.io/badge/uso-local%20ou%20web-c99545)
@@ -21,7 +21,7 @@
 
 O **BossBar - Tormenta20** é um aplicativo desktop para mestres de RPG apresentarem encontros e lutas contra chefões de forma cinematográfica. O mestre pode transmitir a janela de apresentação pelo Discord, como sempre, ou hospedar uma sessão web temporária para os jogadores acompanharem pelo navegador.
 
-Os jogadores não precisam instalar o aplicativo nem criar uma conta. No modo local, somente a janela de apresentação é compartilhada. No modo hospedado, o computador do mestre atua como servidor da sessão e publica apenas a apresentação e os dados necessários aos jogadores; os controles permanecem privados.
+Os jogadores não precisam instalar o aplicativo nem criar uma conta externa ou central do BossBar. No modo local, somente a janela de apresentação é compartilhada. No modo hospedado, os jogadores entram com usuário e senha em contas armazenadas no computador do mestre, que atua como servidor da sessão e publica apenas a apresentação e os dados necessários aos jogadores; os controles permanecem privados.
 
 ## Principais recursos
 
@@ -39,7 +39,8 @@ Os jogadores não precisam instalar o aplicativo nem criar uma conta. No modo lo
 - Hospedagem temporária iniciada e encerrada pelo próprio mestre, sem servidor permanente do BossBar.
 - Acesso dos jogadores pelo navegador, sem instalar o aplicativo.
 - Até dez jogadores simultâneos, com contagem de conexões, ping e indicação de qualidade.
-- Confirmação do nome antes da entrada e troca de nome permitida enquanto a batalha não começou.
+- Acesso por usuário e senha, com contas e fichas armazenadas no computador do mestre.
+- Importação de PDFs editáveis do Fichas de Nimb, novo modelo vazio e editor com atributos do Jogo do Ano; migração das fichas antigas com cópia de segurança e revisão das discrepâncias. Veja [fichas Nimb](docs/NIMB-SHEETS.md).
 - Pré-carregamento autenticado das mídias da sessão antes de revelar a apresentação no navegador.
 - Eventos permanecem em uma fila ordenada até suas mídias serem transferidas e reconhecidas pelo navegador.
 - Novas entradas durante uma batalha dependem da aprovação explícita do mestre.
@@ -259,7 +260,7 @@ Criado por **Brian Nascimento**.
 
 **BossBar - Tormenta20** is a desktop application that helps game masters present cinematic RPG encounters and boss battles. The game master can stream the presentation window through Discord, as before, or host a temporary web session that players can watch in their browsers.
 
-Players do not need to install the application or create an account. In local mode, only the presentation window is shared. In hosted mode, the game master's computer acts as the session server and publishes only the presentation and player-facing data; all controls remain private.
+Players do not need to install the application or create an external or central BossBar account. In local mode, only the presentation window is shared. In hosted mode, players sign in with a username and password to accounts stored on the game master's computer, which acts as the session server and publishes only the presentation and player-facing data; all controls remain private.
 
 ## Main features
 
@@ -277,7 +278,7 @@ Players do not need to install the application or create an account. In local mo
 - Temporary self-hosting started and stopped by the game master, with no permanent BossBar server.
 - Browser access for players without installing the application.
 - Up to ten simultaneous players with connection count, ping, and connection-quality indicators.
-- Name confirmation before joining, with name changes allowed until the battle starts.
+- Players sign in with a username and password; accounts and character sheets are stored on the game master's computer.
 - Authenticated session-media preloading before the browser reveals the presentation.
 - Events stay in an ordered queue until their media has been transferred and recognized by the browser.
 - New players joining an ongoing battle require explicit game-master approval.
@@ -463,6 +464,10 @@ BossBar-T20/
 ├── forge.config.ts          # Electron Forge packaging configuration
 └── package.json             # Metadata, scripts, and dependencies
 ```
+
+## Release validation
+
+Before every release, follow [the release checklist](docs/RELEASE-CHECKLIST.md): review the full change set, verify calculations and compatibility, and run multiplayer scenarios with 1, 3, 5, and 10 individual character sheets. Record failures, fixes, remaining limitations, and a release recommendation. Routine changes continue to use [impact-based testing](docs/TESTING-STRATEGY.md).
 
 ## Privacy and security
 

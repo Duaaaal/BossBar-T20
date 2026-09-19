@@ -75,7 +75,8 @@ test('auditoria visual das janelas e modais do mestre, biblioteca, fases e cutsc
     await expect(wideLibrary.getByRole('button', { name: 'Salvar ataque', exact: true })).toBeInViewport();
     await capture(editor, 'attack-library-wide');
     await wideLibrary.getByRole('button', { name: 'Cancelar edição', exact: true }).click();
-    await editor.getByRole('dialog', { name: 'Biblioteca de ataques' }).getByRole('button', { name: 'Selecionar', exact: true }).click();
+    await wideLibrary.getByRole('checkbox', { name: /^Selecionar / }).check();
+    await wideLibrary.getByRole('button', { name: 'Aplicar selecionados', exact: true }).click();
     await inViewport(editor, '.phase-arsenal');
     await expect(editor.locator('.phase-arsenal input[type="radio"]').first()).toHaveCSS('height', '16px');
     await capture(editor, 'scene-arsenal');

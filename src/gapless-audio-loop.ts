@@ -1,4 +1,4 @@
-/** Native media remains the transport/seek clock; a decoded loop removes decoder
+/** Native media remains the transport; a decoded loop owns its playback clock.
  * restart gaps. Long files retain streaming playback to bound resident memory. */
 const MAX_ENCODED = 20 * 1024 * 1024;
 const MAX_DECODED = 96 * 1024 * 1024;
@@ -6,6 +6,11 @@ let residentBytes = 0;
 const clocks = new WeakMap<HTMLMediaElement, () => number>();
 const seekers = new WeakMap<HTMLMediaElement, (time: number) => void>();
 export const mediaPlaybackTime = (audio: HTMLMediaElement) => clocks.get(audio)?.() ?? audio.currentTime;
+export const normalizedMediaPosition = (time: number, duration: number, loop: boolean) => {
+  const position = Number.isFinite(time) ? Math.max(0, time) : 0;
+  return Number.isFinite(duration) && duration > 0
+    ? loop ? position % duration : Math.min(position, Math.max(0, duration - 0.01)) : position;
+};
 export const seekMediaPlayback = (audio: HTMLMediaElement, time: number) => {
   const seek = seekers.get(audio);
   if (seek) seek(time); else audio.currentTime = time;
@@ -53,14 +58,12 @@ export const installGaplessLoop = (
   };
   clocks.set(audio, () => source && buffer
     ? (startOffset + context.currentTime - startTime) % buffer.duration : audio.currentTime);
-  seekers.set(audio, (time) => { stop(); audio.currentTime = time; sync(); });
+  seekers.set(audio, (time) => { stop(); audio.currentTime = normalizedMediaPosition(time, buffer?.duration ?? audio.duration, audio.loop); sync(); });
   const seeked = () => {
-    if (source && buffer) {
-      const delta = Math.abs(audio.currentTime - mediaPlaybackTime(audio));
-      // Native loop wrapping can emit seeked too; it is not a user seek.
-      if (audio.currentTime > 0.25 && audio.currentTime < buffer.duration - 0.25 &&
-        Math.min(delta, Math.abs(buffer.duration - delta)) > 0.5) stop();
-    }
+    // A native decoder may seek while wrapping or recovering buffered media.
+    // Its clock cannot correct an active decoded loop: repeated seeked events
+    // would restart the same audible fragment. Intentional seeks use seekers.
+    if (source) return;
     sync();
   };
   const load = async () => {

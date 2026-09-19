@@ -17,8 +17,8 @@ const uploadSheet = async (
     mimeType: 'application/pdf',
     buffer: await createEditableCharacterSheet({ characterName, playerName }),
   });
-  await expect(page.locator('#web-player-sheet-status')).toContainText(
-    `ficha-${characterName.toLocaleLowerCase('pt-BR')}.pdf`,
+  await expect(page.locator('#web-player-character-slots [role=tab][aria-selected=true]')).toContainText(
+    characterName,
   );
   await page.locator('#web-player-sheet-close').click();
 };
@@ -46,7 +46,8 @@ const expectInsideViewport = async (
 
 const rollPlayerInitiative = async (page: Page) => {
   const shortcuts = page.locator('.self-combat-shortcuts');
-  await expect(shortcuts.getByRole('button')).toHaveCount(2);
+  await expect(shortcuts.getByRole('button')).toHaveCount(4);
+  await expect(shortcuts.getByRole('button', { name: 'Realizar cura' })).toBeVisible();
   await expect(
     shortcuts.getByRole('button', { name: 'Teste de perícia' }),
   ).toBeVisible();

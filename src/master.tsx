@@ -1,3 +1,4 @@
+import { ATTRIBUTE_PLAN_FIELD, attributePlanDescription } from './shared/character-attributes';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -15,6 +16,7 @@ import {
 import { bundledAssetUrl } from './shared/bundled-assets';
 import { installDisabledControlTooltips } from './shared/disabled-controls';
 import { installUndoShortcut } from './shared/undo-shortcut';
+import { openRulesCatalog } from './rules-catalog-dialog';
 import type { BossLibraryDraft, BossLibrarySaveMode } from './shared/library';
 import type {
   PlayerProfileSummary,
@@ -57,6 +59,7 @@ const createLibraryDraft = (state: BattleState): BossLibraryDraft => ({
     skills: boss.skills,
     skillValues: boss.skillValues,
     damageReduction: boss.damageReduction,
+    damageReductions: boss.damageReductions,
     description: boss.nextAction,
     actionSeverity: boss.actionSeverity,
     turnCount: boss.turnCount,
@@ -144,6 +147,10 @@ const MasterApp = () => {
   const [resetKind, setResetKind] = useState<'encounter' | 'all' | null>(null);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const [returnConfirmationOpen, setReturnConfirmationOpen] = useState(false);
+  const [healingTarget, setHealingTarget] = useState<PlayerHudState | null>(null);
+  const [healingFormula, setHealingFormula] = useState('');
+  const [healingFeedback, setHealingFeedback] = useState('');
+  const [healingBusy, setHealingBusy] = useState(false);
   const [overwriteConfirmationOpen, setOverwriteConfirmationOpen] = useState(false);
   const [unpreparedConfirmationOpen, setUnpreparedConfirmationOpen] = useState(false);
   const [libraryMessage, setLibraryMessage] = useState('');
@@ -1486,6 +1493,7 @@ const MasterApp = () => {
                         Punhos
                       </button>
                     </div>
+                    <button className="hosted-heal-player" type="button" disabled={player.dead} onClick={() => { setHealingTarget(player); setHealingFormula(''); setHealingFeedback(''); }}>Curar {player.characterName}</button>
                     {pendingRequests.length > 0 && (
                       <ol className="hosted-character-requests">
                         {pendingRequests.map((request) => (
@@ -1524,6 +1532,7 @@ const MasterApp = () => {
         <div className="compact-panel-title"><h2>Personalização de Cena</h2></div>
         <div className="scene-customization-actions">
           <button className="attack-library-button" type="button" onClick={() => void window.bossAPI.openAttackLibrary()}>Biblioteca de ataques</button>
+          <button className="attack-library-button" type="button" onClick={() => openRulesCatalog({ master: true })}>Poderes e magias</button>
           <button
             className="sound-customization-button"
             type="button"
@@ -1853,10 +1862,10 @@ const MasterApp = () => {
             <ol className="sheet-change-list">
               {sheetChangeCandidate.changes.map((change) => (
                 <li key={change.field}>
-                  <strong title={change.field}>{change.field}</strong>
-                  <span title={change.before || 'vazio'}>{change.before || 'vazio'}</span>
+                  <strong title={change.field}>{change.field === ATTRIBUTE_PLAN_FIELD ? 'Distribuição de atributos' : change.field}</strong>
+                  <span style={change.field === ATTRIBUTE_PLAN_FIELD ? { whiteSpace: 'pre-line' } : undefined} title={change.before || 'vazio'}>{change.field === ATTRIBUTE_PLAN_FIELD ? attributePlanDescription(change.before) : change.before || 'vazio'}</span>
                   <i aria-hidden="true">→</i>
-                  <span title={change.after || 'vazio'}>{change.after || 'vazio'}</span>
+                  <span style={change.field === ATTRIBUTE_PLAN_FIELD ? { whiteSpace: 'pre-line' } : undefined} title={change.after || 'vazio'}>{change.field === ATTRIBUTE_PLAN_FIELD ? attributePlanDescription(change.after) : change.after || 'vazio'}</span>
                 </li>
               ))}
             </ol>
@@ -2217,6 +2226,17 @@ const MasterApp = () => {
         </div>
       )}
 
+      {healingTarget && <div className="modal-backdrop"><section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="master-healing-title">
+        <p className="modal-eyebrow">Pontos de vida</p><h2 id="master-healing-title">Curar {healingTarget.characterName}</h2>
+        <label className="master-healing-field">Cura em PV<input autoFocus maxLength={120} value={healingFormula} onChange={(event) => setHealingFormula(event.target.value)} placeholder="Ex.: 2d8 + 5" /></label>
+        {healingFeedback && <p role="alert">{healingFeedback}</p>}
+        <div className="modal-actions"><button className="modal-cancel-button" type="button" disabled={healingBusy} onClick={() => setHealingTarget(null)}>Cancelar</button><button className="modal-confirm-button" type="button" disabled={healingBusy || !healingFormula.trim()} onClick={async () => {
+          setHealingBusy(true);
+          try { const result = await window.bossAPI.healEncounterTarget({ kind: 'healing', targetParticipantId: `player:${healingTarget.id}`, formula: healingFormula, actionId: crypto.randomUUID() }); if (result.ok) setHealingTarget(null); else setHealingFeedback(result.error ?? 'Não foi possível aplicar a cura.'); }
+          catch { setHealingFeedback('Erro inesperado ao aplicar a cura. Confira a conexão da sala.'); }
+          finally { setHealingBusy(false); }
+        }}>Rolar e curar</button></div>
+      </section></div>}
       {returnConfirmationOpen && (
         <div className="modal-backdrop">
           <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="return-title">

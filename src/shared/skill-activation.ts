@@ -1,0 +1,2 @@
+export type SkillTestActivation={id:string;situation:string;value?:number};
+export const validSkillActivations=(value:unknown):value is SkillTestActivation[]=>Array.isArray(value)&&value.length<=40&&value.every(a=>a&&typeof a.id==='string'&&a.id.length<=240&&typeof a.situation==='string'&&a.situation.trim().length>0&&a.situation.length<=500&&(a.value===undefined||typeof a.value==='number'&&Number.isFinite(a.value)))&&new Set(value.map(a=>a.id)).size===value.length;

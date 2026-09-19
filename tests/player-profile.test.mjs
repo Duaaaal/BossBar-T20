@@ -121,14 +121,16 @@ test('ataques começam com duas linhas, preservam slots antigos e permitem linha
     group: 'Ataque 6',
     name: field.name.replace(/2(?=\.|$)/g, '6'),
     value: {
-      Nome: 'Lança adicional',
+      Arma: 'Lança adicional',
       'Teste de ataque': '1d20 + 3',
       Dano: '1d8 + 2',
       'Margem de crítico': '19',
-      'Multiplicador de crítico': '3',
+      'Multiplicador': '3',
       Tipo: 'Perfuração',
       Alcance: '1,5m',
-    }[field.label],
+      'Dano alternativo': '',
+      'Bônus total': 'Off',
+    }[field.label] ?? field.value,
   }));
   const edited = await applyCharacterSheetEditorFields(bytes, extraAttack);
   assert.equal(edited.validation.summary.attacks.at(-1)?.name, 'Lança adicional');
@@ -177,7 +179,7 @@ test('edita campos da ficha e preserva um PDF válido para aprovação do mestre
   );
   assert.deepEqual(
     [...new Set(fields.filter(({ group }) => /^Item \d+$/.test(group ?? '')).map(({ group }) => group))],
-    ['Item 1', 'Item 2', 'Item 3'],
+    ['Item 1', 'Item 2'],
   );
   assert.deepEqual(
     [...new Set(fields.filter(({ group }) => /^Armadura \d+$/.test(group ?? '')).map(({ group }) => group))],

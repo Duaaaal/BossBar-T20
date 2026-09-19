@@ -1,0 +1,95 @@
+import { test, expect } from '@playwright/test';
+import { joinHostedSession, startHostedTestSession } from '../support/hosted-session';
+
+test('ficha nova troca entre compra, valores manuais e rolagem', async ({ page }, info) => {
+  const session = await startHostedTestSession();
+  try {
+    await joinHostedSession(page, session.inviteUrl, 'Controles de atributos');
+    await page.getByRole('button', { name: 'Ficha', exact: true }).click();
+    await page.getByRole('button', { name: 'Criar ficha vazia', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: 'Ajustar ficha', exact: true });
+    const method = editor.getByRole('combobox', { name: 'Método de distribuição', exact: true });
+    let requests = 0;
+    await page.route('**/api/player/sheet/attributes/roll', async (route) => { requests++; await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Serviço de rolagem indisponível no teste.' }) }); });
+    await method.click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    await expect(method).toHaveValue('manual');
+    expect(requests).toBe(0);
+    await expect(editor.getByRole('textbox', { name: 'Força: Base', exact: true })).toBeEditable();
+    await method.selectOption('points');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Cancelar', exact: true }).click();
+    await expect(method).toHaveValue('manual');
+    await method.selectOption('points');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    await expect(method).toHaveValue('points'); expect(requests).toBe(0);
+    await method.selectOption('rolled');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    const failure = page.getByRole('dialog', { name: 'Não foi possível trocar a distribuição', exact: true });
+    await expect(failure).toContainText('Serviço de rolagem indisponível no teste.');
+    await failure.getByRole('button', { name: 'Cancelar', exact: true }).click();
+    await expect(method).toHaveValue('points');
+    await page.unroute('**/api/player/sheet/attributes/roll');
+    await method.selectOption('rolled');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    await expect(method).toHaveValue('rolled');
+    await expect(editor.getByRole('button', { name: 'Limpar todos os atributos', exact: true })).toHaveCount(0);
+    const help = editor.locator('.attribute-allocation-help');
+    await expect(help).toHaveText('Role 4 dados; some os 3 maiores.');
+    expect(await help.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    await editor.getByRole('button', { name: 'Rolar Força', exact: true }).click();
+    await expect(editor.getByRole('button', { name: 'Rolar Força', exact: true })).toHaveText('⚄Rolar');
+    await expect(editor.getByRole('button', { name: 'Rolar Força', exact: true })).toBeDisabled();
+    await page.mouse.move(5, 5);
+    await expect(page.locator('.calculation-tooltip:visible')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('rolagens.png') });
+    await method.selectOption('points');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    await expect(method).toHaveValue('points');
+    const earlierRequests = requests;
+    await page.route('**/api/player/sheet/attributes/roll', async (route) => { requests++; await route.abort(); });
+    await method.selectOption('manual');
+    await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
+    await expect(method).toHaveValue('manual'); expect(requests).toBe(earlierRequests);
+  } finally { await session.close(); }
+});
+
+test('limites usam efeitos e aviso de dois segundos; fontes e custos ficam alinhados', async ({ page }, info) => {
+  const session = await startHostedTestSession();
+  try {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await joinHostedSession(page, session.inviteUrl, 'Limites visuais');
+    await page.getByRole('button', { name: 'Ficha', exact: true }).click();
+    await page.getByRole('button', { name: 'Criar ficha vazia', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: 'Ajustar ficha', exact: true });
+    const attrs = editor.locator('.is-attributes');
+    await expect(attrs.locator('.attribute-source-panel')).toHaveAttribute('open', '');
+    await expect(attrs).not.toContainText('Bônus não gastam pontos');
+    const table = attrs.getByRole('table', { name: 'Custo de compra dos atributos' });
+    await expect(table.getByRole('row').nth(0)).toHaveText('Valor−101234');
+    await expect(table.getByRole('row').nth(1)).toHaveText('Custo−101247');
+    const rows = await table.locator('tr').evaluateAll((nodes) => nodes.map((row) => [...row.children].map((cell) => ({ x: cell.getBoundingClientRect().x, width: cell.getBoundingClientRect().width }))));
+    expect(rows[0]).toEqual(rows[1]);
+    await attrs.getByRole('button', { name: 'Força: Max.', exact: true }).click();
+    await attrs.getByRole('button', { name: 'Destreza: Min.', exact: true }).click();
+    await expect(attrs.locator('[data-limit="maximum"]')).toHaveCount(1); await expect(attrs.locator('[data-limit="minimum"]')).toHaveCount(1);
+    await expect(attrs.locator('.attribute-allocation-feedback')).not.toContainText('atingido');
+    const buttons = attrs.getByRole('button', { name: 'Força: +', exact: true });
+    await buttons.click(); const popup = page.locator('.attribute-limit-popup');
+    await expect(popup).toContainText('máximo inicial de 4');
+    await expect(attrs.getByRole('textbox', { name: 'Força: Base', exact: true })).toHaveValue('4');
+    await expect(popup).toBeHidden({ timeout: 3000 });
+    await attrs.getByRole('button', { name: 'Destreza: −', exact: true }).click();
+    await expect(popup).toContainText('mínimo de −1');
+    await expect(attrs.getByRole('textbox', { name: 'Destreza: Base', exact: true })).toHaveValue('-1');
+    const moreZeros = editor.locator('[data-field-name="Outros B.CA"] input');
+    await moreZeros.fill('0000'); await moreZeros.press('Tab'); await expect(moreZeros).toHaveValue('0');
+    await expect(editor.locator('[data-field-name="CargaMax"] input')).toHaveValue('');
+    await expect(editor.locator('[data-field-name="Levantar"] input')).toHaveValue('');
+    await editor.getByRole('button', { name: 'Validar e corrigir cálculos' }).click();
+    await expect(editor.locator('[data-field-name="CargaMax"] input')).toHaveValue('18');
+    await expect(editor.locator('[data-field-name="Levantar"] input')).toHaveValue('36');
+    await expect(editor.locator('#web-player-sheet-editor-review')).not.toContainText('limite máximo inicial');
+    await attrs.scrollIntoViewIfNeeded(); await page.mouse.move(2, 2);
+    await page.screenshot({ path: info.outputPath('atributos-controles.png') });
+  } finally { await session.close(); }
+});

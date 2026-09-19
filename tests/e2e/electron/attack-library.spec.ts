@@ -1,5 +1,6 @@
+import { keepCustomizedSheetValues } from '../support/sheet-review';
 import { _electron as electron, expect, test, type Page } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createEditableCharacterSheet, joinHostedSession, startHostedTestSession } from '../support/hosted-session';
 
@@ -35,14 +36,53 @@ test('biblioteca local, arsenal de fase, loop por faixa e retrato compartilhado 
     await expect(library.locator('article')).toContainText('Garras de teste');
     const entries = await libraryPage.evaluate(() => window.bossAPI.getAttackLibrary());
     expect(entries[0]).toMatchObject({ attackCount: 3, range: 'Cone 12m', tags: ['Dragão', 'Fase 2'] });
-    await library.getByRole('button', { name: 'Fechar biblioteca de ataques' }).click();
+    await libraryPage.evaluate(async () => { const [attack] = await window.bossAPI.getAttackLibrary(); await window.bossAPI.saveLibraryAttack({ ...attack, id: crypto.randomUUID(), name: 'Mordida de teste' }); });
+    let libraryCrashed = false;
+    libraryPage.on('crash', () => { libraryCrashed = true; });
+    const libraryClosed = libraryPage.waitForEvent('close');
+    let closeClickError: string | null = null;
+    try {
+      await library.getByRole('button', { name: 'Fechar biblioteca de ataques' }).click({ noWaitAfter: true });
+    } catch (error) {
+      // The native window can close while Playwright is dispatching this click.
+      if (!(error instanceof Error) || !error.message.startsWith('locator.click: Target page, context or browser has been closed')) throw error;
+      closeClickError = error.message;
+    }
+    await libraryClosed;
+    const remainingWindows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((window) => ({
+      title: window.getTitle(), crashed: window.webContents.isCrashed(),
+    })));
+    const closeDiagnostic = {
+      closeClickError, libraryClosed: libraryPage.isClosed(), libraryCrashed,
+      masterClosed: master.isClosed(), playerClosed: player.isClosed(),
+      processExitCode: app.process().exitCode, processSignalCode: app.process().signalCode,
+      remainingWindows,
+    };
+    const closeDiagnosticPath = testInfo.outputPath('attack-library-close.json');
+    await writeFile(closeDiagnosticPath, JSON.stringify(closeDiagnostic, null, 2));
+    await testInfo.attach('attack-library-close', { path: closeDiagnosticPath, contentType: 'application/json' });
+    expect(libraryPage.isClosed()).toBe(true);
+    expect(libraryCrashed).toBe(false);
+    expect(master.isClosed()).toBe(false);
+    expect(player.isClosed()).toBe(false);
+    expect(app.process().exitCode).toBeNull();
+    expect(app.process().signalCode).toBeNull();
+    expect(remainingWindows).toEqual(expect.arrayContaining([
+      { title: 'Controle do Mestre - BossBar T20', crashed: false },
+      { title: 'Apresentação do Chefão - BossBar T20', crashed: false },
+    ]));
     await master.getByRole('button', { name: 'Editar cena', exact: true }).click();
     const editor = await named('Editar Cena - BossBar T20');
     await editor.getByRole('button', { name: 'Escolher armas / ataques' }).click();
-    await editor.getByRole('dialog', { name: 'Biblioteca de ataques' }).getByRole('button', { name: 'Selecionar', exact: true }).click();
+    const selection = editor.getByRole('dialog', { name: 'Biblioteca de ataques' });
+    await selection.getByRole('checkbox', { name: 'Selecionar Garras de teste', exact: true }).check();
+    await expect(selection).toBeVisible();
+    await selection.getByRole('checkbox', { name: 'Selecionar Mordida de teste', exact: true }).check();
+    await selection.getByRole('button', { name: 'Aplicar selecionados', exact: true }).click();
     await expect(editor.getByText('Garras de teste · 1d12 · 3 ataque(s)', { exact: false })).toBeVisible();
     await editor.getByRole('button', { name: 'Salvar cena', exact: true }).click();
     await expect.poll(async () => (await editor.evaluate(() => window.bossAPI.getScenePlan())).phases[0].bosses[0].patch.attacks?.some((attack) => attack.name === 'Garras de teste')).toBe(true);
+    expect((await editor.evaluate(() => window.bossAPI.getScenePlan())).phases[0].bosses[0].patch.attacks?.map((attack) => attack.name)).toEqual(expect.arrayContaining(['Garras de teste', 'Mordida de teste']));
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, path.resolve('tests/fixtures/media/test-tone.mp3'));
     const loop = await editor.evaluate(async () => {
       const phase = (await window.bossAPI.getScenePlan()).phases[0];
@@ -64,9 +104,16 @@ test('biblioteca local, arsenal de fase, loop por faixa e retrato compartilhado 
     const web = await context.newPage(); await joinHostedSession(web, session.inviteUrl, 'Retrato Electron');
     await web.getByRole('button', { name: 'Ficha', exact: true }).click();
     await web.locator('#web-player-sheet-input').setInputFiles({ name: 'retrato.pdf', mimeType: 'application/pdf', buffer: await createEditableCharacterSheet({ characterName: 'Retrato Electron', playerName: 'Retrato Electron' }) });
-    await expect(web.locator('#web-player-sheet-status')).toContainText('retrato.pdf');
+    await expect(web.locator('#web-player-character-slots [role="tab"][aria-selected="true"]')).toContainText('Retrato Electron');
     await web.locator('#web-player-sheet-open').click();
+    await expect(web.getByRole('dialog', { name: 'Ajustar ficha', exact: true })).toBeVisible();
     await web.locator('#web-player-portrait-input').setInputFiles(path.resolve('tests/fixtures/media/test-background.png'));
+    expect(session.server.getPlayerHuds()[0]?.portraitUrl).toBeFalsy();
+    await web.getByRole('button', { name: 'Validar e corrigir cálculos', exact: true }).click();
+    await keepCustomizedSheetValues(web);
+    await expect(web.getByRole('button', { name: 'Validar e corrigir cálculos', exact: true })).toBeEnabled();
+    await web.getByRole('button', { name: 'Salvar e fechar', exact: true }).click();
+    await expect(web.getByRole('dialog', { name: 'Ajustar ficha', exact: true })).toBeHidden();
     await expect.poll(() => session.server.getPlayerHuds()[0]?.portraitUrl).toBeTruthy();
     const hud = session.server.getPlayerHuds();
     const response = await fetch(hud[0].portraitUrl!);
