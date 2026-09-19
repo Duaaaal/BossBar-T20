@@ -2,6 +2,8 @@
 
 Repositório existente, branch `feature/multiplayer-web`, base Git `309f04c`, versão mantida em `2.0.0-beta.4`. As alterações anteriores foram preservadas. Esta revisão não publica uma versão nem confirma execução do CI remoto.
 
+**Complemento posterior:** instalação limpa e atualização desde 1.5.2 foram aprovadas no GitHub Actions; o CI remoto mantém quatro falhas no Firefox. Consulte [CI, instalação e atualização](CI-INSTALLATION-REVIEW-2026-09-19.md) para os resultados atuais e a recomendação de corrigir antes do lançamento.
+
 ## Correções encontradas na revisão
 
 1. **Combate com fichas antigas aprovadas:** o servidor enviava uma lista vazia de efeitos para fichas sem o novo contexto de perícias. Isso recusava ataques e testes comuns. A lista vazia agora usa o total aprovado; efeitos não cadastrados continuam recusados. Regressão em `skill-automation.test.mjs` e fluxos de combate do servidor.

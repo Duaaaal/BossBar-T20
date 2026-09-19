@@ -24,6 +24,8 @@ A preparação da próxima faixa depende das informações disponíveis: o Elect
 
 ## Firefox no ambiente local
 
+**CI de 19/09/2026:** o [run 35471762375](https://github.com/Duaaaal/BossBar-T20/actions/runs/35471762375) terminou com quatro falhas no Firefox: ganho de vídeo, contexto de áudio suspenso, recarga numa sala de três jogadores e HUD próprio numa sala de dez. Serviços de áudio do Windows estavam ativos. Os cenários de cutscene passaram localmente; a causa da diferença ainda não está confirmada. Detalhes e evidências em [CI, instalação e atualização](CI-INSTALLATION-REVIEW-2026-09-19.md). Compatibilidade remota de Firefox permanece bloqueadora para lançamento.
+
 Na auditoria de 06/09/2026, o Firefox falhou antes de acessar o BossBar no Windows/Node 24/Playwright. A tentativa isolada com Node 22.23.2 também falhou em `browserContext.newPage`, com `Cannot read properties of undefined (reading '_page')`. Apenas trocar o Node não resolveu naquele ambiente.
 
 Na investigação de continuidade, o smoke passou com Node 24.18.0, Playwright 1.61.1 e Firefox 151.0 (revisão 1532), fora do sandbox restrito de execução do agente, com perfil temporário e sem flags ou preferências adicionais. Dentro desse limite, o Firefox registrou `SpawnTarget(Error:0)` antes do erro `_page`. A comparação isola a falha de abertura ao limite de execução do agente nesta máquina; a política, token ou job do Windows responsável ainda não foi identificado.
