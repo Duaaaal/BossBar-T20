@@ -9,13 +9,14 @@ try {
   const pages = () => browser.contexts().flatMap(context => context.pages());
   await expect.poll(() => pages().length).toBeGreaterThan(0);
   const launcher = pages()[0];
-  await expect.poll(() => launcher.evaluate(() => window.bossAPI?.getAppVersion())).toBe(expectedVersion);
+  // The launcher's restricted bridge deliberately exposes no version or notes.
+  await launcher.getByRole('button', { name: 'Novo encontro', exact: true }).click();
+  await expect.poll(async () => Promise.all(pages().map(page => page.title())))
+    .toContain('Controle do Mestre - BossBar T20');
+  const master = (await Promise.all(pages().map(async page => ({ page, title: await page.title() }))))
+    .find(item => item.title === 'Controle do Mestre - BossBar T20').page;
+  await expect.poll(() => master.evaluate(() => window.bossAPI.getAppVersion())).toBe(expectedVersion);
   if (expectedNotes) {
-    await launcher.getByRole('button', { name: 'Novo encontro', exact: true }).click();
-    await expect.poll(async () => Promise.all(pages().map(page => page.title())))
-      .toContain('Controle do Mestre - BossBar T20');
-    const master = (await Promise.all(pages().map(async page => ({ page, title: await page.title() }))))
-      .find(item => item.title === 'Controle do Mestre - BossBar T20').page;
     await expect.poll(async () => (await master.evaluate(() => window.bossAPI.getMasterNotes())).trim())
       .toBe(expectedNotes);
   }

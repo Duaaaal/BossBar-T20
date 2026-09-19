@@ -63,6 +63,16 @@ jobs:
         run: npm install --global npm@12.0.2 --ignore-scripts
       - run: npm ci
       - run: npx playwright install chromium firefox
+      - name: Prepare Windows audio services for Firefox
+        if: matrix.browser == 'firefox'
+        shell: pwsh
+        run: |
+          foreach ($serviceName in @('AudioEndpointBuilder', 'Audiosrv')) {
+            Set-Service -Name $serviceName -StartupType Manual
+            Start-Service -Name $serviceName
+          }
+          Get-Service AudioEndpointBuilder, Audiosrv
+          Get-CimInstance Win32_SoundDevice | Select-Object Name, Status
       - run: npm run test:e2e:web -- --project=${{ matrix.browser }} --retries=0
       - name: Upload Playwright diagnostics
         if: failure()
@@ -91,6 +101,7 @@ jobs:
         run: npm install --global npm@12.0.2 --ignore-scripts
       - run: npm ci
       - run: npx playwright install chromium
+      - run: npm run build:web:test
       - run: npm run test:e2e:electron -- --retries=0
       - name: Upload Electron diagnostics
         if: failure()

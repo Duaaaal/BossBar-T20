@@ -11,7 +11,7 @@ test('ficha nova troca entre compra, valores manuais e rolagem', async ({ page }
     const method = editor.getByRole('combobox', { name: 'Método de distribuição', exact: true });
     let requests = 0;
     await page.route('**/api/player/sheet/attributes/roll', async (route) => { requests++; await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Serviço de rolagem indisponível no teste.' }) }); });
-    await method.click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+    await method.selectOption('manual');
     await page.getByRole('dialog', { name: 'Reiniciar atributos?', exact: true }).getByRole('button', { name: 'Zerar e redistribuir' }).click();
     await expect(method).toHaveValue('manual');
     expect(requests).toBe(0);

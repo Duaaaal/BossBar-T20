@@ -111,9 +111,16 @@ test('auditoria visual das janelas e modais do mestre, biblioteca, fases e cutsc
     await inViewport(control, '.control-boss-arsenal-modal');
     await capture(control, 'arsenal');
     await control.getByRole('button', { name: 'Fechar arsenal' }).click();
+    await app.evaluate(({ BrowserWindow }) => {
+      const panel = BrowserWindow.getAllWindows().find((window) => window.getTitle() === 'Painel Privado do Encontro - BossBar T20')!;
+      panel.setMinimumSize(514, 400); panel.setSize(514, 400);
+    });
     await control.locator('.control-open-attributes').click();
-    await inViewport(control, '.control-attributes-modal');
     await capture(control, 'boss-attributes');
+    await inViewport(control, '.control-attributes-modal');
+    const lastSkill = control.locator('.control-exact-skills input').last();
+    await lastSkill.scrollIntoViewIfNeeded();
+    await expect(lastSkill).toBeInViewport();
     await control.getByRole('button', { name: 'Fechar editor de perícias' }).click();
     await control.getByRole('button', { name: 'Soundboard', exact: true }).click();
     const soundboard = await named('Soundboard - BossBar T20');

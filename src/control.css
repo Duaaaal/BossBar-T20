@@ -1400,19 +1400,23 @@ button { cursor: pointer; }
 .control-status-library-modal { width: min(520px, calc(100vw - 24px)); }
 .control-attributes-modal {
   width: min(920px, calc(100vw - 24px));
+  grid-template-columns: minmax(0, 1fr);
   max-height: calc(100vh - 24px);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .control-attributes-modal-header {
   justify-content: space-between;
 }
 .control-attributes-modal-heading {
   display: flex;
+  flex: 1;
   min-width: 0;
   align-items: center;
   gap: 10px;
 }
 .control-attributes-modal-heading h2 {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1471,6 +1475,7 @@ button { cursor: pointer; }
 .control-attribute-modal-grid label,
 .control-exact-skills label {
   width: 100%;
+  min-width: 0;
 }
 .control-attribute-modal-grid input,
 .control-exact-skills input {
@@ -1505,6 +1510,11 @@ button { cursor: pointer; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .control-attribute-modal-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .control-exact-skills > div { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .control-attribute-modal-grid label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .control-status-library-list {
   display: grid;
