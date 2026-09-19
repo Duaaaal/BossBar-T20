@@ -8,11 +8,14 @@ test('sucesso natural e dano crítico reduzem sem mutar e restauram junto ao fim
     const pages = await Promise.all(contexts.map((context) => context.newPage()));
     for (const [index, page] of pages.entries()) {
       await page.addInitScript(() => {
-        const events: Array<{ type: string; at: number; value?: number; duration?: number }> = [];
+        const events: Array<{ type: string; at: number; value?: number; duration?: number; parameter?: number }> = [];
+        const parameters = new WeakMap<AudioParam, number>();
+        let parameterSequence = 0;
         Object.assign(window, { __sfxProbe: events });
         const ramp = AudioParam.prototype.linearRampToValueAtTime;
         AudioParam.prototype.linearRampToValueAtTime = function (value, time) {
-          events.push({ type: 'ramp', at: performance.now(), value, duration: time });
+          if (!parameters.has(this)) parameters.set(this, ++parameterSequence);
+          events.push({ type: 'ramp', at: performance.now(), value, duration: time, parameter: parameters.get(this) });
           return ramp.call(this, value, time);
         };
         const play = HTMLMediaElement.prototype.play;
@@ -35,15 +38,17 @@ test('sucesso natural e dano crítico reduzem sem mutar e restauram junto ao fim
       session.server.publishEncounterEffect({ id: 700 + index, kind, url: session.mediaUrl(TEST_MEDIA_IDS.impactSound) });
       for (const page of pages) {
         await expect.poll(() => page.evaluate(() => (window as typeof window & { __sfxProbe: Array<{ type: string }> }).__sfxProbe.some(({ type }) => type === 'sfx-end'))).toBe(true);
-        const events = await page.evaluate(() => (window as typeof window & { __sfxProbe: Array<{ type: string; at: number; value?: number }> }).__sfxProbe);
+        const events = await page.evaluate(() => (window as typeof window & { __sfxProbe: Array<{ type: string; at: number; value?: number; parameter?: number }> }).__sfxProbe);
         const start = events.find(({ type }) => type === 'sfx-start')!;
         const end = events.find(({ type }) => type === 'sfx-end')!;
         const duck = events.find(({ type, value }) => type === 'ramp' && value === 0.35)!;
-        const restore = events.find(({ type, value, at }) => type === 'ramp' && value === 1 && at >= end.at - 10)!;
+        const restore = events.find(({ type, value, at, parameter }) => type === 'ramp' && value === 1 && parameter === duck?.parameter && at >= end.at - 10)!;
         expect(duck).toBeTruthy(); expect(restore).toBeTruthy();
         expect(Math.abs(duck.at - start.at)).toBeLessThan(80);
         expect(Math.abs(restore.at - end.at)).toBeLessThan(80);
-        expect(events.some(({ type, value }) => type === 'ramp' && value === 0)).toBe(false);
+        // The native decoder fades to zero when the decoded loop takes over.
+        // Only the shared ducking gain must never mute music during this SFX.
+        expect(events.some(({ type, value, parameter }) => type === 'ramp' && value === 0 && parameter === duck.parameter)).toBe(false);
         await expect(page.locator('audio.music-player')).toHaveJSProperty('paused', false);
       }
     }

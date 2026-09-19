@@ -90,7 +90,8 @@ jobs:
       - name: Use the lockfile-tested npm release
         run: npm install --global npm@12.0.2 --ignore-scripts
       - run: npm ci
-      - run: npm run test:e2e:electron
+      - run: npx playwright install chromium
+      - run: npm run test:e2e:electron -- --retries=0
       - name: Upload Electron diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -145,7 +146,25 @@ jobs:
               Where-Object { $_.Path -and $_.Path.StartsWith($executable.DirectoryName) } |
               Stop-Process -Force -ErrorAction SilentlyContinue
           }
+      - name: Build installer from the verified package
+        shell: pwsh
+        run: |
+          $env:BOSS_BUILD_OUT = Join-Path $env:RUNNER_TEMP 'bossbar-package'
+          npx electron-forge make --skip-package
+          if ($LASTEXITCODE -ne 0) { throw 'Falha ao gerar instalador.' }
+      - name: Test fresh installation and upgrade from the published release
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'BossBar-1.5.2-Setup.exe'
+          Invoke-WebRequest 'https://github.com/Duaaaal/BossBar-T20/releases/download/v1.5.2/BossBar-Tormenta20-Setup.exe' -OutFile $baseline
+          $expectedHash = 'd0602a0ddab2579839772dd2f8b4947d4b0f1dbf4da7a6d57ef8d2abeb5be64d'
+          if ((Get-FileHash -LiteralPath $baseline -Algorithm SHA256).Hash -ne $expectedHash) { throw 'Hash da versão publicada diverge.' }
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'bossbar-package'
+          $setup = Join-Path $packageRoot 'make/squirrel.windows/x64/BossBar-Tormenta20-Setup.exe'
+          $version = node -e "console.log(require('electron-winstaller').convertVersion(require('./package.json').version))"
+          ./scripts/test-installed-upgrade.ps1 -CurrentSetup $setup -BaselineSetup $baseline -ExpectedVersion $version -ReportPath (Join-Path $packageRoot 'installation-report.json')
       - name: Upload disposable package
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bossbar-disposable-package

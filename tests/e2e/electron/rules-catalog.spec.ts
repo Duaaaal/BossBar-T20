@@ -1,17 +1,25 @@
 import { _electron as electron, test, expect } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { PDFDocument } from 'pdf-lib';
+import { REFERENCE_BOOKS } from '../../../src/shared/reference-books';
 import { ReferenceVariantStore } from '../../../src/reference-variant-store';
 import { T20_CATALOG } from '../../../src/shared/rules-catalog';
 
 test('mestre consulta poderes e magias fora da ficha sem executar efeitos', async ({ browserName }, info) => {
   void browserName;
   const profile = info.outputPath('catalog-profile'); await mkdir(profile, { recursive: true });
+  // Test only the local PDF transport; never depend on the maintainer's books.
+  const downloads = path.join(profile, 'Downloads');
+  await mkdir(downloads, { recursive: true });
+  const fixtureBook = await PDFDocument.create(); fixtureBook.addPage();
+  const fixtureBytes = await fixtureBook.save();
+  await writeFile(path.join(downloads, REFERENCE_BOOKS[0].file), fixtureBytes);
   const variants = await ReferenceVariantStore.open(path.join(profile, 'user-data'));
   const reference = T20_CATALOG.spells.find(({ name }) => name === 'Conjurar Mortos-Vivos')!;
   await variants.create({ referenceId: reference.id, sourceId: reference.sourceId, page: reference.page, revision: 'Proposta do jogador', description: 'Texto proposto para aprovação do mestre.' }, 'player-variant-test');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({ cwd: process.cwd(), args: ['.', '--no-sandbox', '--disable-gpu', '--in-process-gpu'], env: { ...env, BOSSBAR_E2E: '1', BOSSBAR_E2E_PROFILE: profile } });
+  const app = await electron.launch({ cwd: process.cwd(), args: ['.', '--no-sandbox', '--disable-gpu', '--in-process-gpu'], env: { ...env, USERPROFILE: profile, BOSSBAR_E2E: '1', BOSSBAR_E2E_PROFILE: profile } });
   try {
     await (await app.firstWindow()).getByRole('button', { name: 'Novo encontro' }).click();
     await expect.poll(async () => Promise.all(app.windows().map((page) => page.title()))).toContain('Controle do Mestre - BossBar T20');
@@ -37,9 +45,9 @@ test('mestre consulta poderes e magias fora da ficha sem executar efeitos', asyn
     const opened = await app.evaluate(async () => {
       const url = new URL((globalThis as unknown as { openedReference: string }).openedReference);
       const result = await fetch(url, { headers: { Range: 'bytes=0-4' } });
-      return { local: url.hostname === '127.0.0.1', page: Number(new URLSearchParams(url.hash.slice(1)).get('page')), status: result.status, signature: await result.text() };
+      return { local: url.hostname === '127.0.0.1', page: Number(new URLSearchParams(url.hash.slice(1)).get('page')), status: result.status, range: result.headers.get('content-range'), signature: await result.text() };
     });
-    expect(opened).toEqual({ local: true, page: reference.pdfPage, status: 206, signature: '%PDF-' });
+    expect(opened).toEqual({ local: true, page: reference.pdfPage, status: 206, range: `bytes 0-4/${fixtureBytes.length}`, signature: '%PDF-' });
     const supplement = catalog.locator('details').filter({ has: master.getByText('Complemento opcional — Ameaças de Arton, p. 405', { exact: true }) });
     await expect(supplement.locator('summary')).toHaveText('Complemento opcional — Ameaças de Arton, p. 405');
     await expect(supplement.locator('.rules-catalog-description')).toBeHidden();

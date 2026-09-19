@@ -86,7 +86,22 @@ test('auditoria visual das janelas e modais do mestre, biblioteca, fases e cutsc
     await editor.locator('.phase-select-button').first().click();
     await editor.getByLabel('Cutscene entre esta fase e a próxima').check();
     await editor.locator('.cutscene-tab').click();
-    await inViewport(editor, '.cutscene-editor');
+    // A long form scrolls inside the workspace on shorter displays (CI is 720p).
+    // Check the scroll container and reachability, not that every row fits at once.
+    await inViewport(editor, '.phase-editor');
+    const cutscene = editor.locator('.cutscene-editor');
+    const horizontal = await cutscene.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, width: innerWidth, overflow: element.scrollWidth - element.clientWidth };
+    });
+    expect(horizontal.left).toBeGreaterThanOrEqual(0);
+    expect(horizontal.right).toBeLessThanOrEqual(horizontal.width);
+    expect(horizontal.overflow).toBeLessThanOrEqual(1);
+    const cutsceneControls = cutscene.locator('input:visible, select:visible, button:visible');
+    await cutsceneControls.last().scrollIntoViewIfNeeded();
+    await expect(cutsceneControls.last()).toBeInViewport();
+    await cutsceneControls.first().scrollIntoViewIfNeeded();
+    await expect(cutsceneControls.first()).toBeInViewport();
     await capture(editor, 'cutscene');
     await editor.getByRole('button', { name: 'Montar playlist', exact: true }).first().click();
     await inViewport(editor, '.scene-playlist-modal');
