@@ -41,6 +41,8 @@ Os pulos incluem mídia e PDFs reais não enviados ao CI, além de cenários exe
 
 ## Pendências antes do lançamento
 
+Continuidade: [investigação de áudio, reconexão e HUD](FIREFOX-AUDIO-RECONNECTION-2026-09-19.md) registra as correções posteriores e sua validação local. Os resultados remotos abaixo continuam sendo os do commit `24f2e92`; não representam uma execução das novas correções.
+
 O job Firefox `105973881300` manteve quatro falhas:
 
 1. `cutscene-resume.spec.ts:143`: o ganho do áudio do vídeo permaneceu em 1 quando deveria cair abaixo de 0,001 após silenciar o vídeo.

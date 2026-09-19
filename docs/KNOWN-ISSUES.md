@@ -24,6 +24,8 @@ A preparação da próxima faixa depende das informações disponíveis: o Elect
 
 ## Firefox no ambiente local
 
+**Continuidade de áudio e reconexão, 19/09/2026:** foram corrigidas a retomada por gesto do usuário, a repetição de pedidos de retomada, o silêncio do vídeo com relógio suspenso e a invalidação/cancelamento de cargas da conexão anterior. Downloads sem progresso não bloqueiam indefinidamente a fila. Testes locais de Firefox/Chromium incluem salas de 1, 3, 5 e 10 jogadores; há um diagnóstico de áudio nativo independente para o próximo CI. A causa específica das chamadas travadas no runner ainda não foi demonstrada e sua nova execução continua necessária. Ver [investigação e validação](FIREFOX-AUDIO-RECONNECTION-2026-09-19.md).
+
 **CI de 19/09/2026:** o [run 35471762375](https://github.com/Duaaaal/BossBar-T20/actions/runs/35471762375) terminou com quatro falhas no Firefox: ganho de vídeo, contexto de áudio suspenso, recarga numa sala de três jogadores e HUD próprio numa sala de dez. Serviços de áudio do Windows estavam ativos. Os cenários de cutscene passaram localmente; a causa da diferença ainda não está confirmada. Detalhes e evidências em [CI, instalação e atualização](CI-INSTALLATION-REVIEW-2026-09-19.md). Compatibilidade remota de Firefox permanece bloqueadora para lançamento.
 
 Na auditoria de 06/09/2026, o Firefox falhou antes de acessar o BossBar no Windows/Node 24/Playwright. A tentativa isolada com Node 22.23.2 também falhou em `browserContext.newPage`, com `Cannot read properties of undefined (reading '_page')`. Apenas trocar o Node não resolveu naquele ambiente.

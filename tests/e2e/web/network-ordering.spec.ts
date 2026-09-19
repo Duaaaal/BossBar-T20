@@ -84,6 +84,46 @@ test('recupera o snapshot depois de perder e restaurar a rede', async ({ page, c
   }
 });
 
+test('descarta o preload da conexão anterior e carrega HUD e cena da reconexão atual', async ({ page, context }) => {
+  const session = await startHostedTestSession({ preloadMediaIds: [] });
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let requested = false;
+  try {
+    await joinHostedSession(page, session.inviteUrl, 'Conexão atual');
+    await expect.poll(() => page.evaluate(async () => (await window.bossAPI.getPlayerHuds()).some(player => player.isSelf))).toBe(true);
+    const ownHudId = await page.evaluate(async () => (await window.bossAPI.getPlayerHuds()).find(player => player.isSelf)?.id);
+    expect(ownHudId).toBeTruthy();
+    await context.setOffline(true);
+    await expect(page.locator('#web-player-status')).toHaveAttribute('data-state', 'disconnected');
+    await page.route(`**/session-media/${TEST_MEDIA_IDS.slowBackground}*`, async route => {
+      requested = true;
+      await held;
+      await route.continue().catch(() => undefined);
+    });
+    session.server.publishBackground(backgroundState(session.mediaUrl(TEST_MEDIA_IDS.slowBackground)));
+    await context.setOffline(false);
+    await expect.poll(() => requested).toBe(true);
+    await expect(page.locator('#web-player-status')).toHaveAttribute('data-state', 'preloading');
+    await context.setOffline(true);
+    await expect(page.locator('#web-player-status')).toHaveAttribute('data-state', 'disconnected');
+    release();
+    // A cancelled preload must not publish an error/connected state over the
+    // disconnected state, even when its old request eventually finishes.
+    await page.waitForTimeout(1000);
+    await expect(page.locator('#web-player-status')).toHaveAttribute('data-state', 'disconnected');
+    session.server.publishBattleState(createPublicBattle({ battleStarted: true, currentHealth: 61, revision: 9 }));
+    session.server.publishBackground(backgroundState(session.mediaUrl(TEST_MEDIA_IDS.fastBackground)));
+    await context.setOffline(false);
+    await expect(page.locator('#web-player-status')).toHaveAttribute('data-state', 'connected');
+    await expect.poll(() => page.evaluate(async () => (await window.bossAPI.getState()).bosses[0].currentHealth)).toBe(61);
+    await expect(page.locator('.health-bar-fill')).toHaveAttribute('style', /61%/);
+    await expect.poll(() => page.evaluate(async () => (await window.bossAPI.getPlayerHuds()).filter(player => player.isSelf).map(player => player.id))).toEqual([ownHudId]);
+    await expect.poll(() => session.server.getPresence().connectedPlayers).toBe(1);
+    expect(session.server.getPresence().waitingPlayers).toHaveLength(0);
+  } finally { release(); await context.setOffline(false); await session.close(); }
+});
+
 test('libera som e alteração da barra como um único impacto após o preload', async ({ page }) => {
   const session = await startHostedTestSession();
   try {

@@ -1,3 +1,4 @@
+import { createPresentationAudioContext, resumePresentationAudio, hasSuspendedPresentationAudio, subscribePresentationAudio, unlockPresentationAudio } from './presentation-audio-context';
 import { PlayerSkillEffectsControl } from './player-skill-effects';
 import { sheetAttackTestExpression } from './shared/character-sheet-loadout';
 import { availableSkillSituations, skillForSituation, type SkillTestActivation } from './shared/skill-test-context';
@@ -976,7 +977,7 @@ const MusicPlayer = ({
     if (!audio) return null;
 
     if (!audioContextRef.current) {
-      const context = new AudioContext();
+      const context = createPresentationAudioContext();
       const source = context.createMediaElementSource(audio);
       const gain = context.createGain();
       const muteGain = context.createGain();
@@ -996,7 +997,7 @@ const MusicPlayer = ({
     }
 
     if (audioContextRef.current.state === 'suspended') {
-      void audioContextRef.current.resume();
+      resumePresentationAudio(audioContextRef.current);
     }
     return gainNodeRef.current;
   }, []);
@@ -1285,7 +1286,7 @@ const MusicPlayer = ({
   }, [music?.isPlaying, music?.externalPlayback, currentTrack?.id, setOutputGain, stopFade]);
 
   useEffect(() => {
-    setOutputMuted(outputMuted);
+    if (audioContextRef.current) setOutputMuted(outputMuted);
   }, [outputMuted, setOutputMuted]);
 
   useEffect(() => {
@@ -1410,14 +1411,14 @@ const SoundboardPlayer = ({
 
   const ensureAudioGraph = useCallback(() => {
     if (!audioContextRef.current) {
-      const context = new AudioContext();
+      const context = createPresentationAudioContext();
       const gain = context.createGain();
       gain.connect(context.destination);
       audioContextRef.current = context;
       masterGainRef.current = gain;
     }
     if (audioContextRef.current.state === 'suspended') {
-      void audioContextRef.current.resume();
+      resumePresentationAudio(audioContextRef.current);
     }
     return {
       context: audioContextRef.current,
@@ -1563,14 +1564,14 @@ const EncounterEffectsPlayer = ({
 
   const ensureAudioGraph = useCallback(() => {
     if (!audioContextRef.current) {
-      const context = new AudioContext();
+      const context = createPresentationAudioContext();
       const gain = context.createGain();
       gain.connect(context.destination);
       audioContextRef.current = context;
       masterGainRef.current = gain;
     }
     if (audioContextRef.current.state === 'suspended') {
-      void audioContextRef.current.resume();
+      resumePresentationAudio(audioContextRef.current);
     }
     return {
       context: audioContextRef.current,
@@ -3271,7 +3272,7 @@ const SceneTransitionPlayer = () => {
 
   useEffect(() => {
     let active = true;
-    const audioContext = new AudioContext();
+    let audioContext: AudioContext | null = null;
     window.bossAPI.getMusicState().then((state) => {
       if (active) universalMuted.current = state.universalMuted;
     });
@@ -3322,7 +3323,7 @@ const SceneTransitionPlayer = () => {
             releaseAudio(preparedAudio);
             return;
           }
-          if (audioContext.state === 'suspended') void audioContext.resume();
+          if (audioContext) resumePresentationAudio(audioContext);
           void preparedAudio.play().catch(() => releaseAudio(preparedAudio));
         }, nextEffect.soundDelayMs);
         timers.add(soundTimer);
@@ -3354,6 +3355,7 @@ const SceneTransitionPlayer = () => {
       audio.preload = 'auto';
       audio.volume = 1;
       audio.loop = nextEffect.soundLoop;
+      audioContext ??= createPresentationAudioContext();
       const source = audioContext.createMediaElementSource(audio);
       const gain = audioContext.createGain();
       gain.gain.setValueAtTime(
@@ -3399,7 +3401,7 @@ const SceneTransitionPlayer = () => {
       unsubscribeMusic();
       unsubscribeTransition();
       clearActiveTransitionMedia();
-      void audioContext.close();
+      void audioContext?.close();
     };
   }, []);
 
@@ -3505,6 +3507,18 @@ const PlayerClientSettings = ({
     </div>,
     document.body,
   );
+};
+
+const PresentationAudioRecovery = () => {
+  const [suspended, setSuspended] = useState(hasSuspendedPresentationAudio);
+  useEffect(() => {
+    const update = () => setSuspended(hasSuspendedPresentationAudio());
+    const unsubscribe = subscribePresentationAudio(update);
+    update();
+    return unsubscribe;
+  }, []);
+  return suspended ? <button type="button" className="presentation-audio-recovery" onClick={unlockPresentationAudio}
+    title="O navegador pausou o áudio. Clique para retomá-lo; se continuar indisponível, confira a saída de som do dispositivo.">Ativar áudio</button> : null;
 };
 
 const PlayerApp = () => {
@@ -3965,6 +3979,7 @@ const PlayerApp = () => {
 
   return (
     <>
+      <PresentationAudioRecovery />
       <MusicPlayer battle={state} clientPreferences={clientPreferences} />
       <PhaseHudEntrance entrance={state.battleStarted ? scenePlan?.phaseEntrance : null} />
       <SoundboardPlayer clientPreferences={clientPreferences} />

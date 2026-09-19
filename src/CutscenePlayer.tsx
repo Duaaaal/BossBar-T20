@@ -1,3 +1,4 @@
+import { createPresentationAudioContext, resumePresentationAudio } from './presentation-audio-context';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { volumeToGain } from './shared/battle';
 import { cutsceneFade, cutsceneBlackoutSeconds, cutscenePosition, cutsceneMusicPosition, cutsceneNextMusicPosition, type CutscenePlayback, type ScenePlaylistSummary } from './shared/scene';
@@ -52,7 +53,7 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
     const updateMute = (state: { universalMuted: boolean }) => { muted.current = state.universalMuted; };
     void window.bossAPI.getMusicState().then((state) => { if (active) updateMute(state); });
     const unsubscribe = window.bossAPI.subscribeMusic(updateMute);
-    const context = new AudioContext();
+    const context = createPresentationAudioContext();
     const video = videoRef.current;
     // Keep the visual element permanently silent. Its audio has an independent
     // transport/gain, so hiding/fading the picture cannot mute the soundtrack.
@@ -152,7 +153,7 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
       if (current.stage === 'loading' || current.startedAt === null || now < current.startedAt) return;
       setStarted(true);
       document.documentElement.classList.toggle('cutscene-active', !blackoutFinished);
-      if (context.state === 'suspended') void context.resume();
+      if (context.state === 'suspended') resumePresentationAudio(context);
       const position = cutscenePosition(current, now);
       const fadeIn = cutsceneFade(current, 'audio', 'in');
       const fadeOut = cutsceneFade(current, 'audio', 'out');
@@ -162,7 +163,12 @@ export const CutscenePlayer = ({ playback, musicScale = 1, soundScale = 1 }: {
       const video = videoRef.current;
       if (video) {
         video.muted = true;
-        videoGain.gain.setTargetAtTime(muted.current || current.videoMuted === true ? 0 : volumeToGain((current.videoVolume ?? 0.8) * scales.current.soundScale) * envelope, context.currentTime, 0.02);
+        if (muted.current || current.videoMuted === true) {
+          videoGain.gain.cancelScheduledValues(context.currentTime);
+          videoGain.gain.setValueAtTime(0, context.currentTime);
+        } else {
+          videoGain.gain.setTargetAtTime(volumeToGain((current.videoVolume ?? 0.8) * scales.current.soundScale) * envelope, context.currentTime, 0.02);
+        }
         seek(video, position);
         if (position < video.duration && video.paused) void video.play().catch(() => undefined);
       }

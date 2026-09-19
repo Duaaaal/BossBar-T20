@@ -1,4 +1,5 @@
 import { setReferenceBookResolver } from './reference-book-client.ts';
+import { consumeMediaDownload, createMediaDownloadWatchdog } from './shared/media-download.ts';
 import { io, type Socket } from 'socket.io-client';
 import { normalizedMediaPosition } from './gapless-audio-loop.ts';
 import { rewriteCutsceneMedia } from './multiplayer/public-presentation.ts';
@@ -459,6 +460,8 @@ export const createWebPlayerApi = ({
   let snapshotLoadSequence = 0;
   let manifestPreloadPromise: Promise<boolean> | null = null;
   let residentMediaBytes = 0;
+  let mediaLoadGeneration = 0;
+  let mediaCacheGeneration = 0;
   let accountToken = '';
   let authenticatedUsername = '';
   let currentSheet: PlayerCharacterSheetStatus | null = null;
@@ -869,9 +872,12 @@ export const createWebPlayerApi = ({
 
   const preloadMediaUrl = (url: string) => {
     if (!url) return Promise.resolve(true);
+    if (resolvedMediaUrls.has(url)) return Promise.resolve(true);
     const existing = mediaPreloadPromises.get(url);
     if (existing) return existing;
     const controller = new AbortController();
+    const watchdog = createMediaDownloadWatchdog(controller);
+    const cacheGeneration = mediaCacheGeneration;
     activePreloadControllers.add(controller);
     const preload: Promise<boolean> = (async () => {
       const response = await fetch(url, {
@@ -880,6 +886,7 @@ export const createWebPlayerApi = ({
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      watchdog.progress();
       const contentType = response.headers.get('content-type') ?? '';
       const contentLengthHeader = response.headers.get('content-length');
       const contentLength = contentLengthHeader === null
@@ -890,15 +897,16 @@ export const createWebPlayerApi = ({
         contentLength <= maxResidentMediaItemBytes &&
         residentMediaBytes + contentLength <= maxResidentMediaTotalBytes;
       if (!canKeepResident) {
-        const reader = response.body?.getReader();
-        if (reader) { try { while (!(await reader.read()).done) { /* stream into the HTTP cache */ } } finally { reader.releaseLock(); } }
+        await consumeMediaDownload(response, watchdog.progress, false);
+        watchdog.dispose();
         return verifyMediaCanLoad(url, contentType, controller.signal);
       }
 
       residentMediaBytes += contentLength;
       let reservationHeld = true;
       try {
-        const mediaBlob = await response.blob();
+        const mediaBlob = await consumeMediaDownload(response, watchdog.progress, true);
+        watchdog.dispose();
         if (controller.signal.aborted) return false;
         const localUrl = URL.createObjectURL(mediaBlob);
         const loaded = await verifyMediaCanLoad(
@@ -914,7 +922,7 @@ export const createWebPlayerApi = ({
         reservationHeld = false;
         return true;
       } finally {
-        if (reservationHeld) residentMediaBytes -= contentLength;
+        if (reservationHeld && cacheGeneration === mediaCacheGeneration) residentMediaBytes -= contentLength;
       }
     })().catch((error: unknown) => {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
@@ -927,6 +935,7 @@ export const createWebPlayerApi = ({
       }
       return loaded;
     }).finally(() => {
+      watchdog.dispose();
       activePreloadControllers.delete(controller);
     });
     mediaPreloadPromises.set(url, preload);
@@ -934,26 +943,28 @@ export const createWebPlayerApi = ({
   };
 
   const preloadMediaUrls = async (urls: Array<string | null | undefined>) => {
+    const generation = mediaLoadGeneration;
     const queue = [...new Set(urls.filter((url): url is string => Boolean(url)))];
     let loaded = true;
     const workers = Array.from(
       { length: Math.min(4, queue.length) },
       async () => {
-        while (queue.length > 0) {
+        while (queue.length > 0 && generation === mediaLoadGeneration) {
           const url = queue.shift();
           if (url && !(await preloadMediaUrl(url))) loaded = false;
         }
       },
     );
     await Promise.all(workers);
-    return loaded;
+    return loaded && generation === mediaLoadGeneration;
   };
 
   const waitForMediaUrls = async (
     urls: Array<string | null | undefined>,
     isCurrent: () => boolean = () => true,
   ) => {
-    for (let attempt = 0; attempt < 3 && isCurrent(); attempt += 1) {
+    const generation = mediaLoadGeneration;
+    for (let attempt = 0; attempt < 3 && isCurrent() && generation === mediaLoadGeneration; attempt += 1) {
       if (await preloadMediaUrls(urls)) return true;
       if (attempt < 2 && isCurrent()) {
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
@@ -992,17 +1003,22 @@ export const createWebPlayerApi = ({
 
   const preloadSessionManifest = () => {
     if (manifestPreloadPromise) return manifestPreloadPromise;
+    const generation = mediaLoadGeneration;
+    const controller = new AbortController();
+    const watchdog = createMediaDownloadWatchdog(controller);
+    activePreloadControllers.add(controller);
     manifestPreloadPromise = roomCode && playerToken
       ? fetch('/api/preload', {
         cache: 'no-store',
         credentials: 'same-origin',
+        signal: controller.signal,
         headers: {
           Authorization: `Bearer ${playerToken}`,
           'X-BossBar-Room': roomCode,
         },
       })
         .then(async (response) => {
-          if (!response.ok) return false;
+          if (!response.ok || generation !== mediaLoadGeneration) return false;
           const manifest = await response.json() as {
             protocolVersion?: unknown;
             urls?: unknown;
@@ -1023,14 +1039,21 @@ export const createWebPlayerApi = ({
               return [];
             }
           }).slice(0, 8192);
-          return waitForMediaUrls(urls);
+          watchdog.dispose();
+          return waitForMediaUrls(urls, () => generation === mediaLoadGeneration);
         })
         .catch(() => false)
       : Promise.resolve(false);
+    manifestPreloadPromise = manifestPreloadPromise.finally(() => {
+      watchdog.dispose();
+      activePreloadControllers.delete(controller);
+    });
     return manifestPreloadPromise;
   };
 
   const clearTransientMediaCache = () => {
+    mediaLoadGeneration += 1;
+    mediaCacheGeneration += 1;
     snapshotLoadSequence += 1;
     eventQueue.reset();
     musicDuckThreatEndsAt.clear();
@@ -1147,7 +1170,7 @@ export const createWebPlayerApi = ({
     deferredBattleState = null;
   };
 
-  const applySnapshot = async (snapshot: MultiplayerSessionSnapshot) => {
+  const applySnapshot = async (snapshot: MultiplayerSessionSnapshot, isCurrent: () => boolean) => {
     const loadSequence = ++snapshotLoadSequence;
     onConnectionState({
       state: 'preloading',
@@ -1156,9 +1179,9 @@ export const createWebPlayerApi = ({
     void preloadSessionManifest();
     const currentMediaLoaded = await waitForMediaUrls(
       criticalMediaUrlsFromSnapshot(snapshot),
-      () => loadSequence === snapshotLoadSequence,
+      () => isCurrent() && loadSequence === snapshotLoadSequence,
     );
-    if (loadSequence !== snapshotLoadSequence) return;
+    if (!isCurrent() || loadSequence !== snapshotLoadSequence) return;
     if (!currentMediaLoaded) {
       onConnectionState({
         state: 'error',
@@ -1394,13 +1417,24 @@ export const createWebPlayerApi = ({
   socket.on('connect_error', (error) => {
     const code = getConnectionErrorCode(error);
     onConnectionState({
-      state: 'error',
+      // A transport retry is still a reconnection, not a failed login or a
+      // media error. Keep the current HUD and recovery status in that case.
+      state: !code && receivedSnapshot ? 'disconnected' : 'error',
       message: code
         ? connectionErrorMessages[code]
         : 'Não foi possível conectar. Tentando novamente…',
     });
   });
   socket.on('disconnect', (reason) => {
+    // Invalidate the old transport before it can finish a delayed snapshot or
+    // impact. Keep resident blobs that the current presentation still owns.
+    snapshotLoadSequence += 1;
+    mediaLoadGeneration += 1;
+    eventQueue.reset();
+    clearPendingCombatImpacts();
+    activePreloadControllers.forEach(controller => controller.abort());
+    mediaPreloadPromises.clear();
+    manifestPreloadPromise = null;
     if (reason === 'io client disconnect') return;
     onConnectionState({
       state: 'disconnected',
@@ -1412,7 +1446,7 @@ export const createWebPlayerApi = ({
     // now that the authenticated player handlers are definitely registered.
     synchronizeClock();
     eventQueue.reset();
-    void eventQueue.enqueue(() => applySnapshot(snapshot));
+    void eventQueue.enqueue(isCurrent => applySnapshot(snapshot, isCurrent));
   });
   socket.on('session:occupancy', (occupancy) => {
     latestOccupancy = occupancy;
