@@ -320,10 +320,13 @@ export const joinHostedSession = async (
   await page.locator('#web-player-create-password').fill('test-password');
   await page.locator('#web-player-create-password-confirm').fill('test-password');
   await createDialog.getByRole('button', { name: 'Criar acesso' }).click();
-  const joined = await page.getByRole('button', { name: 'Ficha', exact: true })
-    .waitFor({ state: 'visible', timeout: 1_500 })
-    .then(() => true)
-    .catch(() => false);
+  // Do not start a second login while account creation is still connecting.
+  // Existing profiles explicitly report an error and use the login flow below.
+  await expect.poll(async () =>
+    await page.getByRole('button', { name: 'Ficha', exact: true }).isVisible()
+    || await page.locator('#web-player-create-error').isVisible(),
+  ).toBe(true);
+  const joined = await page.getByRole('button', { name: 'Ficha', exact: true }).isVisible();
   if (!joined) {
     if (await createDialog.isVisible()) {
       await page.locator('#web-player-create-back').click();

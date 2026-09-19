@@ -80,8 +80,11 @@ for (const count of [1, 3, 5, 10]) {
       for (const [index, player] of players.entries()) {
         activate(player.id);
         const page = pageById.get(player.id)!;
+        await page.bringToFront();
+        await expect(page.getByRole('button', { name: 'Combate', exact: true })).toHaveAttribute('data-app-tooltip', 'Combate');
         await page.getByRole('button', { name: 'Combate', exact: true }).click();
         const combat = page.getByRole('dialog', { name: 'Realizar ataque', exact: true });
+        await expect(combat).toBeVisible();
         await combat.getByRole('combobox', { name: 'Arma ou ataque', exact: true }).selectOption('0');
         await expect(combat.getByLabel('Dados do ataque', { exact: true })).toHaveValue('1d20 + 5 + 2');
         await combat.getByLabel('Bônus adicional de ataque').fill('1d4 + 1');

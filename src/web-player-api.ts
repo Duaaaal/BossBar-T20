@@ -1489,7 +1489,13 @@ export const createWebPlayerApi = ({
     });
   });
   socket.on('player:resource-notice', (notice) => {
-    if (notice.id.startsWith('sheet-change:character:')) { if (!selectionInFlight) void refreshCharacterSheetStatus(); return; }
+    if (notice.id.startsWith('sheet-change:character:')) {
+      // HTTP and socket delivery can arrive in either order. The selection
+      // response already includes this profile; do not fetch it again.
+      const selectedId = notice.id.split(':')[2];
+      if (!selectionInFlight && selectedId !== currentCharacters?.activeCharacterId) void refreshCharacterSheetStatus();
+      return;
+    }
     resourceNotices.publish(notice);
     if (notice.id.startsWith('sheet-change:')) {
       if (notice.tone === 'approved') void refreshCharacterSheetStatus();

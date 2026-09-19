@@ -4454,7 +4454,7 @@ export class MultiplayerSessionServer {
       for (const socket of this.io.sockets.sockets.values()) if (socket.data.profileId === profileId) {
         socket.emit('player:state', this.playerCombatStates.get(clientId) ?? null);
       }
-      this.emitResourceNotice(clientId, { id: `sheet-change:character:${randomUUID()}`, tone: 'info', message: 'Ficha ativa atualizada.' });
+      this.emitResourceNotice(clientId, { id: `sheet-change:character:${characterId}:${randomUUID()}`, tone: 'info', message: 'Ficha ativa atualizada.' });
       return { ok: true, sheet: selected.sheet };
     } finally { this.characterSwitches.delete(profileId); }
   }

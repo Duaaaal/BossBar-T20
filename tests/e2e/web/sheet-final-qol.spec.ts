@@ -84,7 +84,13 @@ test('citação abre nova aba na página indicada e o acesso ao livro exige aute
     // Chrome's headless shell downloads documents; full Chromium/Edge uses its built-in reader.
     const response = await page.request.get(origin + '/reference-books/core', { headers: { Range: 'bytes=0-4' } });
     expect(response.status()).toBe(206); expect(await response.text()).toBe('%PDF-');
-    expect(await tab.evaluate(() => window.opener)).toBeNull();
+    await expect.poll(async () => {
+      try { return await tab.evaluate(() => window.opener === null); }
+      catch (error) {
+        if (error instanceof Error && error.message.includes('Execution context was destroyed')) return false;
+        throw error;
+      }
+    }).toBe(true);
     await expect(editor).toBeVisible(); await tab.close();
   } finally { await session.close(); }
 });

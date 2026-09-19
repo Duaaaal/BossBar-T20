@@ -8,6 +8,8 @@ Validação local inicial: três cenários Electron e dois cenários de áudio (
 
 ## Instalação real em ambiente descartável
 
+A matriz Chrome revelou uma busca redundante de perfil quando a notificação da troca de personagem chegava depois da resposta HTTP. A notificação identifica agora a ficha selecionada, evitando buscar novamente o perfil já recebido. O teste mantém a exigência de zero buscas adicionais. Os testes também aguardam a interface reconhecer o turno e a navegação do leitor de PDF; a criação de acesso aguarda conclusão explícita, sem iniciar outro login após um prazo arbitrário de 1,5 segundo. Oito cenários Chrome (incluindo salas de 1, 3, 5 e 10 jogadores) e oito testes de fichas passaram localmente, sem retries.
+
 `scripts/test-installed-upgrade.ps1` recusa execução fora de runners Windows hospedados pelo GitHub. O job gera o instalador a partir do pacote já verificado, instala do zero, confere registro no Windows, executável, atualizador e interface; depois instala a versão pública `1.5.2`, atualiza para a versão do checkout e confere preservação das notas tanto no arquivo quanto na interface do mestre.
 
 A versão `1.5.2` é a única release pública com instalador disponível no momento desta consulta. Seu SHA-256 publicado é verificado antes da execução: `d0602a0ddab2579839772dd2f8b4947d4b0f1dbf4da7a6d57ef8d2abeb5be64d`. Isso não equivale a testar atualização a partir de todas as versões intermediárias. A versão do projeto continua `2.0.0-beta.4`.
